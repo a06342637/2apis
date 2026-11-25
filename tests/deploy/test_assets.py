@@ -846,7 +846,8 @@ def test_version_is_single_sourced_everywhere():
     assert canonical == FALLBACK_VERSION, "src/version.py 回落值未同步"
 
     readme = (root / "README.md").read_text(encoding="utf-8")
-    pulls = re.findall(r"coding2api:v(\d+\.\d+\.\d+)", readme)
+    # 二次开发镜像发布到本仓库；仍严格检查示例与唯一版本源一致。
+    pulls = re.findall(r"ghcr\.io/a06342637/2apis:v(\d+\.\d+\.\d+)", readme)
     assert pulls, "README 里找不到带版本的 docker pull 示例"
     assert set(pulls) == {canonical}, "README 的 docker pull 示例版本未同步"
 

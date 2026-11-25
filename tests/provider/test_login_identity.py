@@ -20,12 +20,12 @@ from src.provider.officeace import OfficeAceProvider
 
 
 def test_registry_declares_only_mergeable_channels():
-    assert set(LOGIN_IDENTITIES) == {"codearts", "officeace", "lingxi", "raccoon"}
+    assert set(LOGIN_IDENTITIES) == {"codearts", "officeace", "lingxi", "raccoon", "miora"}
     # 首选身份与别名集合必须覆盖同一批渠道，否则「能合并」与「找得到」会错开
     assert set(LOGIN_IDENTITY_SETS) == set(LOGIN_IDENTITIES)
-    # 手工导入即重登的渠道只能是「没有 OAuth 轨道」的两家：CodeArts /
+    # 手工导入即重登的渠道只能是「没有 OAuth 轨道」的会话渠道：CodeArts /
     # OfficeAce 手工导入的是 AK/SK，同账号可并存多把密钥，合并会吞掉一把。
-    assert set(MANUAL_MERGE_PROVIDERS) == {"lingxi", "raccoon"}
+    assert set(MANUAL_MERGE_PROVIDERS) == {"lingxi", "raccoon", "miora"}
     assert set(LOGIN_IDENTITIES) >= MANUAL_MERGE_PROVIDERS
 
 
