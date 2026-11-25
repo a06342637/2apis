@@ -48,6 +48,7 @@ from ..provider.base import (
 from ..provider.naming import normalize_model_key
 from ..request_context import credential_scope, get_api_key_id, set_credential_id
 from . import privacy
+from .context_stream import ContextBoundIterator
 from .continuation import ContinuationStream
 from .model_resolver import (
     ModelTarget,
@@ -291,7 +292,7 @@ class _TimedReader:
     """
 
     def __init__(self, iterator: Any) -> None:
-        self._iterator = iterator
+        self._iterator = ContextBoundIterator(iterator)
         self._pending: asyncio.Task[Event] | None = None
 
     async def next(self, timeout: float | None) -> Event:
@@ -314,6 +315,7 @@ class _TimedReader:
         if pending is not None and not pending.done():
             pending.cancel()
             await asyncio.gather(pending, return_exceptions=True)
+        await self._iterator.aclose()
 
 
 @dataclass(slots=True)
@@ -1116,10 +1118,10 @@ class Executor:
         回调一次：出口据此在响应头发出前把「请求级错误」改判为 400（见
         `api/streaming.respond_with_stream_start`）。默认 None 时行为逐字节不变。
         """
-        inner = self.stream(request, username=username,
+        inner = ContextBoundIterator(self.stream(request, username=username,
                             translator=translator,
                             provider_binding=provider_binding,
-                            on_terminal=on_terminal)
+                            on_terminal=on_terminal))
         try:
             async for frame in inner:
                 yield frame
@@ -1551,9 +1553,10 @@ class Executor:
                 # （超时后它可能还在等上游），再关闭上游流归还节流名额。
                 # 顺序不能反：生成器正在被 anext 驱动时 aclose 会抛
                 # "asynchronous generator is already running"。
-                await reader.aclose()
-                await aclose_stream(iterator)
-                self._release(credential_id)
+                try:
+                    await reader.aclose()
+                finally:
+                    self._release(credential_id)
             if content_rejected:
                 # 已出帧：只能以错误帧收尾；未出帧：抛给外层 `stream()` 由它
                 # 用同一 translator 写首帧（不换号、不转回退模型）。

@@ -3,7 +3,7 @@
 设计要点（PROPOSAL §6 / TECHNICAL §6）：
 - 两类任务共用一个全局随机间隔节流器（跨所有用户）
 - 后台任务失败只记日志，绝不影响聊天请求
-- 启动时先做一轮额度探测（不节流），避免调度器拿到全 unknown 的池
+- 启动时先刷新票据，再做一轮额度探测（不节流），避免过期票据被探测硬禁用
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, NamedTuple
 
 from ..config import live
+from . import TaskReport
 from .activity import ActivityTask
 from .alerting import AlertTask
 from .backup import BackupTask
@@ -238,10 +239,10 @@ class TaskRunner:
         另一个，也不影响后面的循环建立。注意**不改变** `_loop_specs` 的接线，
         手动触发仍走那份清单。
         """
-        await self._guarded(self._quota_probe.run_once(apply_pacing=False),
-                            "启动额度探测", key="quota_probe")
         await self._guarded(self._refresh.run_once(),
                             "启动 token 预刷新", key="refresh")
+        await self._guarded(self._quota_probe.run_once(apply_pacing=False),
+                            "启动额度探测", key="quota_probe")
         if self._backup is not None:
             await self._guarded(self._sync_backup(), "启动数据库备份", key="backup")
         await self._guarded(self._sync_retention(), "启动明细清理", key="retention")
@@ -302,6 +303,10 @@ class TaskRunner:
               runner: Callable[[], Awaitable[object]]) -> _LoopSpec:
         """拼一条循环描述：周期取值器统一走 `_interval_seconds`（热更现读）。"""
         return _LoopSpec(key, runner, lambda: self._interval_seconds(key))
+
+    async def refresh_credential(self, credential_id: str) -> TaskReport:
+        """导入后的按账号预刷新：等待共享任务和编辑锁，不走“任务忙就跳过”分支。"""
+        return await self._refresh.run_once(credential_id=credential_id)
 
     async def run_task(self, key: str) -> dict[str, Any]:
         """手动运行一个后台任务一轮，返回该任务的最新运行态。

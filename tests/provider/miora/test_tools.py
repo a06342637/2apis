@@ -73,6 +73,39 @@ def test_output_budget():
             prepare_prompt({"max_tokens": budget})
 
 
+@pytest.mark.parametrize("number", ["NaN", "Infinity", "-Infinity", "1e10000"])
+def test_tool_response_rejects_non_finite_numbers_even_without_argument_schema(number):
+    response = ('{"content":null,"tool_calls":[{"name":"search",'
+                '"arguments":{"nested":[{"x":' + number + '}]}}]}')
+    with pytest.raises(UpstreamProtocolViolation):
+        parse_response(response, payload())
+
+
+@pytest.mark.parametrize("constraint,value,accepted", [
+    ({"enum": [1]}, True, False), ({"enum": [True]}, 1, False),
+    ({"const": False}, True, False), ({"enum": [True]}, True, True),
+    ({"enum": [1]}, 1.0, True), ({"const": 1.0}, 1, True),
+    ({"enum": [{"x": True}]}, {"x": 1}, False),
+    ({"const": {"x": [True]}}, {"x": [1]}, False),
+    ({"enum": [{"x": [1]}]}, {"x": [1.0]}, True),
+    ({"enum": [{}]}, {}, True), ({"enum": [{}]}, [], False),
+    ({"enum": [{"x": 1}]}, {"y": 1}, False),
+    ({"enum": [[1]]}, [1, 2], False), ({"enum": [[1]]}, "1", False),
+    ({"const": []}, [], True),
+])
+def test_enum_and_const_follow_json_equality_not_python_bool_number_equality(
+        constraint, value, accepted):
+    request = payload()
+    request["tools"][1]["function"]["parameters"] = {"properties": {"x": constraint}}
+    response = envelope([call("search", x=value)])
+    if accepted:
+        events = parse_response(response, request)
+        assert json.loads(events[0].tool_calls[0]["function"]["arguments"])["x"] == value
+    else:
+        with pytest.raises(UpstreamProtocolViolation):
+            parse_response(response, request)
+
+
 @pytest.mark.parametrize(
     "tools",
     [

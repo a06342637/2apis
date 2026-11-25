@@ -38,10 +38,12 @@ class RefreshTask:
         self._now = now or (lambda: int(time.time()))
         self._pacer = pacer
 
-    async def run_once(self) -> TaskReport:
+    async def run_once(self, *, credential_id: str | None = None) -> TaskReport:
         report = TaskReport()
         current = self._now()
         for candidate in self._credentials.candidates():
+            if credential_id is not None and candidate.credential_id != credential_id:
+                continue
             # 硬禁用与用户软暂停（enabled=0）都跳过：暂停凭证不该被预刷新占用
             # 调度窗口，线上失败的也只会是早已停用的旧凭证（掩盖真实状态）。
             if candidate.disabled or not candidate.enabled:
@@ -81,6 +83,10 @@ class RefreshTask:
                     report.skipped += 1
                     continue
                 if data is None:
+                    report.skipped += 1
+                    continue
+                # 等锁期间可能已被另一轮续期或手工登录更新，不能再消费一张新刷新票。
+                if not _needs_refresh(provider, data, self.skew_seconds, current):
                     report.skipped += 1
                     continue
                 try:

@@ -11,6 +11,7 @@ from typing import Any
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from ..compat.openai.errors import error_payload
+from ..engine.context_stream import ContextBoundIterator
 from ..engine.sse import SSE_COMMENT
 from ..provider.base import aclose_stream
 
@@ -51,7 +52,7 @@ async def with_keepalive(frames: AsyncIterator[bytes],
     """
     if interval is None:
         interval = KEEPALIVE_SECONDS
-    iterator = frames.__aiter__()
+    iterator = ContextBoundIterator(frames)
     pending: asyncio.Task[bytes] | None = None
     try:
         while True:
@@ -132,7 +133,7 @@ async def respond_with_stream_start(frames: AsyncIterator[bytes],
     只改判 `invalid_request`：其余终态（`no_healthy_credential` 等）维持 200 错误帧，
     避免改掉既有 503 / 排队语义。宽限内无首帧 → 照旧发头，取帧任务保留。
     """
-    iterator = frames.__aiter__()
+    iterator = ContextBoundIterator(frames)
     pending: asyncio.Task[bytes] = asyncio.ensure_future(anext(iterator))
     grace = asyncio.ensure_future(asyncio.sleep(STREAM_START_GRACE_SECONDS))
     try:

@@ -83,7 +83,8 @@ def read_password(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     `--password-stdin` 作为非交互场景的推荐方式（CI / 部署脚本）。
     """
     if args.password_stdin:
-        password = sys.stdin.readline().rstrip("\n")
+        # Windows 密码文件可带 CRLF；仅去掉行终止符，保留密码中的空格。
+        password = sys.stdin.readline().rstrip("\r\n")
         if not password:
             parser.error("从 stdin 读到空密码")
         return password

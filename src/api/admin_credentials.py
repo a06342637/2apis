@@ -41,13 +41,13 @@ from ..engine.limits import day_start
 from ..provider.base import CheckinResult, GrowthResult, GrowthStep, StepStatus
 from ..provider.login_identity import (
     MANUAL_MERGE_PROVIDERS,
-    login_identities_for,
 )
 from ..provider.probe_failure import relogin_reason
 from ..provider.tos import tos_for
 from ..request_context import credential_scope
 from ..sorting import sort_rows
 from ..tags import parse_tags
+from .credential_login import save_login_credential
 from .deps import Services, csrf_protected, principal_from_request
 
 logger = logging.getLogger(__name__)
@@ -400,16 +400,10 @@ def create_router(services: Services) -> APIRouter:
         merged = False
         credential_id = ""
         if provider_id in MANUAL_MERGE_PROVIDERS:
-            target = login_identities_for(provider_id, credential_data)
-            existing = credentials.find_login_credential(
-                provider_id,
-                lambda data: login_identities_for(provider_id, data),
-                target) if target else None
-            if existing is not None:
-                merged = credentials.merge_login_credential(
-                    existing, credential_data, nickname)
-                if merged:
-                    credential_id = existing
+            # 手工会话导入与 OAuth 登录共用渠道锁和凭证编辑锁，不能覆盖正在续期的票。
+            credential_id, merged = await save_login_credential(
+                services, provider_id=provider_id, credential_data=credential_data,
+                nickname=nickname, added_by=principal.username, tags=tags)
         if not merged and provider_id == "zen" and credential_data.get("api_key"):
             # zen 是单槽渠道（一条虚拟凭证代表整条上游）：带 Key 导入不是
             # 「再加一条号」，而是把这条虚拟凭证从匿名档换成付费档。否则会
@@ -427,7 +421,7 @@ def create_router(services: Services) -> APIRouter:
                         # 换认证方式后旧的 429/额度判定不再适用（新 Key 是另一份
                         # 配额）：不清掉会出现「刚导入 Key 却还在冷却」，被当成没生效。
                         credentials.revive(credential_id, force=True)
-        if not merged:
+        if not credential_id:
             credential_id = credentials.add(provider=provider_id,
                                             credential_data=credential_data,
                                             nickname=nickname,

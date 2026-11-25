@@ -178,6 +178,36 @@ def _typed(value: Any, kind: str) -> bool:
     return False
 
 
+def _json_equal(left: Any, right: Any) -> bool:
+    """JSON Schema 相等语义：布尔不等同于 0/1，数字 1 与 1.0 相等。"""
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, dict) or isinstance(right, dict):
+        return (
+            isinstance(left, dict) and isinstance(right, dict)
+            and left.keys() == right.keys()
+            and all(_json_equal(value, right[key]) for key, value in left.items())
+        )
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list) and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_json_equal(first, second) for first, second in zip(left, right, strict=True))
+        )
+    return left == right
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("non-standard JSON number")
+
+
+def _finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number")
+    return parsed
+
+
 def _matches(value: Any, schema: Any, root: dict, depth: int = 0) -> bool:
     """校验常见函数 JSON Schema；本地 $ref 不访问外网且限制递归深度。"""
     if isinstance(schema, bool):
@@ -200,9 +230,9 @@ def _matches(value: Any, schema: Any, root: dict, depth: int = 0) -> bool:
         options = kind if isinstance(kind, list) else [kind]
         if not any(isinstance(option, str) and _typed(value, option) for option in options):
             return False
-    if "enum" in schema and value not in schema["enum"]:
+    if "enum" in schema and not any(_json_equal(value, option) for option in schema["enum"]):
         return False
-    if "const" in schema and value != schema["const"]:
+    if "const" in schema and not _json_equal(value, schema["const"]):
         return False
     for key in ("allOf", "anyOf", "oneOf"):
         if key in schema:
@@ -245,7 +275,8 @@ def parse_response(text: str, payload: dict) -> list[Event]:
     match = _FENCED_JSON.fullmatch(text.strip())
     raw = match.group(1) if match else text
     try:
-        response = json.loads(raw)
+        response = json.loads(raw, parse_constant=_reject_json_constant,
+                              parse_float=_finite_json_float)
     except ValueError as error:
         raise _response_error() from error
     if not isinstance(response, dict) or set(response) != {"content", "tool_calls"}:
@@ -277,7 +308,8 @@ def parse_response(text: str, payload: dict) -> list[Event]:
                 "index": index,
                 "id": "call_" + uuid.uuid4().hex,
                 "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments, ensure_ascii=False)},
+                "function": {"name": name, "arguments": json.dumps(
+                    arguments, ensure_ascii=False, allow_nan=False)},
             }
         )
     if tools:

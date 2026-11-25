@@ -21,6 +21,7 @@ web/coverage/
 data/
 secrets/
 .env
+.local/
 *.sqlite3*
 
 # 文档与设计稿不需要进镜像
