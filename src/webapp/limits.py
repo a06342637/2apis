@@ -1,0 +1,104 @@
+"""请求体上限（纯 ASGI 中间件，PROPOSAL §6）。
+
+登录接口 8KB（PBKDF2 是 CPU 密集操作，超大 body 无意义），备份恢复 512MB
+（SQLite 快照本来就是几十到几百 MB），其余 16MB（聊天请求可能带图片 base64）。
+必须挂在最外层：放在内层时下游会先读完 body，限制就失去意义。
+"""
+
+from __future__ import annotations
+
+import json
+
+# 请求体上限：登录 8KB（PBKDF2 是 CPU 密集操作，超大 body 无意义）；
+# 其余 16MB（聊天请求可能带图片 base64）。
+LOGIN_BODY_LIMIT = 8 * 1024
+DEFAULT_BODY_LIMIT = 16 * 1024 * 1024
+# 备份恢复：与 `admin_backups.MAX_UPLOAD_BYTES` 必须同值。不同值时的表现是
+# 「端点声称支持 512MB，中间件在 16MB 就 413」——大库的「恢复备份」功能
+# 静默不可用，而错误文案说的是 request body too large，与备份毫无关联。
+BACKUP_UPLOAD_LIMIT = 512 * 1024 * 1024
+
+# 按路径给上限：长的先比（登录路径本身很短，顺序无所谓，但显式排序更稳）。
+_PATH_LIMITS: tuple[tuple[str, int], ...] = (
+    ("/api/auth/login", LOGIN_BODY_LIMIT),
+    ("/api/backups/restore", BACKUP_UPLOAD_LIMIT),
+)
+
+
+def _body_limit(path: str) -> int:
+    # rstrip 处理尾斜杠：/api/auth/login/ 同样按登录上限（8KB），否则会先被
+    # 按 16MB 读完再 307 重定向，绕过登录限流一次
+    trimmed = path.rstrip("/")
+    for prefix, limit in _PATH_LIMITS:
+        if trimmed == prefix:
+            return limit
+    return DEFAULT_BODY_LIMIT
+
+
+async def _send_too_large(send, size: int, limit: int) -> None:
+    # 回填实测大小与配置上限：只有「too large」时用户无法判断是哪个限制、
+    # 差多少——调大请求体或改配置都需要这两个数字。
+    message = f"request body {size} bytes exceeds limit {limit} bytes"
+    body = json.dumps({"error": {"message": message, "type": "api_error",
+                                 "code": "invalid_request", "status": 413}})
+    await send({"type": "http.response.start", "status": 413,
+                "headers": [(b"content-type", b"application/json")]})
+    await send({"type": "http.response.body", "body": body.encode()})
+
+
+class BodySizeLimitMiddleware:
+    """请求体上限（纯 ASGI）：content-length 与实际分块计数双管。
+
+    只看 content-length 头会被 `Transfer-Encoding: chunked` 绕过——
+    分块请求根本不带这个头。这里在 receive 层累计字节数，
+    超限立即换成 413 响应并截断下游消费。
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = _body_limit(scope.get("path", ""))
+        # content-length 已超限时直接拒，不必读 body
+        for name, value in scope.get("headers", ()):
+            if name == b"content-length":
+                try:
+                    if int(value) > limit:
+                        # 未读 body，回填的是声明的 content-length（与实际一致）
+                        await _send_too_large(send, int(value), limit)
+                        return
+                except ValueError:
+                    break
+
+        received = 0
+        exceeded = False
+        replaced = False
+
+        async def limited_receive():
+            nonlocal received, exceeded
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    # 截断：让下游读到 EOF，避免继续消费攻击流量
+                    return {"type": "http.request", "body": b"", "more_body": False}
+            return message
+
+        async def guarded_send(message):
+            """超限后丢弃下游的全部响应，只发出我们自己的 413。"""
+            nonlocal replaced
+            if not exceeded:
+                await send(message)
+                return
+            if message["type"] != "http.response.start":
+                return                      # 丢弃下游 body
+            if not replaced:
+                replaced = True
+                # 分块请求没有 content-length，回填的是累计读到的实际字节数
+                await _send_too_large(send, received, limit)
+
+        await self.app(scope, limited_receive, guarded_send)

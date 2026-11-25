@@ -1,0 +1,796 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Plus, X } from "lucide-react";
+import { api } from "../api/client";
+import { PROVIDER_LABEL } from "../api/providers";
+import type { Provider, TosRisk } from "../api/types";
+import { useDialogFocus } from "../hooks/useDialogFocus";
+import {
+  IMPORT_PROVIDERS,
+  detectProvider,
+  parseCredentialInput,
+} from "../lib/credentialImport";
+import { safeHttpUrl } from "../lib/safeUrl";
+import { errorText } from "../lib/errors";
+import { Button, Field, Input, Notice, Select, Tabs, Textarea } from "../ui";
+
+/** 支持「登录渠道账号」按钮的渠道（有 poll / callback / paste 轨道的渠道）。 */
+const LOGIN_PROVIDERS: Provider[] = [
+  "codebuddy",
+  "codebuddy_intl",
+  "trae",
+  "qoder",
+  "codearts",
+  "officeace",
+];
+
+/** 上次成功导入的渠道：重复加号时不用每次重新选。 */
+const IMPORT_PROVIDER_KEY = "coding2api.importProvider";
+
+function storedImportProvider(): Provider {
+  try {
+    const saved = localStorage.getItem(IMPORT_PROVIDER_KEY);
+    if (saved && IMPORT_PROVIDERS.includes(saved as Provider)) return saved as Provider;
+  } catch {
+    // 隐私模式 / 存储被禁用：退回默认渠道即可，不影响导入
+  }
+  return "codebuddy";
+}
+
+/**
+ * JSON 导入的默认模板：选定渠道时填进输入框。
+ *
+ * 只在「用户还没写、或内容仍是上一渠道的模板」时替换——切渠道不该把已经
+ * 粘贴好的真实凭据冲掉（凭据不可恢复，误清一次就得重新取）。键与各渠道
+ * `import_credential` 的必填字段一致（见后端各 provider 的 credential 模块）。
+ */
+const IMPORT_TEMPLATES: Partial<Record<Provider, string>> = {
+  codebuddy: '{\n  "token": ""\n}',
+  codebuddy_intl: '{\n  "token": ""\n}',
+  trae: '{\n  "accessToken": "",\n  "uid": "",\n  "refreshToken": ""\n}',
+  qoder: '{\n  "access_token": ""\n}',
+  codearts:
+    '{\n  "access_key_id": "",\n  "secret_access_key": "",\n  "security_token": ""\n}',
+  officeace:
+    '{\n  "model_app_key": "",\n  "model_app_secret": "",\n  "model_base_url": "https://modelgw-xxxx.officeace.cn-southwest-2.huaweicloud-agentarts.com"\n}',
+  raccoon: '{\n  "access_token": ""\n}',
+  lingxi: '{\n  "cookie": "wps_sid=…; uid=…"\n}',
+  miora: '{\n  "authToken": "",\n  "refreshToken": ""\n}',
+};
+
+function MioraImportHelp() {
+  return (
+    <div className="space-y-2 text-xs text-muted-foreground" data-testid="miora-import-help">
+      <p>
+        <a href="https://miora.design/" target="_blank" rel="noopener noreferrer"
+          className="underline underline-offset-2">打开 Miora 登录</a>
+        ，登录后按 F12 → Console，运行下面命令并粘贴复制出的 JSON。
+        带 refreshToken 可预刷新登录态；只导入 Cookie / token 时到期需重新导入。
+      </p>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded border border-border p-2">
+        {`copy(JSON.stringify({authToken:localStorage.getItem("authToken"),refreshToken:localStorage.getItem("refreshToken")},null,2))`}
+      </pre>
+      <p>
+        多账号请分别登录、逐个导入，或使用「批量导入」。同一账号重登会更新已有凭证。
+        模型列表由上游动态加载，可在 Playground 选择或用 <code>模型名@miora</code> 指定渠道。
+      </p>
+    </div>
+  );
+}
+
+type TabValue = "login" | "import";
+
+/** 只允许 http(s) 授权地址：上游返回的 auth_url 若为 `javascript:` / `data:`
+ * 等被赋给弹窗 location 会在弹窗（继承本页 origin）执行脚本。
+ *
+ * 不做主机白名单：auth_url 由各渠道上游下发（如 codebuddy 的登录域名随账号
+ * 区域变化），写死域名会在渠道侧变更时直接打断登录，而这里的真实威胁是
+ * `javascript:` 之类的脚本执行（已由 scheme 校验挡住）——能把用户导去钓鱼站
+ * 的攻击者已经掌握了上游响应，收益有限。 */
+function safeAuthUrl(raw: string | undefined): string | null {
+  return safeHttpUrl(raw);
+}
+
+/** 登录成功提示：合并更新与新增必须区分，否则用户不知道池子里是否多了一条。 */
+function loginSuccessNotice(merged: boolean | undefined): string {
+  return merged
+    ? "登录成功，已更新该账号的凭证。"
+    : "登录成功，凭证已保存。";
+}
+
+/**
+ * 添加凭证对话框：登录渠道 / JSON 导入两分区 + 免费层一键补回。
+ *
+ * 取代原先常驻页面底部的「登录渠道账号」「导入凭证」两个面板——添加凭证
+ * 是低频动作，不该常驻占屏。登录轮询 state 与 timer 全部收在这里：
+ * 组件卸载时统一清掉（原先由页面负责）。
+ *
+ * TRAE（callback 轨道）授权完成靠凭证列表变化检测，对话框关闭轮询就停了，
+ * 所以 TRAE 登录中时禁用关闭，等流程结束（成功/超时/取消）再放行。
+ */
+export function AddCredentialDialog({
+  open,
+  onClose,
+  credentialCount,
+  hasZen,
+  hasKilo,
+  lingxiCount = 0,
+  onImported,
+  onNotice,
+  onError,
+  tosRisks = {},
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** 当前凭证数量：TRAE callback 轨道靠数量变化检测授权完成。 */
+  credentialCount: number;
+  hasZen: boolean;
+  hasKilo: boolean;
+  /** 已有灵犀凭证数：新增前提示 WPS 单浏览器会话会被新登录顶掉。 */
+  lingxiCount?: number;
+  /** 登录/导入成功后回调（关对话框；列表刷新由调用方统一做）。 */
+  onImported: (message: string) => void;
+  /** 渠道 → ToS 风险登记（来自 `GET /api/credentials`）：导入前提示灰区。 */
+  tosRisks?: Record<string, TosRisk>;
+  /** 登录过程消息透出到页面横幅。 */
+  onNotice: (message: string) => void;
+  onError: (message: string) => void;
+}) {
+  const [tab, setTab] = useState<TabValue>("login");
+  const [busy, setBusy] = useState(false);
+  // 进行中的登录：state 用于 cancel 精确取消那一次流程，timer 用于卸载时清轮询
+  const [loginProviders, setLoginProviders] = useState<Provider[]>([]);
+  const loginStatesRef = useRef<Partial<Record<Provider, string>>>({});
+  const loginTimersRef = useRef<Partial<Record<Provider, number>>>({});
+  // CodeArts paste 轨道：授权后把浏览器地址栏里打不开的 127.0.0.1 回调链接粘回来
+  const [pasteProvider, setPasteProvider] = useState<Provider | null>(null);
+  const [pasteUrl, setPasteUrl] = useState("");
+  // 小浣熊：没有 OAuth 轨道，凭据是网页会话 JWT，直接在「登录渠道」页粘贴
+  const [raccoonToken, setRaccoonToken] = useState("");
+  // WPS 灵犀：没有 OAuth 轨道，凭据是 WPS 账号 cookie（wps_sid），直接粘贴
+  const [lingxiCookie, setLingxiCookie] = useState("");
+  // OpenCode Zen：留空 = 匿名免费层；填 Console API Key = 付费档（单槽覆盖）
+  const [zenKey, setZenKey] = useState("");
+  // JSON / Cookie / cURL 导入（原 ImportPanel 逻辑）
+  const [importProvider, setImportProvider] = useState<Provider>(storedImportProvider);
+  // 手选渠道优先于自动识别：用户改了输入就清掉，重新按内容识别
+  const [manualProvider, setManualProvider] = useState<Provider | null>(null);
+  const [nickname, setNickname] = useState("");
+  const [raw, setRaw] = useState("");
+  const [importError, setImportError] = useState<string | null>(null);
+  const detected = useMemo(() => detectProvider(raw), [raw]);
+  const effectiveProvider = manualProvider ?? detected ?? importProvider;
+  // TRAE 轮询要比较「登录发起时 vs 现在」的凭证数量；ref 让 interval 里
+  // 读到的始终是最新值而不触发重渲染。
+  const credentialCountRef = useRef(credentialCount);
+  credentialCountRef.current = credentialCount;
+
+  // 页面卸载/对话框卸载时清掉所有登录轮询，防止跨页面的僵尸 interval
+  useEffect(() => () => {
+    Object.values(loginTimersRef.current).forEach((timer) => {
+      if (timer !== undefined) window.clearInterval(timer);
+    });
+  }, []);
+
+  // 关闭即抹掉明文输入：对话框靠 `open` 渲染而不是卸载，state 会跨「开关」存活，
+  // 粘贴过 token/Cookie 却没提交的话，下次打开会原样回填。
+  const resetSensitive = () => {
+    setPasteUrl("");
+    setRaccoonToken("");
+    setLingxiCookie("");
+    // Zen Console API Key 同样是明文（付费档凭据），关闭即抹掉
+    setZenKey("");
+    setRaw("");
+    setNickname("");
+    setImportError(null);
+  };
+
+  // TRAE 登录中不能关：授权完成的检测靠这里的凭证列表轮询，关了就停。
+  const requestClose = () => {
+    if (loginProviders.includes("trae")) return;
+    resetSensitive();
+    onClose();
+  };
+  // 父组件也可能直接置 open=false（导入成功后自动关闭），统一在关闭态清一次，
+  // 不指望每个关闭入口都记得调 resetSensitive。
+  useEffect(() => {
+    if (!open) resetSensitive();
+  }, [open]);
+  // 对话框焦点管理：Esc/遮罩关闭都走 requestClose（TRAE 登录中会自我拦截）。
+  const dialogRef = useDialogFocus<HTMLDivElement>(requestClose, open);
+
+  if (!open) return null;
+
+  const stopPolling = (provider: Provider) => {
+    window.clearInterval(loginTimersRef.current[provider]);
+    delete loginTimersRef.current[provider];
+    setLoginProviders((previous) => previous.filter((item) => item !== provider));
+  };
+
+  const startLogin = async (provider: Provider, forceLogin = false) => {
+    onError("");
+    onNotice("");
+    // 先同步开一个占位窗口：window.open 若在 await 之后才调用，
+    // 会脱离用户手势上下文而被浏览器弹窗拦截。
+    const popup = window.open("", "_blank");
+    if (popup) popup.opener = null;               // 切断对管理台 window 的引用
+    try {
+      const started = await api.upstreamStart(provider, forceLogin);
+      loginStatesRef.current[provider] = started.state;
+      if (!started.auth_url) {
+        popup?.close();                        // 上游没给授权地址：关掉空白占位窗
+      } else {
+        const authUrl = safeAuthUrl(started.auth_url);
+        if (!authUrl) {
+          popup?.close();
+          delete loginStatesRef.current[provider];
+          onError("授权地址无效，已中止登录。");
+          return;
+        }
+        if (popup && !popup.closed) popup.location.href = authUrl;
+      }
+      setLoginProviders((previous) => [...new Set([...previous, provider])]);
+
+      if (started.flow === "callback") {
+        // TRAE：浏览器完成授权后 302 回本服务的 /authorize，那里直接落库。
+        // 前端无法轮询渠道，改为轮询凭证列表，出现新凭证即视为完成。
+        // 回调地址一并透出：它由服务端 PUBLIC_BASE_URL 决定，指错主机时
+        // 浏览器会静默跳不回来（用户只看到「授权完成但没反应」）。
+        // 同时给出粘贴入口：远程 / NAS 部署里 TRAE 跳回调常直接「网络错误」，
+        // 那条地址只在浏览器地址栏里，服务端永远收不到（issue #21）。
+        setPasteProvider(provider);
+        setPasteUrl("");
+        onNotice(started.callback_url
+          ? `已在新标签页打开授权页，完成后本页自动刷新出凭证。`
+            + `若浏览器打不开回调地址 ${started.callback_url}（显示网络错误），`
+            + `把地址栏里的整条链接粘贴到下方即可。`
+          : "已在新标签页打开授权页，完成后本页自动刷新出凭证。"
+            + "若浏览器打不开回调地址，把地址栏里的整条链接粘贴到下方即可。");
+        const deadline = Date.now() + 5 * 60 * 1000;
+        const baseline = credentialCountRef.current;
+        const timer = window.setInterval(async () => {
+          try {
+            const after = (await api.credentials()).credentials.length;
+            if (after > baseline || Date.now() > deadline) {
+              stopPolling(provider);
+              if (after > baseline) setPasteProvider(null);
+              onNotice(after > baseline
+                ? "登录成功，凭证已保存。"
+                : "授权超时：浏览器没有回到本服务。请检查授权后地址栏是否跳转到回调地址，"
+                  + "以及服务端 PUBLIC_BASE_URL 是否为浏览器可访问的地址；"
+                  + "也可以把地址栏里的整条链接粘贴到下方完成登录。");
+            }
+          } catch (caught) {
+            // 会话过期 / 网络抖动时不能每 3 秒重复抛错，直接停下等用户重试
+            stopPolling(provider);
+            onError(errorText(caught, "授权状态检测失败，请重试。"));
+          }
+        }, 3000);
+        loginTimersRef.current[provider] = timer;
+        return;
+      }
+
+      if (started.flow === "paste") {
+        // CodeArts：门户把 code 302 回 127.0.0.1 回调端口，服务端不监听，
+        // 改为让用户把浏览器地址栏里的整条回调链接粘回来，服务端换 token。
+        stopPolling(provider);
+        setPasteProvider(provider);
+        setPasteUrl("");
+        onNotice(
+          "已在新标签页打开华为云授权页。授权后会跳到打不开的本地地址（127.0.0.1），"
+          + "把整条链接粘贴到下方即可。",
+        );
+        return;
+      }
+
+      onNotice("已在新标签页打开授权页，完成后自动检测。");
+      const interval = (started.interval ?? 5) * 1000;
+      const timer = window.setInterval(async () => {
+        try {
+          const result = await api.upstreamPoll(provider, started.state);
+          if (result.status === "success") {
+            stopPolling(provider);
+            const message = loginSuccessNotice(result.merged);
+            onNotice(message);
+            onImported(message);
+          }
+        } catch (caught) {
+          stopPolling(provider);
+          // 轮询失败多半是上游给的可行动原因（如「这个账号还没开通 OfficeAce」），
+          // 兜底文案会把它抹掉，用户只会看到「失败」而不知道该去做什么。
+          onError(errorText(caught, "登录轮询失败，请重试。"));
+        }
+      }, interval);
+      loginTimersRef.current[provider] = timer;
+    } catch (caught) {
+      // 启动失败：关掉占位窗口，并把授权地址给出来让用户手动打开
+      popup?.close();
+      onError(errorText(caught, "无法启动登录流程"));
+    }
+  };
+
+  const cancelLogin = async (provider: Provider) => {
+    onError("");
+    // 用 startLogin 记下的 state 取消当前那次流程；并停掉对应的凭证列表轮询。
+    const state = loginStatesRef.current[provider];
+    const timer = loginTimersRef.current[provider];
+    if (timer !== undefined) {
+      window.clearInterval(timer);
+      delete loginTimersRef.current[provider];
+    }
+    delete loginStatesRef.current[provider];
+    if (pasteProvider === provider) {
+      setPasteProvider(null);
+      setPasteUrl("");
+    }
+    try {
+      if (state) await api.upstreamCancel(provider, state).catch(() => undefined);
+    } finally {
+      setLoginProviders((previous) => previous.filter((item) => item !== provider));
+      onNotice("已取消登录。");
+    }
+  };
+
+  const completeLogin = async () => {
+    if (!pasteProvider) return;
+    const state = loginStatesRef.current[pasteProvider];
+    if (!state) {
+      onError("登录会话已失效，请重新登录。");
+      return;
+    }
+    setBusy(true);
+    onError("");
+    try {
+      const result = await api.upstreamComplete(pasteProvider, state, pasteUrl.trim());
+      delete loginStatesRef.current[pasteProvider];
+      stopPolling(pasteProvider);
+      setPasteProvider(null);
+      setPasteUrl("");
+      const message = loginSuccessNotice(result.merged);
+      onNotice(message);
+      onImported(message);
+    } catch (caught) {
+      onError(errorText(caught, "登录失败，请检查粘贴的链接。"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitImport = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setImportError(null);
+    const parsed = parseCredentialInput(raw, effectiveProvider, manualProvider === null);
+    if (!parsed.ok) {
+      setImportError(parsed.error);
+      return;
+    }
+    setBusy(true);
+    try {
+      const created = await api.importCredential(
+        parsed.provider, parsed.credential, nickname);
+      setRaw("");
+      setNickname("");
+      setManualProvider(null);
+      setImportProvider(parsed.provider);
+      try {
+        localStorage.setItem(IMPORT_PROVIDER_KEY, parsed.provider);
+      } catch {
+        // 存储不可用不影响导入本身
+      }
+      const notice = created?.merged ? "已更新账号登录凭证。" : "凭证已导入。";
+      onImported(created?.tos && created.tos.level !== "green"
+        ? `${notice}注意：该渠道 ToS 评级为 ${created.tos.level} —— ${created.tos.reason}`
+        : notice);
+    } catch (caught) {
+      onError(errorText(caught, "导入失败"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm"
+      onClick={requestClose}
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="添加凭证"
+        data-testid="add-credential-dialog"
+        onClick={(event) => event.stopPropagation()}
+        className="max-h-[90vh] w-full max-w-lg animate-in overflow-y-auto rounded-xl border border-border bg-card p-5 shadow-xl fade-in-0 zoom-in-95"
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="flex items-center gap-2 text-sm font-semibold">
+            <Plus className="size-4 text-muted-foreground" />
+            添加凭证
+          </h2>
+          <Button
+            size="icon"
+            variant="ghost"
+            aria-label="关闭"
+            data-testid="add-credential-close"
+            disabled={loginProviders.includes("trae")}
+            onClick={requestClose}
+          >
+            <X className="size-4" />
+          </Button>
+        </div>
+
+        <Tabs
+          value={tab}
+          testId="add-credential-tab"
+          onChange={(value) => setTab(value as TabValue)}
+          options={[
+            { value: "login", label: "登录渠道" },
+            { value: "import", label: "JSON 导入" },
+          ]}
+        />
+
+        {tab === "login" ? (
+          <div className="mt-4 space-y-4" data-testid="add-credential-login">
+            <div className="flex flex-wrap items-center gap-3">
+              {LOGIN_PROVIDERS.map((item) => {
+                const pending = loginProviders.includes(item);
+                return pending ? (
+                  <span key={item} className="inline-flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground">
+                      {PROVIDER_LABEL[item]} 登录中…
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      data-testid={`cancel-login-${item}`}
+                      onClick={() => void cancelLogin(item)}
+                    >
+                      取消登录
+                    </Button>
+                  </span>
+                ) : (
+                  <span key={item} className="inline-flex items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      data-testid={`start-login-${item}`}
+                      disabled={busy}
+                      onClick={() => void startLogin(item)}
+                    >
+                      登录 {PROVIDER_LABEL[item]}
+                    </Button>
+                    {item === "officeace" && (
+                      // 华为云会话按浏览器走：不先登出，云端会直接放行现有账号，
+                      // 用户点「新增」却始终只有同一条凭证。
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        data-testid="switch-login-officeace"
+                        disabled={busy}
+                        onClick={() => void startLogin(item, true)}
+                      >
+                        换账号
+                      </Button>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              CodeBuddy 走设备码轮询（自动检测完成）；TRAE 走浏览器回调
+              （授权后由 <code>/authorize</code> 直接落库，本对话框轮询凭证列表，
+              期间勿关闭对话框；浏览器打不开回调地址时把地址栏整条链接粘回来）；
+              Qoder 走设备码登录；CodeArts 走 OAuth2 授权码登录
+              （授权后把地址栏打不开的 127.0.0.1 回调链接粘回本对话框）；
+              OfficeAce 由云端承接回调（本对话框轮询，多账号请用「换账号」）。
+            </p>
+            {pasteProvider && (
+              <div className="space-y-2" data-testid="paste-callback">
+                <Field label={`${PROVIDER_LABEL[pasteProvider]} 授权回调链接`} htmlFor="paste-callback-input-el">
+                  <Input
+                    id="paste-callback-input-el"
+                    data-testid="paste-callback-input"
+                    value={pasteUrl}
+                    onChange={(event) => setPasteUrl(event.target.value)}
+                    placeholder={pasteProvider === "trae"
+                      ? "/authorize?refreshToken=…&userInfo=…&loginTraceID=…"
+                      : "http://127.0.0.1:12800/oauth/callback?code=…&state=…"}
+                  />
+                </Field>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    data-testid="paste-callback-submit"
+                    disabled={busy || pasteUrl.trim().length === 0}
+                    onClick={() => void completeLogin()}
+                  >
+                    完成登录
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="danger"
+                    data-testid="paste-callback-cancel"
+                    onClick={() => void cancelLogin(pasteProvider)}
+                  >
+                    取消
+                  </Button>
+                </div>
+              </div>
+            )}
+            <div className="border-t border-border pt-3" data-testid="miora-login-entry">
+              <MioraImportHelp />
+              <Button
+                className="mt-2"
+                size="sm"
+                variant="primary"
+                data-testid="add-miora-account"
+                disabled={busy}
+                onClick={() => {
+                  setImportProvider("miora");
+                  setManualProvider("miora");
+                  setRaw((current) => current.trim() === "" ? IMPORT_TEMPLATES.miora ?? "" : current);
+                  setTab("import");
+                }}
+              >
+                添加 Miora 账号
+              </Button>
+            </div>
+            <div className="border-t border-border pt-3">
+              <div className="mb-2 text-xs text-muted-foreground">
+                小浣熊没有 OAuth 登录轨道，凭据是网页会话 JWT：在浏览器 DevTools →
+                Application → Cookies 里复制 <code>xhx_token</code> 的值，粘到下方。
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="w-64">
+                  <Input
+                    data-testid="raccoon-token"
+                    value={raccoonToken}
+                    placeholder="粘贴 xhx_token 的值（或整段 cookie）"
+                    onChange={(event) => setRaccoonToken(event.target.value)}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  data-testid="add-raccoon"
+                  disabled={busy || raccoonToken.trim().length === 0}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await api.importCredential(
+                        "raccoon",
+                        { access_token: raccoonToken.trim() },
+                        "小浣熊",
+                      );
+                      setRaccoonToken("");
+                      onImported("已添加小浣熊渠道");
+                    } catch (caught) {
+                      onError(errorText(caught, "添加失败"));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  添加小浣熊
+                </Button>
+              </div>
+            </div>
+            <div className="border-t border-border pt-3">
+              <div className="mb-2 text-xs text-muted-foreground">
+                灵犀没有 OAuth 登录轨道，凭据是 WPS 账号 cookie：在浏览器打开
+                lingxi.kdocs.cn 登录后，DevTools → Application → Cookies 里复制整段
+                Cookie（含 <code>wps_sid</code>），粘到下方。有效期约一年，失效后重贴即可。
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="w-64">
+                  <Input
+                    data-testid="lingxi-cookie"
+                    value={lingxiCookie}
+                    placeholder="粘贴 Cookie 或 wps_sid 的值"
+                    onChange={(event) => setLingxiCookie(event.target.value)}
+                  />
+                </div>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  data-testid="add-lingxi"
+                  disabled={busy || lingxiCookie.trim().length === 0}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await api.importCredential(
+                        "lingxi",
+                        { cookie: lingxiCookie.trim() },
+                        "灵犀",
+                      );
+                      setLingxiCookie("");
+                      onImported("已添加灵犀渠道");
+                    } catch (caught) {
+                      onError(errorText(caught, "添加失败"));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  添加灵犀
+                </Button>
+              </div>
+            </div>
+            <div className="border-t border-border pt-3">
+              <div className="mb-2 text-xs text-muted-foreground">
+                OpenCode Zen / Kilo 免费层无需凭证/登录，删除其虚拟凭证后点下方按钮补回
+                （永久停用请改用「暂停」）。Zen 若已充值，可粘贴 Console 的 API Key
+                切到付费档（走 <code>/inference/openai/v1</code>，模型清单含付费模型）。
+              </div>
+              <div className="mb-2">
+                <Field label="Zen API Key（可选，sk-…）">
+                  <Input
+                    data-testid="zen-api-key"
+                    type="password"
+                    autoComplete="off"
+                    placeholder="sk-…"
+                    value={zenKey}
+                    onChange={(event) => setZenKey(event.target.value)}
+                  />
+                </Field>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="default"
+                  data-testid="add-zen"
+                  disabled={busy || (hasZen && zenKey.trim().length === 0)}
+                  onClick={async () => {
+                    const key = zenKey.trim();
+                    setBusy(true);
+                    try {
+                      await api.importCredential(
+                        "zen",
+                        key ? { api_key: key } : {},
+                        "OpenCode Zen",
+                      );
+                      setZenKey("");
+                      onImported(key ? "已更新 OpenCode Zen API Key（付费档）"
+                                     : "已添加 OpenCode Zen 免费渠道");
+                    } catch (caught) {
+                      onError(errorText(caught, "添加失败"));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {hasZen
+                    ? zenKey.trim()
+                      ? "更新 Zen API Key"
+                      : "OpenCode Zen 已添加"
+                    : "添加 OpenCode Zen"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="default"
+                  data-testid="add-kilo"
+                  disabled={busy || hasKilo}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      await api.importCredential("kilo", {}, "Kilo");
+                      onImported("已添加 Kilo 免费渠道");
+                    } catch (caught) {
+                      onError(errorText(caught, "添加失败"));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {hasKilo ? "Kilo 已添加" : "添加 Kilo"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <form onSubmit={submitImport} className="mt-4 space-y-3" data-testid="add-credential-import">
+            <div className="flex flex-wrap gap-3">
+              <div className="w-40">
+                <Field label="渠道" htmlFor="import-provider-select">
+                  <Select
+                    id="import-provider-select"
+                    value={effectiveProvider}
+                    data-testid="import-provider"
+                    onChange={(event) => {
+                      const next = event.target.value as Provider;
+                      setManualProvider(next);
+                      setImportProvider(next);
+                      // 空内容或仍是上一渠道模板 → 换成新渠道模板；手写内容保留
+                      const template = IMPORT_TEMPLATES[next] ?? "";
+                      setRaw((current) =>
+                        current.trim() === "" || current === IMPORT_TEMPLATES[importProvider]
+                          ? template
+                          : current,
+                      );
+                    }}
+                  >
+                    {IMPORT_PROVIDERS.map((item) => (
+                      <option key={item} value={item}>
+                        {PROVIDER_LABEL[item]}
+                      </option>
+                    ))}
+                  </Select>
+                </Field>
+              </div>
+              <div className="w-48">
+                <Field label="昵称（可选）" htmlFor="import-nickname-input">
+                  <Input
+                    id="import-nickname-input"
+                    value={nickname}
+                    data-testid="import-nickname"
+                    onChange={(event) => setNickname(event.target.value)}
+                  />
+                </Field>
+              </div>
+            </div>
+            {effectiveProvider === "miora" && <MioraImportHelp />}
+            {effectiveProvider === "lingxi" && lingxiCount > 0 && (
+              <div data-testid="import-lingxi-warning">
+                <Notice tone="warn">
+                  WPS 同一浏览器只保留最近一次登录：新登录会顶掉旧灵犀会话。
+                  多账号请用不同浏览器配置 / 无痕窗口分别登录后各取一次 Cookie；
+                  旧凭证会在复探确认 401 后标记「需重新登录」。
+                </Notice>
+              </div>
+            )}
+            {(() => {
+              const risk = tosRisks[effectiveProvider];
+              if (!risk) return null;
+              return (
+                <div data-testid="import-tos-risk">
+                  <Notice tone={risk.level === "green" ? "ok" : "warn"}>
+                    ToS 评级：{risk.level} —— {risk.reason}
+                    {risk.basis !== "运营判断" ? `（依据：${risk.basis}）` : ""}
+                  </Notice>
+                </div>
+              );
+            })()}
+            <Field
+              label="凭证 JSON / Cookie / cURL"
+              htmlFor="import-payload"
+              hint='三种粘法都收：① 渠道 JSON（选渠道自动填模板，已手写内容不会被覆盖）；② 整段 Cookie（灵犀 wps_sid、小浣熊 xhx_token）；③ 浏览器 DevTools → Network → 右键请求 → Copy as cURL (bash)（含 HttpOnly Cookie，最省事）。识别到渠道会自动切换。'
+            >
+              <Textarea
+                rows={5}
+                id="import-payload"
+                value={raw}
+                data-testid="import-payload"
+                className="font-mono text-xs"
+                placeholder='{"token":"..."}，或 wps_sid=…; uid=…，或 curl …'
+                onChange={(event) => {
+                  setRaw(event.target.value);
+                  // 改了输入就重新信任内容识别，不再压着手选的渠道
+                  setManualProvider(null);
+                }}
+              />
+            </Field>
+            {detected && (
+              <p
+                className="text-xs text-muted-foreground"
+                data-testid="import-detected"
+              >
+                已识别为 {PROVIDER_LABEL[detected]}
+                {manualProvider !== null && manualProvider !== detected
+                  ? "（当前按手选渠道导入）"
+                  : ""}
+              </p>
+            )}
+            {importError && (
+              <div data-testid="import-error">
+                <Notice tone="danger">{importError}</Notice>
+              </div>
+            )}
+            <Button type="submit" variant="primary" disabled={busy} data-testid="import-submit">
+              导入
+            </Button>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}

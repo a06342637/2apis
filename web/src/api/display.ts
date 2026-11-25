@@ -1,0 +1,644 @@
+/**
+ * 健康度四态与配额周期语义的展示规则（全站共用）。
+ *
+ * 后端把「未探测 / 已耗尽 / 已知剩余百分比」编码为 null / -1 / 0-100，
+ * 展示层必须区分它们，否则探测失败会被误读成「没额度」。null 还要再分两种：
+ * 免费层（zen / kilo）上游根本没有额度接口，「探也没用」，与「该探但没探到」
+ * 是两回事——前者不该提示用户去点「探测」。
+ */
+
+import type { Credential, Health, ModelCooldown, ProbeFailureReason, UpstreamLevel } from "../api/types";
+
+export type HealthKind = "known" | "unknown" | "noprobe" | "exhausted";
+
+export interface HealthView {
+  kind: HealthKind;
+  /** 0-100，仅 known 时有值 */
+  percent: number | null;
+  label: string;
+  tone: "ok" | "warn" | "danger" | "muted";
+}
+
+/** 该渠道是否有额度探测：免费层（zen / kilo）上游没有额度接口，探也没用。 */
+export function hasQuotaProbe(provider: string): boolean {
+  return provider !== "zen" && provider !== "kilo";
+}
+
+/**
+ * 健康度视图。`provider` 决定 null 落到「未探测」还是「无探测」：
+ * 省略时按「未探测」处理（仅用于不关心渠道的旧调用点）。
+ */
+export function healthView(health: Health, provider?: string): HealthView {
+  if (health === null || health === undefined) {
+    if (provider !== undefined && !hasQuotaProbe(provider)) {
+      return { kind: "noprobe", percent: null, label: "无探测", tone: "muted" };
+    }
+    return { kind: "unknown", percent: null, label: "未探测", tone: "muted" };
+  }
+  if (health < 0) {
+    return { kind: "exhausted", percent: 0, label: "已耗尽", tone: "danger" };
+  }
+  const tone = health >= 50 ? "ok" : health > 0 ? "warn" : "danger";
+  return { kind: "known", percent: health, label: `${health}%`, tone };
+}
+
+/**
+ * 周期语义：CodeBuddy 的额度随周期重置，TRAE 是单调递减的账户余额，
+ * Zen / Kilo 走免费层、上游没有额度接口（探测恒为「未知」），
+ * CodeArts 是**积分余额**（内置模型按积分计费，按积分包到期日作废）。
+ *
+ * 判定依据是**渠道类型**，不是 quota_cycle_end 是否存在：
+ * CodeBuddy 未探测时 cycle_end 同样是 null，而按 cycle_end 推断会把它
+ * 错标成 TRAE 的「账户剩余（单调递减）」。
+ */
+export function quotaSemantics(credential: Credential): string {
+  if (credential.provider === "zen" || credential.provider === "kilo") {
+    return "免费层（无额度接口）";
+  }
+  // TRAE 是单调递减的账户余额（上游无周期重置）
+  if (credential.provider === "trae") {
+    return "账户剩余（单调递减）";
+  }
+  // CodeArts 的额度就是积分（内置模型计费，上游数值本身即积分，不经折算）；
+  // 积分包各自有到期日，用完不掉，到期即作废，故不说「本周期」。
+  if (credential.provider === "codearts") {
+    if (!credential.quota_cycle_end) {
+      return "积分余额（内置模型计费，按积分包到期日作废）";
+    }
+    const date = new Date(credential.quota_cycle_end * 1000).toLocaleDateString("zh-CN");
+    return `积分余额（内置模型计费），最早 ${date} 到期`;
+  }
+  // officeAce 的积分就是主账（新用户一次性 + 每日签到各发一笔），每笔有
+  // 独立到期时间、不一并重置，故按「余额 + 逐笔到期」描述，不能说成本周期。
+  if (credential.provider === "officeace") {
+    return "积分余额（逐笔到期，新用户与每日签到各自计时）";
+  }
+  // Qoder：套餐内额度按周期重置，但签到/活动赠送的积分逐笔到期；网页 Cookie
+  // 探测时 `quota_cycle_end` 是**最早一个包的到期日**，不是重置日，所以文案
+  // 必须说「到期」而不是「重置」。
+  if (credential.provider === "qoder") {
+    if (!credential.quota_cycle_end) {
+      return "积分余额（签到/赠送逐笔到期）";
+    }
+    const date = new Date(credential.quota_cycle_end * 1000).toLocaleDateString("zh-CN");
+    return `积分余额（签到/赠送逐笔到期），最早 ${date} 到期`;
+  }
+  // CodeBuddy 随周期重置；未探测到重置时间时退化为本周期口径。
+  if (!credential.quota_cycle_end) {
+    return "本周期剩余（未探测到重置时间）";
+  }
+  const date = new Date(credential.quota_cycle_end * 1000).toLocaleDateString("zh-CN");
+  return `本周期剩余，${date} 重置`;
+}
+
+/**
+ * 额度单位统一为「积分」：CodeArts 上游直接以积分计费，CodeBuddy / TRAE /
+ * Qoder / officeAce 的额度也按积分口径展示，展示层不再需要按渠道换单位。
+ */
+export const QUOTA_UNIT = "积分";
+
+/**
+ * 到期指标：调度窗口内即将到期的额度（后端与选号排序同源计算）。
+ *
+ * 返回 null 表示「不值得展示」：渠道没有到期信息（TRAE → 后端回 null），
+ * 或窗口关闭 / 确实没有额度临近过期（后端回 0）。只有关键的 0 需要藏起来。
+ *
+ * 主/次两个窗口共用一个函数：措辞区分开，否则两行同样的句式看不出
+ * 谁是第一优先级（主窗口 36h 打平时才轮到次窗口 7 天）。
+ *
+ * **措辞必须带「窗口」二字**：这里的时长是调度窗口（主 36h / 次 7 天），不是
+ * 某笔额度的剩余到期时间。早先写成「将在 1.5 天内过期」会被读成倒计时——
+ * 实测用户反馈「积分今天到期，显示到期 1.5 天」。窗口是「在此时间段内会到期」，
+ * 其中可能今天到期、也可能第 7 天才到期。
+ *
+ * `unit` 默认「积分」，全渠道同口径。
+ */
+export function expiringQuotaLabel(
+  credits: number | null | undefined,
+  windowSeconds: number | undefined,
+  wording: "primary" | "secondary" = "primary",
+  unit = "积分",
+): string | null {
+  if (credits === null || credits === undefined) return null;
+  if (credits <= 0 || !windowSeconds || windowSeconds <= 0) return null;
+  const amount = formatNumber(credits);
+  const window = formatDuration(windowSeconds);
+  return wording === "secondary"
+    ? `${window}窗口内共 ${amount} ${unit}将到期`
+    : `${amount} ${unit}将在 ${window}窗口内到期`;
+}
+
+export function cooldownRemaining(coolingUntil: number | null, now = Date.now() / 1000): number {
+  if (!coolingUntil) return 0;
+  return Math.max(0, Math.ceil(coolingUntil - now));
+}
+
+export interface TokenExpiryView {
+  /** 剩余秒数；到期时间未知（0）时为 null */
+  remaining: number | null;
+  /** 是否处于预警窗口（剩余 < 阈值；已过期为 0） */
+  expiring: boolean;
+  label: string;
+}
+
+/**
+ * token 到期展示：剩余时间与预警都在前端按同一个时钟现算。
+ *
+ * 后端只给绝对 `token_expires_at`——服务端算好的「剩余秒数」不会随页面
+ * tick 更新，而且阈值判定会与冷却时长各用一套口径。
+ *
+ * `token_expires_at` 为 0 表示**未知**（渠道没给到期信息）：此时 `remaining`
+ * 为 null，展示层显示 `—` 而非「已过期」，否则拿不到到期时间会误报成预警。
+ *
+ * **短寿命凭证不标红**：给出 `issuedAt`（签发时间）时，若整段寿命 ≤ 预警
+ * 窗口的 2 倍，说明该 token 天生就在窗口附近（CodeArts 的 STS 凭证寿命仅
+ * 2h、预警窗口 1h），「即将到期」是它的常态而非异常，恒标红只会淹掉真告警
+ * ——与后端 `expiring_tokens` 对短寿命凭证静音同口径。**真过期（剩余 ≤0）
+ * 仍标红**：那是刷新失败、需要人工介入的信号。`issuedAt` 缺省（0 / 未传）
+ * 时保持原语义（只看剩余时间），避免未知签发时间时误静音。
+ */
+export function tokenExpiryView(
+  expiresAt: number | null | undefined,
+  warningSeconds: number,
+  now = Date.now() / 1000,
+  issuedAt?: number | null,
+): TokenExpiryView {
+  if (!expiresAt || expiresAt <= 0) {
+    return { remaining: null, expiring: false, label: "—" };
+  }
+  const remaining = Math.max(0, Math.floor(expiresAt - now));
+  const lifetime = issuedAt && issuedAt > 0 ? expiresAt - issuedAt : 0;
+  // 预警窗口覆盖了整段寿命一半以上 → 命中窗口是常态，不标「即将到期」
+  const structurallyShortLived =
+    warningSeconds > 0 && lifetime > 0 && lifetime <= warningSeconds * 2;
+  const expiring =
+    warningSeconds > 0 &&
+    remaining <= warningSeconds &&
+    (!structurallyShortLived || remaining <= 0);
+  return { remaining, expiring, label: formatDuration(remaining) };
+}
+
+export type CredentialState =
+  | "ready"
+  | "cooling"
+  | "disabled"
+  | "off"
+  | "exhausted";
+
+export function credentialState(
+  credential: Credential,
+  now = Date.now() / 1000,
+): CredentialState {
+  if (credential.disabled) return "disabled";
+  if (!credential.enabled) return "off";
+  if (cooldownRemaining(credential.cooling_until, now) > 0) return "cooling";
+  if (credential.health !== null && credential.health < 0) return "exhausted";
+  return "ready";
+}
+
+export const STATE_LABEL: Record<CredentialState, string> = {
+  ready: "可用",
+  cooling: "冷却中",
+  disabled: "已禁用",
+  // 「已暂停」= enabled=0（管理员软开关）：只摘出对话流量，签到 / token
+  // 刷新 / 成长中心 / 额度探测照常跑（实测：tasks 只检查 disabled，不检查
+  // enabled）。用「暂停」而非「停用/关闭」，避免被读成整条凭证停摆。
+  off: "已暂停",
+  exhausted: "额度耗尽",
+};
+
+export const STATE_TONE: Record<CredentialState, HealthView["tone"]> = {
+  ready: "ok",
+  cooling: "warn",
+  disabled: "danger",
+  off: "muted",
+  exhausted: "danger",
+};
+
+/** 生效中的模型级冷却（过期条目不上屏）。按剩余时长升序，最紧要的排最前。 */
+export function activeModelCooldowns(
+  credential: Credential,
+  now = Date.now() / 1000,
+): ModelCooldown[] {
+  return [...(credential.model_cooldowns ?? [])]
+    .filter((item) => item.cooling_until > now)
+    .sort((left, right) => left.cooling_until - right.cooling_until);
+}
+
+/** 模型级冷却的说明：显式写出「其它模型不受影响」，否则用户会以为账号被限。 */
+export function modelCooldownLabel(item: ModelCooldown): string {
+  return item.reason === "blocked"
+    ? "该账号无此模型，已避让"
+    : "该模型限流（其它模型不受影响）";
+}
+
+export function formatDuration(seconds: number): string {
+  if (seconds <= 0) return "—";
+  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 3600) return `${Math.ceil(seconds / 60)} 分钟`;
+  if (seconds < 86400) return `${(seconds / 3600).toFixed(1)} 小时`;
+  return `${(seconds / 86400).toFixed(1)} 天`;
+}
+
+export function formatTime(epoch: number | null | undefined): string {
+  if (!epoch) return "—";
+  return new Date(epoch * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
+/**
+ * 时间拆成「日期 / 时刻」两段：明细表把两行摞起来显示，窄屏也不折行。
+ *
+ * 与 `formatTime` 同一时区口径（浏览器本地时间），只是不带上 `toLocaleString`
+ * 的逗号与斜杠，方便对齐等宽字体。
+ */
+export function formatTimeParts(epoch: number | null | undefined): [string, string] {
+  if (!epoch) return ["—", ""];
+  const at = new Date(epoch * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`,
+    `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`,
+  ];
+}
+
+/**
+ * 相对时间（「刚刚 / 12 分钟前 / 3 小时后」），后台任务运行态用。
+ *
+ * `now` 默认取浏览器时钟；调用方传服务端时钟可避免浏览器偏移把刚跑完的
+ * 任务显示成几小时前。未来时间给「后」，未知给破折号。
+ */
+export function formatAgo(epoch: number | null | undefined, now = Date.now() / 1000): string {
+  if (!epoch) return "—";
+  const seconds = Math.floor(epoch - now);
+  if (Math.abs(seconds) < 10) return "刚刚";
+  const label = formatDuration(Math.abs(seconds));
+  return seconds > 0 ? `${label}后` : `${label}前`;
+}
+
+/** 任务报告字段的展示名；未知字段回落到原始 key（后端加字段前端不炸）。 */
+export const TASK_REPORT_LABEL: Record<string, string> = {
+  attempted: "尝试",
+  succeeded: "成功",
+  failed: "失败",
+  skipped: "跳过",
+  rolled_up: "汇总小时",
+  purged: "清理明细",
+  expired_coolings: "回收冷却",
+  expired_account_coolings: "回收账号冷却",
+  purged_credit_events: "回收流水",
+  purged_alerts: "回收告警",
+  evaluated: "评估",
+  fired: "命中",
+  suppressed: "静默",
+  delivered: "已推送",
+  result: "返回",
+};
+
+/** 把 report 字典渲染成一行「成功 3 · 失败 1」；空/未知都不隐藏。 */
+export function taskReportLabel(report: Record<string, unknown> | null): string {
+  if (!report) return "—";
+  const parts = Object.entries(report).map(
+    ([key, value]) => `${TASK_REPORT_LABEL[key] ?? key} ${String(value)}`,
+  );
+  return parts.length ? parts.join(" · ") : "无明细";
+}
+
+/** 运维告警规则的展示名；未知规则回落到原始 key（后端加规则前端不炸）。 */
+export const ALERT_RULE_LABEL: Record<string, string> = {
+  pool_empty: "凭证池耗尽",
+  task_failed: "后台任务连续失败",
+  token_expiring: "token 临近到期",
+  error_rate: "上游错误率骤升",
+};
+
+export function formatNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toLocaleString("zh-CN");
+}
+
+/** 大数紧凑格式（万/亿），用于 token 量级；万以下保持原样。 */
+export function formatCompact(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return value.toLocaleString("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
+}
+
+/**
+ * 缓存命中率：命中 token ÷ 输入 token。
+ *
+ * 输入为 0 或缓存未上报时返回 `—`——不能算比率，也不该拿 0 冒充「0%」。
+ * 命中理论上不会超过输入，超出时按 100% 截断，避免出现 >100% 的怪值。
+ */
+export function formatCacheRate(
+  cached: number | null | undefined,
+  input: number | null | undefined,
+): string {
+  if (cached === null || cached === undefined) return "—";
+  if (input === null || input === undefined || input <= 0) return "—";
+  const percent = Math.min(100, Math.max(0, (cached / input) * 100));
+  return `${percent.toFixed(1)}%`;
+}
+
+/**
+ * Credit 展示：null 显示 —；推算值（TRAE 按官方单价折算）前置
+ * ≈ 表示约等于，提醒是估算而非上游回传的真实扣费。
+ */
+export function formatCredit(
+  value: number | null | undefined,
+  estimated?: boolean | number | null,
+): string {
+  if (value === null || value === undefined) return "—";
+  const text = formatNumber(Number(value.toFixed(2)));
+  return estimated ? `≈${text}` : text;
+}
+
+/**
+ * 成本金额格式化：null/undefined 显示 —，否则加币种符号（¥ / $）。
+ *
+ * 成本是估算值且量级很小（单请求常是几厘钱），按绝对值自适应小数位：
+ * ≥1 元两位、≥0.01 元四位、更小六位——否则 `toFixed(2)` 会把所有小额抹成 0。
+ * `estimated` 为真时前置 ≈，提醒这是刊例价折算而非上游真实扣费。
+ */
+export function formatMoney(
+  value: number | null | undefined,
+  currency: "CNY" | "USD" = "CNY",
+  estimated = true,
+): string {
+  if (value === null || value === undefined) return "—";
+  const symbol = currency === "CNY" ? "¥" : "$";
+  const magnitude = Math.abs(value);
+  const digits = magnitude >= 1 ? 2 : magnitude >= 0.01 ? 4 : 6;
+  const text = `${symbol}${Number(value.toFixed(digits))}`;
+  return estimated ? `≈${text}` : text;
+}
+
+/** 积分变动流水的说明列：只表达归因已知度，不谎称来源。 */
+export const CREDIT_SOURCE_LABEL: Record<string, string> = {
+  observed: "两次探测间净变化",
+  sync: "首次建立基线",
+};
+
+/**
+ * 一条积分流水的摘要文案。
+ *
+ * 为什么不说「签到 +5」：上游签到/成长接口不打日志，探测 diff 只能看到区间
+ * 净变化，这段区间里可能同时发生签到、成长领取与对话消耗。把净变化写成
+ * 某个动作的成果就是拿猜测当事实，所以这里只说「净变化」多少。
+ */
+export function creditEventLabel(event: {
+  delta: number | null;
+  before: number | null;
+  after: number | null;
+  source: string;
+}): string {
+  if (event.source === "sync") return `基线 ${formatNumber(event.after)}`;
+  if (event.delta === null) {
+    // 任一端未知：变化无法量化。绝不当成 0，否则「余额变未知」会被读成「没变」
+    return `由 ${formatNumber(event.before)} 变为未知`;
+  }
+  const sign = event.delta > 0 ? "+" : "";
+  return `${sign}${formatNumber(event.delta)}（${formatNumber(event.before)} → ${formatNumber(event.after)}）`;
+}
+
+/** 时长展示（耗时 / 首字延迟共用）：≥1s 以 s 计（保留 1 位小数、去尾零），否则 ms。 */
+export function formatLatency(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "—";
+  if (ms >= 1000) return `${Number((ms / 1000).toFixed(1))} s`;
+  return `${formatNumber(ms)} ms`;
+}
+
+/**
+ * 输出速度：`94.1 tok/s`；无样本（null）显示 —。
+ *
+ * `estimated` 为真时前置 ≈：该值不是按生成时间（扣掉首字等待）算的，而是
+ * 在没有首字数据时拿端到端耗时估算的，提醒读者别把它当同一口径比较。
+ */
+export function formatSpeed(tps: number | null | undefined, estimated = false): string {
+  if (tps === null || tps === undefined) return "—";
+  const text = `${tps.toFixed(1)} tok/s`;
+  return estimated ? `≈${text}` : text;
+}
+
+/**
+ * 速度合并列（分组表与请求明细表共用）：`正文 / 总产出`，单位只在末尾出现一次。
+ *
+ * 两个分子同分母（生成时间），正文贴合屏幕刷新速度、总产出含思考 token，故
+ * 并成一列展示（列头下拉仍可分别排序）；悬停详情里写全各自的口径。任一侧
+ * 无样本时该侧显示 —（正文侧还可能是「整段输出都是思考」），两侧都没有时整格
+ * 就是一个 —，不渲染 `— / —`。
+ */
+export function formatSpeedPair(
+  visible: number | null | undefined,
+  total: number | null | undefined,
+  estimated = false,
+  withUnit = true,
+): string {
+  if (visible == null && total == null) return "—";
+  const one = (value: number | null | undefined) =>
+    value == null ? "—" : value.toFixed(1);
+  const body = `${estimated ? "≈" : ""}${one(visible)} / ${one(total)}`;
+  // withUnit=false：列头已经写了 tok/s，每行重复一遍要多占约 45px
+  return withUnit ? `${body} tok/s` : body;
+}
+
+/** 图表 hover 数值：按指标格式化，单位用 () 包裹（耗时/首字数已含 ms/s）。 */
+export function formatChartValue(value: number, metric: string): string {
+  switch (metric) {
+    case "tokens":
+      return `${formatCompact(value)} (tokens)`;
+    case "cost":
+      return `${formatMoney(value, "CNY", false)} (元)`;
+    case "ttfb":
+    case "latency":
+      return formatLatency(value);
+    case "success_rate":
+    case "cache_rate":
+      return formatRate(value);
+    case "cost_per_request":
+      return `${formatMoney(value, "CNY", false)} / 次`;
+    default:
+      return `${formatCompact(value)} (次)`;
+  }
+}
+
+/**
+ * 比率指标的展示：入参是 0..1 的小数，输出百分比。
+ *
+ * 与 `formatCacheRate` 的区别：那个收「命中 / 输入」两个原始计数并自己相除，
+ * 用于表格；这里收**后端已算好的比率**（图表值），两者不能混用——把 0.4 再
+ * 除一次输入会得到 0.4%。空值（无样本）给 —，不渲染 0%。
+ */
+export function formatRate(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "—";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+/**
+ * Y 轴刻度文案。
+ *
+ * 为什么不复用 `formatChartValue`：轴宽有限，hover 才需要带单位
+ * （`1500万 (tokens)`）。轴刻度直接渲染原始数字时会渲染 `15000000`
+ * （8 个字符 ≈ 55px），超出轴宽后被裁掉左侧，看起来像缺了一位。
+ *
+ * - 计数 / token：紧凑格式（`1500万`），单位交给轴顶的 `METRIC_AXIS_UNIT` 写一次
+ * - 成本：保留两位小数（单请求常是零点几元，`formatCompact` 的「万/亿」不适用）
+ * - 耗时 / 首字：复用 `formatLatency`，与 hover 完全同口径（`850 ms` / `8.2 s`），
+ *   刻度自带单位所以不再另标
+ * - 比率：整百分比（轴刻度不需要小数，`40%` 比 `40.0%` 更省宽度）
+ * - 单请求成本：四位有效小数的金额（量级常在 0.01–0.3 元，两位会全变成 0.00）
+ */
+export function formatAxisValue(value: number, metric: string): string {
+  if (metric === "ttfb" || metric === "latency") {
+    return formatLatency(value);
+  }
+  if (metric === "cost_per_request") {
+    // 单请求成本量级常在 0.01–0.3 元：两位小数会让 0.028 与 0.031 都显示
+    // 「0.03」，刻度看起来重复且无法分辨。按量级给 3–4 位小数。
+    const digits = Math.abs(value) >= 0.1 ? 3 : 4;
+    return value.toLocaleString("zh-CN", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: digits,
+    });
+  }
+  if (metric === "cost") {
+    return value.toLocaleString("zh-CN", { maximumFractionDigits: 2 });
+  }
+  if (metric === "success_rate" || metric === "cache_rate") {
+    return `${Math.round(value * 100)}%`;
+  }
+  return formatCompact(value);
+}
+
+/**
+ * 图表 Y 轴单位文案，写在轴顶（刻度本身不带单位，避免每格重复）。
+ *
+ * 耗时 / 首字不出现在这里：它们的刻度自带 `ms` / `s`，再标一次是啰嗦。
+ * 比率同理（刻度自带 `%`）。
+ */
+export const METRIC_AXIS_UNIT: Record<string, string> = {
+  requests: "次",
+  tokens: "tokens",
+  cost: "元",
+  cost_per_request: "元/次",
+};
+
+/** 比率类指标（0..1）：Y 轴与 hover 都要乘 100，且空值要断线而非归零。 */
+export const RATE_METRICS = new Set(["success_rate", "cache_rate"]);
+
+/** 均值 / 比率类指标：空档（null）代表「无样本」，不是 0，图线必须断开。 */
+export const SPARSE_METRICS = new Set([
+  "latency",
+  "ttfb",
+  "success_rate",
+  "cache_rate",
+  "cost_per_request",
+  "cost",
+]);
+
+/** 统计明细的失败类型（线值，来自后端 CONTROLLED_ERROR_TYPES）。
+ *  注意与 ProbeFailureReason 不是同一套：那是探测失败，这是请求失败。 */
+export type UsageErrorType =
+  | "account_restricted"
+  | "client_disconnect"
+  | "context_overflow"
+  | "credential_unavailable"
+  | "invalid_request"
+  | "model_capability"
+  | "model_not_found"
+  | "model_unavailable"
+  | "network_error"
+  | "no_healthy_credential"
+  | "rate_limit"
+  | "truncated_stream"
+  | "upstream_error"
+  | "upstream_protocol"
+  | "upstream_timeout"
+  | "upstream_first_event_timeout"
+  | "upstream_idle_timeout";
+
+/** 明细失败类型的中文说明（TECHNICAL §11.2：界面只展示稳定枚举的翻译）。 */
+export const USAGE_ERROR_LABEL: Record<UsageErrorType, string> = {
+  account_restricted: "账号被上游限制",
+  client_disconnect: "客户端中断",
+  context_overflow: "上下文超限",
+  credential_unavailable: "凭证失效",
+  invalid_request: "请求无效",
+  model_capability: "模型不支持该形态",
+  model_not_found: "上游无此模型",
+  model_unavailable: "该模型暂时不可用",
+  network_error: "本机网络故障",
+  no_healthy_credential: "无可用凭证",
+  rate_limit: "额度耗尽",
+  truncated_stream: "上游截断",
+  upstream_error: "渠道错误",
+  upstream_protocol: "渠道响应异常",
+  upstream_timeout: "上游超时",
+  upstream_first_event_timeout: "上游首字超时",
+  upstream_idle_timeout: "上游流中断",
+};
+
+/** 未知取值不得原样透传（TECHNICAL §11.2），兜底为「失败」。 */
+export function usageErrorLabel(errorType: string | null | undefined): string {
+  if (!errorType) return "失败";
+  return USAGE_ERROR_LABEL[errorType as UsageErrorType] ?? `失败（${errorType}）`;
+}
+
+
+export const PROBE_FAILURE_LABEL: Record<ProbeFailureReason, string> = {
+  credential_rejected: "凭证被渠道拒绝，需重新登录",
+  rate_limited: "渠道限流，稍后重试",
+  upstream_unavailable: "渠道服务异常，与凭证无关",
+  upstream_rejected: "渠道拒绝了这次请求",
+  upstream_response_invalid: "渠道响应格式与预期不符（疑似接口变更）",
+  upstream_timeout: "渠道响应超时",
+  network_unreachable: "连不上渠道服务器，检查网络或代理",
+  unknown_error: "未知错误",
+};
+
+export function probeFailureLabel(reason: ProbeFailureReason | undefined): string {
+  return reason ? (PROBE_FAILURE_LABEL[reason] ?? "未知错误") : "未知错误";
+}
+
+// ---------------------------------------------------------- 上游状态页
+
+/**
+ * 上游档位的中文名（与后端六档一一对应）。
+ *
+ * 措辞区分「故障」与「维护」：维护是计划内、不一定是问题，但也不能显示成
+ * 一切正常——用户看到 429 时最需要知道的是「现在到底是不是上游在动」。
+ */
+export const UPSTREAM_LEVEL_LABEL: Record<UpstreamLevel, string> = {
+  operational: "正常",
+  degraded: "性能下降",
+  partial: "部分中断",
+  major: "重大故障",
+  maintenance: "维护中",
+  unknown: "未知",
+};
+
+/**
+ * 上游档位 → 徽标色调。
+ *
+ * `partial` 与 `major` 都归 danger：两者都意味着「有模型用不了」，只是范围不同，
+ * 分两种红只会让配色更碎；范围差异由文字承担。`unknown` 用 muted——抓取失败
+ * 不是「上游挂了」，不该和真实故障抢同一个红色。
+ */
+export function upstreamLevelTone(level: UpstreamLevel): "ok" | "warn" | "danger" | "muted" {
+  switch (level) {
+    case "operational":
+      return "ok";
+    case "degraded":
+      return "warn";
+    case "partial":
+    case "major":
+      return "danger";
+    case "maintenance":
+      return "warn";
+    default:
+      return "muted";
+  }
+}
+
+/** 上游档位展示名；未知取值不原样透传（与 usageErrorLabel 同一口径）。 */
+export function upstreamLevelLabel(level: string): string {
+  return UPSTREAM_LEVEL_LABEL[level as UpstreamLevel] ?? "未知";
+}

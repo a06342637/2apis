@@ -1,0 +1,553 @@
+import type {
+  ApiKey,
+  ApiKeyCreated,
+  ActivationDescribe,
+  ActivationIssued,
+  AlertsResponse,
+  AuditResponse,
+  BackupEntry,
+  BackupListResponse,
+  PendingRestore,
+  BatchAction,
+  BatchImportEntry,
+  BatchImportResult,
+  BatchResult,
+  CheckinEvent,
+  CheckinResult,
+  CheckinStatus,
+  CredentialLimits,
+  CredentialLimitsInput,
+  CredentialsResponse,
+  CreditEvent,
+  GrowthEvent,
+  GrowthRunResult,
+  ActivityReportResult,
+  ModelInfo,
+  ModelStats,
+  CredentialStats,
+  ProbeResult,
+  ProviderStats,
+  Role,
+  SessionInfo,
+  StatsMetric,
+  StatsOverview,
+  TimelinePoint,
+  TosRisk,
+  BillingReport,
+  ModelTimelineResponse,
+  PercentileTimelineResponse,
+  NavBadges,
+  StatsEventsResponse,
+  StatsEventFilters,
+  CsvExport,
+  SettingsResponse,
+  TasksResponse,
+  TaskRunResult,
+  UpstreamAuthPoll,
+  UpstreamAuthStart,
+  UpstreamStatusResponse,
+  UserStats,
+  UserRow,
+} from "./types";
+import { isSessionExpiry, notifyUnauthorized } from "./unauthorized";
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/**
+ * 管理台请求超时：后端挂死（连接池耗尽、上游不返回）时不能让页面永久 loading。
+ *
+ * 只作用于 `request()` 走的一般端点；SSE（`/api/stats/events/stream`）与 CSV
+ * 导出各有独立实现，不受此值影响（长流不能被 30s 砍断）。
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * 批量运维超时：后端按并发 4 逐条出网探测/签到，200 条的上限远超 30s；
+ * 用默认超时会让前端先报超时而后端继续跑，用户重试即重复消耗上游额度。
+ */
+export const BATCH_TIMEOUT_MS = 10 * 60_000;
+
+/** 把「调用方 signal（react-query 取消）」与「超时」合成一个 signal，并可清理定时器。 */
+function timeoutGuard(init: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): {
+  signal: AbortSignal;
+  dispose: () => void;
+  timedOut: () => boolean;
+} {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const external = init.signal;
+  const forward = () => controller.abort();
+  if (external) {
+    if (external.aborted) controller.abort();
+    else external.addEventListener("abort", forward, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", forward);
+    },
+    timedOut: () => timedOut,
+  };
+}
+
+/**
+ * 读响应体：非 JSON（反向代理 HTML 错误页、网关截断）时不抛 `SyntaxError`，
+ * 否则真实的 HTTP 状态会被解析异常掩盖成「未知错误」。
+ *
+ * 返回 `undefined` 表示「响应体不是合法 JSON」——与 `null`（合法的 `null`
+ * 字面量）区分开，调用方据此在 2xx 上抛错而不是把故障当成功数据返回。
+ */
+const NOT_JSON = Symbol("not-json");
+
+async function readBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return NOT_JSON;
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {},
+                          timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const guard = timeoutGuard(init, timeoutMs);
+  let response: Response;
+  let body: unknown;
+  try {
+    response = await fetch(path, {
+      ...init,
+      signal: guard.signal,
+      headers: {
+        // CSRF 纵深（服务端要求写请求带自定义头，PROPOSAL §6）：
+        // 浏览器跨站表单/简单请求无法携带自定义头
+        "X-Requested-With": "XMLHttpRequest",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
+      },
+      credentials: "same-origin",
+    });
+    // 读体也在超时窗口内：反代「头秒回、体挂住」时，只给 fetch 加超时
+    // 等于没加——定时器在响应头到达时就被 dispose 了，页面照样永久 loading。
+    body = await readBody(response);
+  } catch (error) {
+    // 超时归一为可展示的 ApiError；调用方主动取消（切页/翻页）原样上抛，
+    // react-query 依赖它是 AbortError 来判定「取消」而非「失败」。
+    if (guard.timedOut()) {
+      throw new ApiError(0, "timeout", `请求超时（${timeoutMs / 1000} 秒）`);
+    }
+    throw error;
+  } finally {
+    guard.dispose();
+  }
+
+  if (!response.ok) {
+    if (isSessionExpiry(path, response.status)) notifyUnauthorized();
+    const error = (body as { error?: { code?: string; message?: string } } | null)?.error;
+    throw new ApiError(
+      response.status,
+      error?.code ?? "unknown",
+      error?.message || response.statusText || `HTTP ${response.status}`,
+    );
+  }
+  // 2xx 但不是 JSON：反代/网关的 HTML 错误页、被截断的响应。必须抛错，
+  // 不能把 `null` 当成功数据返回——那会让「请求挂了」重新伪装成「没有数据」
+  // （凭证页显示「还没有凭证」、session 判未登录），正是本次要消灭的故障形态。
+  if (body === NOT_JSON) {
+    throw new ApiError(
+      response.status,
+      "invalid_response",
+      "服务端返回了非 JSON 响应（可能是反向代理错误页），请检查服务是否正常。",
+    );
+  }
+  return body as T;
+}
+
+const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body) });
+
+export const api = {
+  // ---------------------------------------------------------------- 会话
+  login: (username: string, password: string) =>
+    request<SessionInfo>("/api/auth/login", { method: "POST", ...json({ username, password }) }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  session: () => request<SessionInfo>("/api/auth/session"),
+  /** 自助改密：成功后后端换发 Cookie（epoch 已变），无需再登录。 */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/password", {
+      method: "POST",
+      ...json({ current_password: currentPassword, new_password: newPassword }),
+    }),
+
+  // ------------------------------------------------------------ 账号激活
+  /** 校验一次性令牌，返回待激活用户名（无需登录）。 */
+  activation: (token: string) =>
+    request<ActivationDescribe>(`/api/auth/activate${query({ token })}`),
+  /** 用令牌自设密码完成激活。 */
+  activate: (token: string, password: string) =>
+    request<{ ok: boolean; username: string }>("/api/auth/activate", {
+      method: "POST",
+      ...json({ token, password }),
+    }),
+
+  // ------------------------------------------------------------ 用户管理
+  users: (sort?: string, order?: string, limit?: number, offset?: number) =>
+    request<{ users: UserRow[]; total: number }>(
+      `/api/users${query({ sort, order, limit, offset })}`),
+  createUser: (username: string, role: Role) =>
+    request<ActivationIssued>("/api/users", { method: "POST", ...json({ username, role }) }),
+  updateUserRole: (username: string, role: Role) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}`, {
+      method: "PATCH",
+      ...json({ role }),
+    }),
+  disableUser: (username: string) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}/disable`, {
+      method: "POST",
+    }),
+  enableUser: (username: string) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}/enable`, {
+      method: "POST",
+    }),
+  resetUserPassword: (username: string) =>
+    request<ActivationIssued>(
+      `/api/users/${encodeURIComponent(username)}/reset-password`,
+      { method: "POST" },
+    ),
+  /** 用户级策略（Playground）：模型白名单 + 配额。传空串 = 不限制。 */
+  setUserPolicy: (username: string, allowedModels: string, quota: string) =>
+    request<{ ok: boolean }>(`/api/users/${encodeURIComponent(username)}/policy`, {
+      method: "PUT",
+      ...json({ allowed_models: allowedModels, quota }),
+    }),
+
+  // ---------------------------------------------------------------- 审计
+  audit: (filters: { actor?: string; action?: string; limit?: number; offset?: number;
+                     sort?: string; order?: string } = {}) =>
+    request<AuditResponse>(`/api/audit${query(filters)}`),
+  // ---------------------------------------------------------------- 凭证
+  credentials: (sort?: string, order?: string) =>
+    request<CredentialsResponse>(`/api/credentials${query({ sort, order })}`),
+  billing: (month?: string) =>
+    request<BillingReport>(`/api/billing${query({ month })}`),
+  /** 账单导出：返回原始响应，页面自己落盘（CSV 有 BOM，JSONL 逐行）。 */
+  billingExport: async (month: string, format: "csv" | "jsonl") => {
+    const response = await fetch(
+      `/api/billing${query({ month, format })}`, { credentials: "same-origin" });
+    if (!response.ok) {
+      let message = `导出失败（HTTP ${response.status}）`;
+      try {
+        const body = await response.json();
+        if (body?.error?.message) message = body.error.message;
+      } catch {
+        // 非 JSON 错误体：保留 HTTP 状态提示
+      }
+      throw new ApiError(response.status, "export_failed", message);
+    }
+    return { blob: await response.blob(), rowCount: response.headers.get("X-Export-Row-Count") };
+  },
+  importCredential: (provider: string, credential: unknown, nickname = "") =>
+    request<{ id: string; tos: TosRisk; merged?: boolean }>("/api/credentials", {
+      method: "POST",
+      ...json({ provider, credential, nickname }),
+    }),
+  /** 单条凭证导出：返回 JSON 文件内容，页面触发下载（含明文令牌）。 */
+  exportCredential: async (id: string) => {
+    const response = await fetch(
+      `/api/credentials/${encodeURIComponent(id)}/export`,
+      { credentials: "same-origin" });
+    if (!response.ok) {
+      let message = `导出失败（HTTP ${response.status}）`;
+      try {
+        const body = await response.json();
+        if (body?.error?.message) message = body.error.message;
+      } catch {
+        // 非 JSON 错误体：保留 HTTP 状态提示
+      }
+      throw new ApiError(response.status, "export_failed", message);
+    }
+    return { blob: await response.blob() };
+  },
+  // ---------------------------------------------------------------- 备份
+  backups: () => request<BackupListResponse>("/api/backups"),
+  createBackup: () =>
+    request<{ backup: BackupEntry }>("/api/backups", { method: "POST", ...json({}) }),
+  deleteBackup: (name: string) =>
+    request<{ ok: boolean }>(`/api/backups/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  /** 上传备份文件：原始字节 + 自定义头（CSRF 纵深），重启后生效。 */
+  restoreBackup: async (file: Blob, filename: string) => {
+    const response = await fetch(
+      `/api/backups/restore?filename=${encodeURIComponent(filename)}`,
+      {
+        method: "POST",
+        body: file,
+        credentials: "same-origin",
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "Content-Type": "application/octet-stream",
+        },
+      },
+    );
+    if (!response.ok) {
+      let message = `恢复失败（HTTP ${response.status}）`;
+      try {
+        const body = await response.json();
+        if (body?.error?.message) message = body.error.message;
+      } catch {
+        // 非 JSON 错误体：保留 HTTP 状态提示
+      }
+      throw new ApiError(response.status, "restore_failed", message);
+    }
+    return (await response.json()) as { staged: boolean; restart_required: boolean }
+      & PendingRestore;
+  },
+  /** 下载已有备份的字节（「一键恢复」先取回再上传）。 */
+  downloadBackup: async (name: string) => {
+    const response = await fetch(`/api/backups/${encodeURIComponent(name)}`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) throw new ApiError(response.status, "download_failed", "下载备份失败");
+    return response.blob();
+  },
+  /** 批量导入：逐条校验，坏条目只进 failed、不连累其他条目。 */
+  batchImportCredentials: (items: BatchImportEntry[]) =>
+    request<BatchImportResult>("/api/credentials/batch-import", {
+      method: "POST",
+      ...json({ items }),
+    }),
+  reviveCredential: (id: string, force = false) =>
+    request<{ ok: boolean }>(`/api/credentials/${id}/revive`, {
+      method: "POST",
+      ...json({ force }),
+    }),
+  toggleCredential: (id: string, enabled: boolean) =>
+    request<{ ok: boolean }>(`/api/credentials/${id}/toggle`, { method: "POST", ...json({ enabled }) }),
+  pinCredential: (id: string | null) =>
+    request<{ ok: boolean }>("/api/credentials/pin", { method: "POST", ...json({ credential_id: id }) }),
+  deleteCredential: (id: string) =>
+    request<{ ok: boolean }>(`/api/credentials/${id}`, { method: "DELETE" }),
+  probeCredential: (id: string) =>
+    request<ProbeResult>(`/api/credentials/${id}/probe`, { method: "POST" }),
+  /** 设置 / 清除凭证限额护栏（整体替换；全关时后端删行）。 */
+  setCredentialLimits: (id: string, limits: CredentialLimitsInput) =>
+    request<{ limits: CredentialLimits | null }>(`/api/credentials/${id}/limits`, {
+      method: "PUT",
+      ...json(limits),
+    }),
+  /** 整体替换一条凭证的标签（空数组 = 清空）。 */
+  setCredentialTags: (id: string, tags: string[]) =>
+    request<{ tags: string[] }>(`/api/credentials/${id}/tags`, {
+      method: "PUT",
+      ...json({ tags }),
+    }),
+  /** 写入 / 清除 Qoder 网页 Cookie（空串 = 清除）；Cookie 不回显，只提交。 */
+  setCredentialWebCookie: (id: string, cookie: string) =>
+    request<{ ok: boolean }>(`/api/credentials/${id}/web-cookie`, {
+      method: "PUT",
+      ...json({ cookie }),
+    }),
+  /**
+   * 写入 / 清除小浣熊「按需登录」用的账号密码（两个都空 = 清除）。
+   * 密码不回显，列表里只有 `login_secret` 标记。
+   */
+  setCredentialLoginSecret: (id: string, phone: string, password: string) =>
+    request<{ ok: boolean; login_secret: 0 | 1 }>(
+      `/api/credentials/${id}/login-secret`, {
+        method: "PUT",
+        ...json({ phone, password }),
+      }),
+  /** 调度权重（null = 恢复默认）；只改同健康档内的选号次序。 */
+  setCredentialWeight: (id: string, weight: number | null) =>
+    request<{ routing_weight: number | null }>(`/api/credentials/${id}/weight`, {
+      method: "PUT",
+      ...json({ weight }),
+    }),
+  /** 批量运维：一次对多条凭证执行同一动作，后端逐条隔离返回结果。 */
+  batchCredentials: (action: BatchAction, ids: string[], enabled?: boolean) =>
+    request<BatchResult>("/api/credentials/batch", {
+      method: "POST",
+      ...json(enabled === undefined ? { action, ids } : { action, ids, enabled }),
+    }, BATCH_TIMEOUT_MS),
+  checkinCredential: (id: string) =>
+    request<CheckinResult>(`/api/credentials/${id}/checkin`, { method: "POST" }),
+  checkinStatus: (id: string) =>
+    request<{ status: CheckinStatus }>(`/api/credentials/${id}/checkin`),
+  checkinEvents: (id: string, limit?: number) =>
+    request<{ events: CheckinEvent[] }>(
+      `/api/credentials/${id}/checkin-events${query({ limit })}`),
+  runGrowth: (id: string) =>
+    request<GrowthRunResult>(`/api/credentials/${id}/growth`, { method: "POST" }),
+  growthHistory: (id: string) =>
+    request<{ events: GrowthEvent[] }>(`/api/credentials/${id}/growth`),
+  creditEvents: (id: string, ledger?: string, sort?: string, order?: string) =>
+    request<{ events: CreditEvent[] }>(
+      `/api/credentials/${id}/credit-events${query({ ledger, sort, order })}`),
+  reportActivity: (id: string) =>
+    request<ActivityReportResult>(`/api/credentials/${id}/activity`, { method: "POST" }),
+
+  // ------------------------------------------------------------ 渠道登录
+  /** 发起渠道登录。`forceLogin`：先登出上游，用于新增另一个账号（避免云端
+   *  直接复用浏览器里现有的会话，把「新增」变成「同一个账号再登一遍」）。 */
+  upstreamStart: (provider: string, forceLogin = false) =>
+    request<UpstreamAuthStart>("/api/auth/upstream/start", {
+      method: "POST",
+      ...json({ provider, force_login: forceLogin }),
+    }),
+  upstreamPoll: (provider: string, state: string) =>
+    request<UpstreamAuthPoll>("/api/auth/upstream/poll", {
+      method: "POST",
+      ...json({ provider, state }),
+    }),
+  upstreamCancel: (provider: string, state: string) =>
+    request<{ cancelled: boolean }>("/api/auth/upstream/cancel", {
+      method: "POST",
+      ...json({ provider, state }),
+    }),
+  upstreamComplete: (provider: string, state: string, url: string) =>
+    request<{ status: "success"; credential_id: string; merged?: boolean }>("/api/auth/upstream/complete", {
+      method: "POST",
+      ...json({ provider, state, url }),
+    }),
+
+  // ------------------------------------------------------------- API Key
+  apiKeys: (sort?: string, order?: string, limit?: number, offset?: number) =>
+    request<{ api_keys: ApiKey[]; total: number }>(
+      `/api/api-keys${query({ sort, order, limit, offset })}`),
+  createApiKey: (payload: {
+    name: string;
+    provider_binding?: string;
+    allowed_ips?: string;
+    allowed_models?: string;
+    expires_at?: number | null;
+  }) =>
+    request<ApiKeyCreated>("/api/api-keys", { method: "POST", ...json(payload) }),
+  deleteApiKey: (id: string) => request<{ ok: boolean }>(`/api/api-keys/${id}`, { method: "DELETE" }),
+  /**
+   * 会话鉴权的模型列表（与 Playground 同源 `/api/playground/models`）：
+   * 供「API Key 管理」页的 CC Switch 默认模型下拉使用，无需用户自己造 Key。
+   */
+  playgroundModels: (signal?: AbortSignal) =>
+    request<{ data: ModelInfo[] }>("/api/playground/models", { signal }),
+
+  // ------------------------------------------------------------ 运行时配置
+  settings: () => request<SettingsResponse>("/api/settings"),
+  updateSettings: (values: Record<string, unknown>) =>
+    request<SettingsResponse>("/api/settings", { method: "PUT", ...json({ values }) }),
+  /** 后台任务运行态（进程内）：与 /api/settings 同页展示。 */
+  tasks: () => request<TasksResponse>("/api/tasks"),
+  /** 手动运行一个后台任务一轮（管理台「立即运行」）；同步等结果返回。 */
+  runTask: (key: string) =>
+    request<TaskRunResult>(`/api/tasks/${encodeURIComponent(key)}/run`, { method: "POST" }),
+  /** 运维告警记录：后台评估命中后落库，倒序回看（分页）。 */
+  alerts: (sort?: string, order?: string, limit?: number, offset?: number) =>
+    request<AlertsResponse>(`/api/alerts${query({ sort, order, limit, offset })}`),
+  /** 人工标记一条告警已恢复（规则已下线 / 误报时的显式出口；admin + CSRF + 审计）。 */
+  resolveAlert: (id: string) =>
+    request<{ ok: boolean }>(`/api/alerts/${encodeURIComponent(id)}/resolve`,
+                             { method: "POST" }),
+  /** 上游官方状态页聚合快照（进程内、重启归零）：只读展示，不参与选号 / 熔断。 */
+  upstreamStatus: () => request<UpstreamStatusResponse>("/api/upstream-status"),
+  /**
+   * 侧栏「数据提醒」角标：一个聚合端点覆盖整个侧栏，避免 Layout 挂 7 个页面级
+   * hook。**按角色裁剪**——缺失的键 = 无权看（见 `NavBadges`）。
+   */
+  navBadges: () => request<NavBadges>("/api/nav-badges"),
+  // 模型目录（刊例价 + 明细元数据）不走这里：模型列表页需要额外的
+  // `only_suspected` / `availability_days` 两个筛选，统一由
+  // `api/modelExtras.ts` 的 `fetchModelCatalog` 承担（同一端点）。
+
+  // ---------------------------------------------------------------- 统计
+  // `since` / `until`：自定义时间窗两端（半开 `[since, until)`，epoch 秒）。
+  // 两者都省 = 全部；只给一端 = 单边不限。`until` 紧跟 `since`，避免调用点
+  // 在长参数列表里错位。
+  statsOverview: (username?: string, since?: number, until?: number) =>
+    request<StatsOverview>(`/api/stats/overview${query({ username, since, until })}`),
+  statsByProvider: (username?: string, since?: number, until?: number,
+                    sort?: string, order?: string) =>
+    request<{ providers: ProviderStats[] }>(
+      `/api/stats/by-provider${query({ username, since, until, sort, order })}`),
+  statsByModel: (username?: string, since?: number, until?: number,
+                 sort?: string, order?: string) =>
+    request<{ models: ModelStats[] }>(
+      `/api/stats/by-model${query({ username, since, until, sort, order })}`),
+  statsByUser: (username?: string, since?: number, until?: number,
+                sort?: string, order?: string) =>
+    request<{ users: UserStats[] }>(
+      `/api/stats/by-user${query({ username, since, until, sort, order })}`),
+  statsByCredential: (username?: string, since?: number, until?: number,
+                      sort?: string, order?: string) =>
+    request<{ credentials: CredentialStats[] }>(
+      `/api/stats/by-credential${query({ username, since, until, sort, order })}`),
+  statsTimeline: (username?: string, since?: number, until?: number, metric?: StatsMetric) =>
+    request<{ points: TimelinePoint[] }>(
+      `/api/stats/timeline${query({ username, since, until, metric })}`),
+  statsModelTimeline: (username?: string, since?: number, until?: number,
+                       metric?: StatsMetric) =>
+    request<ModelTimelineResponse>(
+      `/api/stats/model-timeline${query({ username, since, until, metric })}`),
+  /** 延迟分位时序（P50 中位数 + P95 上界）：读明细表，仅覆盖 90 天。 */
+  statsPercentileTimeline: (username?: string, since?: number, until?: number,
+                            metric?: "latency" | "ttfb") =>
+    request<PercentileTimelineResponse>(
+      `/api/stats/percentile-timeline${query({ username, since, until, metric })}`),
+  statsEvents: (username?: string, since?: number, until?: number, before?: number,
+                limit?: number, sort?: string, order?: string, offset?: number,
+                filters?: StatsEventFilters) =>
+    request<StatsEventsResponse>(
+      `/api/stats/events${query({ username, since, until, before, limit, sort, order,
+                                  offset, ...filters })}`),
+  /** 明细实时流（SSE）地址：交给 `EventSource` 订阅，页面不自己拼查询串。
+   *
+   * `EventSource` 自动带同源 Cookie、断线重连，但不支持自定义头（CSRF 只对
+   * 写请求要求，GET 不受影响）。`username` 是作用域收窄，其余是明细过滤。 */
+  statsEventsStreamUrl: (username?: string, filters?: StatsEventFilters) =>
+    `/api/stats/events/stream${query({ username, ...filters })}`,
+  /** 明细 CSV 导出：返回文件内容与截断标记（响应头），由页面触发下载。 */
+  statsEventsCsv: async (username?: string, since?: number, until?: number,
+                         filters?: StatsEventFilters): Promise<CsvExport> => {
+    const path = `/api/stats/events${query({ username, since, until, ...filters, format: "csv" })}`;
+    const response = await fetch(path, { credentials: "same-origin" });
+    if (!response.ok) {
+      // 与 request() 同口径地还原错误体，页面才能弹一致的中文提示
+      let code = "error";
+      let message = `导出失败（HTTP ${response.status}）`;
+      try {
+        const body = await response.json();
+        if (body?.error) {
+          code = body.error.code ?? code;
+          message = body.error.message ?? message;
+        }
+      } catch {
+        // 非 JSON 错误体（如反向代理的 HTML）：保留兜底文案
+      }
+      throw new ApiError(response.status, code, message);
+    }
+    return {
+      blob: await response.blob(),
+      rowCount: Number(response.headers.get("X-Export-Row-Count") ?? 0),
+      truncated: response.headers.get("X-Export-Truncated") === "1",
+    };
+  },
+};
+
+function query(params: Record<string, string | number | boolean | undefined>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : "";
+}

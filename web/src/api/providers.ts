@@ -1,0 +1,119 @@
+import type { Provider } from "./types";
+
+/**
+ * 渠道展示元数据的唯一来源。
+ *
+ * 新增渠道时只改这里：各页面曾经各存一份 `PROVIDER_LABEL`，加第三个渠道
+ * 时要改五六处、漏一处就是「某个页面显示原始 id」。缩写用于模型列表的
+ * 倍率标记（`通道缩写 x倍率`），必须短到不挤爆下拉宽度。
+ */
+export const PROVIDER_LABEL: Record<Provider, string> = {
+  codebuddy: "CodeBuddy",
+  codebuddy_intl: "CodeBuddy 国际",
+  trae: "TRAE",
+  zen: "OpenCode Zen",
+  kilo: "Kilo",
+  qoder: "Qoder",
+  codearts: "CodeArts",
+  officeace: "OfficeAce",
+  raccoon: "小浣熊",
+  lingxi: "灵犀",
+  miora: "Miora",
+};
+
+/** 模型下拉里的渠道缩写（如 `CB x0.29`）。 */
+export const PROVIDER_ABBR: Record<Provider, string> = {
+  codebuddy: "CB",
+  codebuddy_intl: "CBi",
+  trae: "TR",
+  zen: "OC",
+  kilo: "KL",
+  qoder: "QD",
+  codearts: "CA",
+  officeace: "OA",
+  raccoon: "RC",
+  lingxi: "LX",
+  miora: "MI",
+};
+
+/**
+ * 趋势图曲线配色（CSS 变量名）。
+ *
+ * 顺序固定、每个渠道一个颜色：颜色随渠道稳定，用户不会因为某个渠道当天
+ * 没有数据就把两种颜色读串。渠道数超过配色数时回落到 --chart-5 之前的循环。
+ */
+export const PROVIDER_CHART_COLOR: Record<Provider, string> = {
+  codebuddy: "var(--chart-1)",
+  codebuddy_intl: "var(--chart-7)",
+  trae: "var(--chart-3)",
+  zen: "var(--chart-4)",
+  kilo: "var(--chart-2)",
+  qoder: "var(--chart-5)",
+  codearts: "var(--chart-6)",
+  officeace: "var(--chart-8)",
+  raccoon: "var(--chart-9)",
+  lingxi: "var(--chart-10)",
+  miora: "var(--chart-1)",
+};
+
+/** 未知渠道（老数据/未来渠道）的兜底色。 */
+export const FALLBACK_CHART_COLOR = "var(--chart-5)";
+
+/**
+ * 模型列表 / 下拉的渠道展示顺序：CodeBuddy、TRAE 优先，其余渠道在后。
+ *
+ * 注意：这**不是**后端 `/v1/models` 的排序权重（`src/api/models.py` 的
+ * `_PROVIDER_RANK` 把 zen/kilo 与 qoder/codearts 同归「其他」）。前端把
+ * zen/kilo 提到 qoder/codearts 之前是有意的 UI 取舍（免费渠道更常被翻），
+ * 因此 Playground 的分组顺序与接口返回的 data 顺序并不保证一致。
+ */
+export const PROVIDER_ORDER: Provider[] = [
+  "codebuddy",
+  "codebuddy_intl",
+  "trae",
+  "zen",
+  "kilo",
+  "qoder",
+  "codearts",
+  "officeace",
+  "raccoon",
+  "lingxi",
+  "miora",
+];
+
+/**
+ * 支持每日签到的渠道（与后端能力探测同口径：provider 上有 `checkin` /
+ * `checkin_scope` 才会被签到任务跑到）。
+ *
+ * Zen / Kilo 最薄，没有签到接口；CodeBuddy 国际站上游活动为空
+ * （`active: false`，后端把 `checkin*` 三项置 None）。其余渠道都接了签到。
+ * 集中在这里而不是在页面里写死：组头汇总、行内按钮、批量操作都按同一份
+ * 判定，否则会出现「组头算它是未签、行内却没有签到按钮」的错配。
+ */
+export const CHECKIN_PROVIDERS: ReadonlySet<string> = new Set([
+  "codebuddy",
+  "trae",
+  "qoder",
+  "codearts",
+  "officeace",
+  "raccoon",
+  "lingxi",
+]);
+
+/** 渠道排序权重；未知渠道排在已知渠道之后。 */
+export function providerRank(provider: string): number {
+  const index = PROVIDER_ORDER.indexOf(provider as Provider);
+  return index === -1 ? PROVIDER_ORDER.length : index;
+}
+
+export function providerLabel(provider: string): string {
+  return PROVIDER_LABEL[provider as Provider] ?? provider;
+}
+
+export function providerAbbr(provider: string): string {
+  return PROVIDER_ABBR[provider as Provider] ?? provider;
+}
+
+export function providerChartColor(provider: string): string {
+  return PROVIDER_CHART_COLOR[provider as Provider] ?? FALLBACK_CHART_COLOR;
+}
