@@ -26,6 +26,7 @@ from ..runtime_settings import RuntimeSettings
 from .account_models import account_model_tables
 from .chat_media_gate import chat_account_tables, ensure_chat_endpoint, force_image_request
 from .deps import ApiKeyPrincipal, get_services, read_json_body
+from .miora_preflight import preflight_miora
 from .streaming import respond_with_keepalive, respond_with_stream_start, with_keepalive
 
 
@@ -130,6 +131,8 @@ async def dispatch_compat(
     ensure_chat_endpoint(get_services(request), chat_request, principal, tables)
     if tables is not None:
         execution_scope["credential_models"] = chat_account_tables(tables)
+    await preflight_miora(get_services(request), chat_request, principal,
+                          account_tables=tables, provider_binding=binding)
     # 配额准入：读体 + 白名单之后、executor 之前。放在这里而不是鉴权依赖里，
     # 是因为 TPM 需要预估 token（要解析后的请求体）；放在 executor 里则会让
     # 三个出口各写一遍。超限返回 429，**不消耗**任何上游调用。

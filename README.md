@@ -68,6 +68,8 @@ copy(JSON.stringify({authToken: localStorage.getItem("authToken"), refreshToken:
 
 ### OpenAI 客户端接入
 
+明确选择 Miora 的请求会在账号排队和响应保活前校验参数、文本输入、工具定义及可信目录中的模型。错误请求返回 400；慢请求已开始保活后的真实上游失败仍以 JSON 错误正文返回。
+
 Base URL：`http://127.0.0.1:8000/v1`，API Key 使用本服务「API Key」页创建的 `sk-…`，模型选择 `glm-5.3@miora` 等目录条目。
 
 ```python
