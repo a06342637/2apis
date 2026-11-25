@@ -322,6 +322,8 @@ class Scheduler:
         # (provider, model) → (首中时刻, 已命中的凭证集合)。只在 CONCURRENCY
         # 命中时写，见 `_concurrency_burst`。
         self._concurrency_bursts: dict[tuple[str, str], tuple[int, set[str]]] = {}
+        self._round_robin_tick = 0
+        self._round_robin_last: dict[str, int] = {}
 
     @property
     def expiry_window(self) -> int:
@@ -336,7 +338,7 @@ class Scheduler:
     # ---------------------------------------------------------------- 选号
 
     def select(self, candidates: Iterable[Candidate], tried: set[str],
-               now: int) -> str | None:
+               now: int, *, round_robin: bool = False) -> str | None:
         """返回应使用的 credential_id；无可用的返回 None。
 
         排序规则：**免费优先**（候选中存在 x0 免费渠道时，免费渠道整体排前；
@@ -378,6 +380,16 @@ class Scheduler:
         ]
         if not pool:
             return None
+        if round_robin:
+            # 指定账号集合保留健康分档，再按在途数和最久未选轮询，顺序请求也分担。
+            selected = min(pool, key=lambda candidate: (
+                (2 if (candidate.health is not None and candidate.health <= 0)
+                 or (candidate.quota_remaining is not None and candidate.quota_remaining <= 0)
+                 else _rank(candidate.health)), candidate.inflight,
+                self._round_robin_last.get(candidate.credential_id, 0), candidate.credential_id))
+            self._round_robin_tick += 1
+            self._round_robin_last[selected.credential_id] = self._round_robin_tick
+            return selected.credential_id
         pinned = [c for c in pool if c.pinned]
         free_present = any(c.credit_rate == 0 for c in pool)
         primary, secondary = expiry_windows(

@@ -21,8 +21,9 @@
 （`min == max`，所有聊天节流器的形态）逐个账号精确 5s 同拍，多个实例
 会在同一时刻撞上上游；区间（`min < max`）本就随机，不再叠加。
 
-`window_seconds > 0` 时上限改用**滑动窗口**口径：同一个桶在最近
-`window_seconds` 秒内最多放行 `max_concurrency` 次请求启动。这是对齐
+`window_seconds > 0` 且窗口次数非零时启用**滑动窗口**口径。次数由
+`max_requests_per_window` 控制；默认 None 沿用 `max_concurrency`，保持旧渠道
+行为；显式 0 只关闭窗口限制，不影响在途并发上限。这是对齐
 CodeArts 实测行为的修正——它限制的不是「同时在途」，而是「每账号每约 60s
 最多 3 个会话」：会话在 HTTP 流结束后仍滞留数十秒（3 并发打满后，
 单请求直到约 68s 才恢复）。纯在途上限挡不住「3 个并发刚结束就立刻再发 3 个」
@@ -44,6 +45,7 @@ import asyncio
 import hashlib
 import random
 import time
+from bisect import insort
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
@@ -98,6 +100,7 @@ class Pacer:
                  allow_concurrent: bool = False,
                  max_concurrency: int | Callable[[], int] = 0,
                  window_seconds: float | Callable[[], float] = 0,
+                 max_requests_per_window: int | Callable[[], int] | None = None,
                  sleep: Callable[[float], Awaitable[None]] | None = None,
                  now: Callable[[], float] | None = None) -> None:
         # 上下限可热更：存取值器，每次计间隔读当前值。校验必须放在
@@ -121,6 +124,11 @@ class Pacer:
         if not callable(window_seconds) and window_seconds < 0:
             raise ValueError("pacer window_seconds must be non-negative")
         self._window = live(window_seconds)
+        if (max_requests_per_window is not None and not callable(max_requests_per_window)
+                and max_requests_per_window < 0):
+            raise ValueError("pacer max_requests_per_window must be non-negative")
+        self._requests = (None if max_requests_per_window is None
+                          else live(max_requests_per_window))
         self._lock = asyncio.Lock()
         # 严格模式：全局单桶
         self._last_started: float | None = None
@@ -168,6 +176,14 @@ class Pacer:
         value = float(self._window())
         return value if value > 0 else 0.0
 
+    @property
+    def max_requests_per_window(self) -> int:
+        """窗口次数独立于并发；None 沿用旧并发上限，0 只关闭窗口计数。"""
+        if self._requests is None:
+            return self.max_concurrency
+        limit = int(self._requests())
+        return limit if limit > 0 else 0
+
     def next_interval(self) -> float:
         """本次相邻请求要间隔的秒数。
 
@@ -187,8 +203,8 @@ class Pacer:
         return self._allow_concurrent and self.max_concurrency > 0
 
     def _windowed(self) -> bool:
-        """并发 + 在途上限 + 窗口三者齐备时才走滑动窗口口径。"""
-        return (self._allow_concurrent and self.max_concurrency > 0
+        """并发模式下，独立窗口次数与窗口长度同时启用时计数。"""
+        return (self._allow_concurrent and self.max_requests_per_window > 0
                 and self.window_seconds > 0)
 
     def _prune_starts(self, bucket: str, now: float) -> None:
@@ -233,7 +249,7 @@ class Pacer:
         滑动窗口计数，窗口内启动次数满则挂起到最早一次启动滑出窗口（在途
         仍受 `max_concurrency` 上限约束，长流超过窗口时靠它兜底）。
         """
-        if self.disabled and not self._capped():
+        if self.disabled and not (self._capped() or self._windowed()):
             return
         if not self._allow_concurrent:
             async with self._lock:
@@ -258,8 +274,8 @@ class Pacer:
                     if self._windowed():
                         self._prune_starts(bucket, now)
                         starts = self._starts.get(bucket, [])
-                        window_full = len(starts) >= limit
-                        inflight_full = self._inflight.get(bucket, 0) >= limit
+                        window_full = len(starts) >= self.max_requests_per_window
+                        inflight_full = limit > 0 and self._inflight.get(bucket, 0) >= limit
                         if window_full or inflight_full:
                             self._wake.clear()
                             # 窗口满 → 等到最早一次启动滑出窗口再重查；仅因
@@ -267,9 +283,10 @@ class Pacer:
                             if window_full:
                                 window_wait = starts[0] + self.window_seconds - now
                         else:
-                            self._starts.setdefault(bucket, []).append(now)
-                            windowed_start = now
                             remaining = self._reserve(bucket)
+                            # 补间隔前就预留窗口配额，但按计划发起时刻计数，避免过早滑出。
+                            windowed_start = now + remaining
+                            insort(self._starts.setdefault(bucket, []), windowed_start)
                             reserved = True
                     elif not limit or self._inflight.get(bucket, 0) < limit:
                         remaining = self._reserve(bucket)

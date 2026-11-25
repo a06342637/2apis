@@ -204,6 +204,7 @@ describe("ApiKeysPage", () => {
         body: {
           name: "ci",
           provider_binding: "codebuddy",
+          credential_ids: [],
           allowed_ips: "10.0.0.0/8",
           allowed_models: "glm-*",
           expires_at: Math.floor(new Date("2026-01-02T03:04").getTime() / 1000),
@@ -519,6 +520,7 @@ describe("ApiKeysPage 编辑策略", () => {
           body: {
             name: "renamed",
             provider_binding: "",
+            credential_ids: [],
             allowed_ips: "10.0.0.1/32",
             allowed_models: "glm-*",
             expires_at: 4102444800,

@@ -14,6 +14,7 @@ import { useEffect, useRef } from "react";
  * `active` 用于「常驻挂载、按需显示」的对话框（如移动端抽屉）；默认 true。
  */
 const FOCUSABLE = [
+  "summary",
   "a[href]",
   "button:not([disabled])",
   "input:not([disabled])",
@@ -37,9 +38,19 @@ export function useDialogFocus<T extends HTMLElement>(
 
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const focusables = () =>
-      Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(
-        (el) => !el.hasAttribute("hidden") && el.getAttribute("aria-hidden") !== "true",
-      );
+      Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((el) => {
+        if (el.hasAttribute("hidden") || el.getAttribute("aria-hidden") === "true") return false;
+        // Native details 隐藏的内容不可作为焦点首尾；summary 本身仍可聚焦。
+        let ancestor = el.parentElement;
+        while (ancestor && ancestor !== node) {
+          if (ancestor.tagName === "DETAILS" && !ancestor.hasAttribute("open")) {
+            const summary = ancestor.querySelector(":scope > summary");
+            if (!summary?.contains(el)) return false;
+          }
+          ancestor = ancestor.parentElement;
+        }
+        return true;
+      });
 
     // 初始聚焦：优先第一个可聚焦元素，否则让容器自己接住焦点。
     const first = focusables()[0];

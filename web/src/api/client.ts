@@ -123,7 +123,7 @@ async function readBody(response: Response): Promise<unknown> {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {},
+export async function request<T>(path: string, init: RequestInit = {},
                           timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const guard = timeoutGuard(init, timeoutMs);
   let response: Response;
@@ -429,6 +429,7 @@ export const api = {
   createApiKey: (payload: {
     name: string;
     provider_binding?: string;
+    credential_ids?: string[];
     allowed_ips?: string;
     allowed_models?: string;
     expires_at?: number | null;
@@ -436,11 +437,16 @@ export const api = {
     request<ApiKeyCreated>("/api/api-keys", { method: "POST", ...json(payload) }),
   deleteApiKey: (id: string) => request<{ ok: boolean }>(`/api/api-keys/${id}`, { method: "DELETE" }),
   /**
-   * 会话鉴权的模型列表（与 Playground 同源 `/api/playground/models`）：
-   * 供「API Key 管理」页的 CC Switch 默认模型下拉使用，无需用户自己造 Key。
+   * 会话鉴权的模型列表（与 Playground 同源 `/api/playground/models`）。
    */
   playgroundModels: (signal?: AbortSignal) =>
     request<{ data: ModelInfo[] }>("/api/playground/models", { signal }),
+  /** 实际 Key 可用的模型；明文只放请求头，不进入管理台查询缓存。 */
+  keyModels: (apiKey: string, signal?: AbortSignal) =>
+    request<{ data: ModelInfo[] }>("/v1/models", {
+      signal,
+      headers: { Authorization: `Bearer ${apiKey.trim()}` },
+    }),
 
   // ------------------------------------------------------------ 运行时配置
   settings: () => request<SettingsResponse>("/api/settings"),

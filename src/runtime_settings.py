@@ -74,6 +74,7 @@ GATEWAY_GROUPS: tuple[tuple[str, str], ...] = (
     ("privacy", "出站隐私"),
     ("chat_throttle", "聊天节流"),
     ("codearts_throttle", "CodeArts 节流"),
+    ("miora_throttle", "Miora 账号"),
     ("pacer", "后台任务节流"),
     ("observability", "可观测性"),
 )
@@ -235,12 +236,28 @@ HOT_SETTINGS: tuple[HotSetting, ...] = (
                "上游按请求频率限流（实测 5 并发放行、第 6 个 429 "
                "user_model_rate_limited）。默认 2 留余量；0 关闭上限。",
                minimum=0, group="codearts_throttle"),
+    HotSetting("miora_auto_media_enabled", bool, "Miora 对话自动生成媒体",
+               "允许 Miora 对话模型在用户要求生成图片或视频时调用网关媒体工具，"
+               "返回可下载的资源链接。仅使用此 Key 获准的账号与媒体模型；"
+               "会消耗上游媒体额度。关闭后仍可调用标准生图和视频接口。",
+               group="miora_throttle"),
     HotSetting("miora_chat_min_interval", float, "Miora 聊天最小间隔（秒）",
-               "每账号独立节流，默认 0。多个账号之间不共享等待队列。",
-               minimum=0.0, group="chat_throttle"),
+               "同账号请求起点至少相隔此秒数，并向上小幅抖动；默认 5，0 关闭间隔。"
+               "多个账号各自排队，不共享等待。配合滚动窗口降低突发频率。",
+               minimum=0.0, group="miora_throttle"),
     HotSetting("miora_max_concurrency", int, "Miora 每账号并发上限",
-               "默认 1，适配免费账号。付费账号可按套餐调整；0 关闭上限。",
-               minimum=0, group="codearts_throttle"),
+               "本地在途名额默认 1；0 关闭此层上限。同账号运行时仍串行保护选模，"
+               "提高此值不会让同账号并行推理；不同账号可以并行。",
+               minimum=0, group="miora_throttle"),
+    HotSetting("miora_request_window_seconds", float, "Miora 滚动窗口（秒）",
+               "默认 60，与窗口请求数配合限制同账号请求起点；窗口满时本地等待，"
+               "不向上游连发。0 关闭窗口，间隔和并发限制仍生效。",
+               minimum=0.0, group="miora_throttle"),
+    HotSetting("miora_max_requests_per_window", int, "Miora 窗口内最多请求数",
+               "默认每账号每 60 秒最多启动 3 次，这是本地保守建议，不是上游承诺。"
+               "与并发上限独立；0 关闭窗口次数限制。仍遇到 429 时先遵守上游"
+               "Retry-After，再适当增加间隔或降低此值。",
+               minimum=0, group="miora_throttle"),
     HotSetting("qoder_chat_min_interval", float, "Qoder 聊天最小间隔（秒）",
                "Qoder 真实账号渠道专用节流（默认 5s，0 关闭）。与其余渠道各自"
                "独立，不共享。", minimum=0.0, group="chat_throttle"),
@@ -977,12 +994,24 @@ class RuntimeSettings:
         return int(self.get("raccoon_max_concurrency"))
 
     @property
+    def miora_auto_media_enabled(self) -> bool:
+        return bool(self.get("miora_auto_media_enabled"))
+
+    @property
     def miora_chat_min_interval(self) -> float:
         return float(self.get("miora_chat_min_interval"))
 
     @property
     def miora_max_concurrency(self) -> int:
         return int(self.get("miora_max_concurrency"))
+
+    @property
+    def miora_request_window_seconds(self) -> float:
+        return float(self.get("miora_request_window_seconds"))
+
+    @property
+    def miora_max_requests_per_window(self) -> int:
+        return int(self.get("miora_max_requests_per_window"))
 
     @property
     def qoder_chat_min_interval(self) -> float:

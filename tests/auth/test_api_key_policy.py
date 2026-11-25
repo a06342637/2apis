@@ -175,7 +175,7 @@ def test_repository_round_trips_policy_columns(keys):
     assert row == {"id": created["id"], "username": "alice",
                    "provider_binding": "trae", "allowed_ips": "10.0.0.0/8",
                    "allowed_models": "glm-*", "expires_at": 4_100_000_000,
-                   "quota": ""}
+                   "quota": "", "credential_ids": []}
     listed = keys.list_for("alice")[0]
     assert listed["provider_binding"] == "trae"
     assert listed["allowed_ips"] == "10.0.0.0/8"

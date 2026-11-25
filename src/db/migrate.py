@@ -108,7 +108,8 @@ SCHEMA_NAME = "schema.sql"
 # - `allowed_models`：账号级模型白名单（fnmatch glob，''=不限制，与 api_keys
 #   同语法）。请求模型不匹配时该凭证不参与**选号**（不硬禁用、不写冷却），
 #   后台任务（签到/刷新/探活）看不到这层过滤，故老库补 '' 后行为完全不变。
-SCHEMA_VERSION = 39
+# 40：api_keys 新增 credential_ids；默认 [] 沿用全池，非空是严格账号范围。
+SCHEMA_VERSION = 40
 
 # (表, 列定义)：历史库升级时逐条补列
 _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -171,6 +172,7 @@ _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     ("usage_events", "api_key_id TEXT"),
     # Key 级配额（JSON 文本）：老库补 '' ＝「不限制」，出口行为不变。
     ("api_keys", "quota TEXT NOT NULL DEFAULT ''"),
+    ("api_keys", "credential_ids TEXT NOT NULL DEFAULT '[]'"),
     # 用户级策略（仅约束 Playground 会话直连）：老库补 '' ＝「不限制」，
     # Playground 行为与补列前一致（原先不校验任何按人策略）。
     ("users", "allowed_models TEXT NOT NULL DEFAULT ''"),

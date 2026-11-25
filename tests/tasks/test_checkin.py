@@ -86,21 +86,17 @@ async def test_checkin_same_scope_failure_still_dedupes(repo):
     assert report.attempted == 1 and report.skipped == 1 and report.failed == 1
     assert provider.checkin_calls == 1
 
-async def test_checkin_skips_paused_credential_and_frees_scope(repo):
-    """回归 #15：暂停（enabled=0）的旧凭证不得占用上游账号名额。
-
-    行序更靠前且会话已死的暂停凭证若仍被尝试，会先 `seen.add(scope)`，后面
-    那条启用中的同账号凭证每轮都被去重挡下 → 渠道签到永久静默失效。
-    """
+async def test_checkin_skips_hard_disabled_credential_and_frees_scope(repo):
+    """已经失效的旧票不占用同账号新票的本轮签到名额。"""
     credentials, _db = repo
     paused = credentials.add(provider="codebuddy", credential_data={"bearer_token": "dead",
                                                                     "account_uid": "same"})
     credentials.add(provider="codebuddy", credential_data={"bearer_token": "live",
                                                           "account_uid": "same"})
-    credentials.set_enabled(paused, False)
+    credentials.mark_relogin_required(paused, "expired login")
 
     class HalfDead(ProbeProvider):
-        """暂停那条会话已死：若它仍被尝试，本轮就会 failed=1 且占用账号名额。"""
+        """死票不应参与本轮签到。"""
 
         async def checkin(self, data):
             self.checkin_calls += 1
@@ -112,6 +108,16 @@ async def test_checkin_skips_paused_credential_and_frees_scope(repo):
     assert report.attempted == 1 and report.succeeded == 1
     assert report.failed == 0 and report.skipped == 1
     assert provider.checkin_calls == 1
+
+
+async def test_checkin_maintains_paused_account_without_enabling_it(repo):
+    credentials, _db = repo
+    account = credentials.add(provider="codebuddy", credential_data={"bearer_token": "valid"})
+    credentials.set_enabled(account, False)
+    provider = ProbeProvider()
+    report = await CheckinTask(credentials, {"codebuddy": provider}).run_once()
+    assert report.succeeded == 1 and provider.checkin_calls == 1
+    assert credentials.list_all()[0]["enabled"] == 0
 
 async def test_checkin_skips_disabled(repo):
     credentials, _db = repo
@@ -304,14 +310,11 @@ async def test_checkin_day_boundary_is_beijing_regardless_of_local_tz(repo, monk
     # 北京时间 2026-09-11 00:30 = UTC 2026-09-10 16:30
     early = int(datetime(2026, 9, 11, 0, 30, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
 
-    monkeypatch.setenv("TZ", "UTC")
-    time.tzset()
-    try:
-        assert task._day_key(_cn_now(early)) == "2026-09-11"
-        assert task._day_key(_cn_now(early + 3600)) == "2026-09-11"
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+    # 模拟 UTC 本地时区，Windows 没有 tzset 也能覆盖旧 localtime 路径。
+    monkeypatch.setattr(time, "localtime", time.gmtime)
+    assert time.strftime("%Y-%m-%d", time.localtime(early)) == "2026-09-10"
+    assert task._day_key(_cn_now(early)) == "2026-09-11"
+    assert task._day_key(_cn_now(early + 3600)) == "2026-09-11"
 
 
 def test_checkin_day_end_handles_month_end():

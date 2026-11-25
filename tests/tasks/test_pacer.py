@@ -317,13 +317,13 @@ async def test_pacer_window_rollback_skips_pruned_registration():
     clock["t"] = 0.5
     task = asyncio.create_task(pacer.wait_turn("k"))  # 登记 [0, 0.5] 后补 4.5s 睡眠
     await asyncio.sleep(0)
-    clock["t"] = 3.0                             # 窗口滑过 → 另一个等待者 prune 掉 0/0.5
+    clock["t"] = 10.0                            # 窗口滑过 → prune 掉已过期的计划发起时刻
     await pacer.wait_turn("k")                   # 重新登记 [3]
     pacer.release("k")
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert pacer._starts == {"k": [3.0]}         # 只抹掉自己的登记，不动别人的
+    assert pacer._starts == {"k": [10.0]}        # 只抹掉自己的登记，不动别人的
 
 async def test_pacer_window_inflight_guard_blocks_when_stream_outlives_window():
     """长响应超过窗口时，在途闸门仍须挡住第 4 个（否则再撞 400）。
@@ -381,6 +381,89 @@ async def test_pacer_window_reads_live_length():
 def test_task_report_dict():
     report = TaskReport(attempted=3, succeeded=2, failed=1, skipped=4)
     assert report.as_dict() == {"attempted": 3, "succeeded": 2, "failed": 1, "skipped": 4}
+
+
+async def test_independent_window_cap_uses_actual_planned_start_times():
+    clock = {"t": 0.0}
+    async def sleep(seconds):
+        clock["t"] += seconds
+
+    pacer = Pacer(5, 5, allow_concurrent=True, max_concurrency=1,
+                  max_requests_per_window=3, window_seconds=60, sleep=sleep,
+                  now=lambda: clock["t"])
+    pacer.next_interval = lambda: 5
+    starts = []
+    for _ in range(5):
+        await pacer.wait_turn("account")
+        starts.append(clock["t"])
+        pacer.release("account")
+    assert starts == [0, 5, 10, 60, 65]
+    assert all(sum(time > current - 60 for time in starts[:index + 1]) <= 3
+               for index, current in enumerate(starts))
+
+
+async def test_window_limit_works_without_concurrency_cap_and_is_per_account():
+    clock = {"t": 0.0}
+    async def sleep(seconds):
+        clock["t"] += seconds
+    pacer = Pacer(0, 0, allow_concurrent=True, max_concurrency=0,
+                  max_requests_per_window=2, window_seconds=60, sleep=sleep,
+                  now=lambda: clock["t"])
+    await pacer.wait_turn("a")
+    await pacer.wait_turn("a")
+    await pacer.wait_turn("b")
+    assert clock["t"] == 0
+    await pacer.wait_turn("a")
+    assert clock["t"] == 60
+    for account in ("a", "a", "a", "b"):
+        pacer.release(account)
+
+
+async def test_zero_window_cap_preserves_concurrency_limit():
+    pacer = Pacer(0, 0, allow_concurrent=True, max_concurrency=1,
+                  max_requests_per_window=0, window_seconds=60)
+    await pacer.wait_turn("a")
+    pending = asyncio.create_task(pacer.wait_turn("a"))
+    await asyncio.sleep(0)
+    assert not pending.done() and pacer._starts == {}
+    pacer.release("a")
+    await asyncio.wait_for(pending, timeout=1)
+    pacer.release("a")
+
+
+def test_window_cap_is_hot_and_none_keeps_legacy_linkage():
+    state = {"concurrency": 3, "requests": 2}
+    legacy = Pacer(0, 0, allow_concurrent=True,
+                   max_concurrency=lambda: state["concurrency"], window_seconds=60)
+    independent = Pacer(0, 0, allow_concurrent=True, max_concurrency=1,
+                        max_requests_per_window=lambda: state["requests"], window_seconds=60)
+    assert legacy.max_requests_per_window == 3
+    assert independent.max_requests_per_window == 2
+    state.update(concurrency=5, requests=4)
+    assert legacy.max_requests_per_window == 5
+    assert independent.max_requests_per_window == 4
+    state["requests"] = -1
+    assert independent.max_requests_per_window == 0 and not independent._windowed()
+    with pytest.raises(ValueError, match="max_requests_per_window"):
+        Pacer(0, 0, max_requests_per_window=-1)
+
+
+async def test_independent_window_cancellation_removes_future_reservation():
+    sleep_entered = asyncio.Event()
+    async def sleep(seconds):
+        sleep_entered.set()
+        await asyncio.Future()
+    pacer = Pacer(5, 5, allow_concurrent=True, max_concurrency=1,
+                  max_requests_per_window=3, window_seconds=60, sleep=sleep, now=lambda: 0)
+    await pacer.wait_turn("a")
+    pacer.release("a")
+    pending = asyncio.create_task(pacer.wait_turn("a"))
+    await sleep_entered.wait()
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert pacer._starts == {"a": [0]}
+    assert pacer._inflight == {}
 
 def test_pacer_random_single_value_path():
     pacer = Pacer(3, 3)

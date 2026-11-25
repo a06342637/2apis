@@ -9,6 +9,7 @@ import { useSessionContext } from "../Layout";
 import type { RuntimeSetting, TaskRunResult, TaskStatus } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { SystemUpdatePanel } from "../components/SystemUpdatePanel";
 import { Badge, Button, Card, EmptyState, Field, Input, Notice, Panel, QueryErrorState, Select, Tabs } from "../ui";
 
 /** 网关卡在 tabs 里的值：加前缀避免与任务 key 撞车（如任务与分组同名）。 */
@@ -16,6 +17,13 @@ const groupTabValue = (key: string) => `gateway-${key}`;
 
 /** 兜底 tab：归属对不上（task 指向未装配任务、后端留空 group）的项都进这里。 */
 const OTHER_TAB = "settings-other";
+
+const MIORA_SUGGESTED: Record<string, string> = {
+  miora_chat_min_interval: "5",
+  miora_max_concurrency: "1",
+  miora_request_window_seconds: "60",
+  miora_max_requests_per_window: "3",
+};
 
 /** tab 文案：去掉任务名里的括号补充（如「模型目录刷新（OpenRouter）」），
  * 十几个 tab 排一行时它会把行撑爆、挤得每个标签折行；完整名仍在卡片标题与告警里。 */
@@ -259,9 +267,9 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // 两级 tab 的选择：一级（任务 / 配置）→ 二级（任务业务分组或网关卡组）→ 任务。
+  // 一级（任务 / 配置 / 更新）→ 二级（任务业务分组或网关卡组）→ 任务。
   // 三个 key 分开存：切走再切回时各自的二级选择还在。
-  const [section, setSection] = useState<"tasks" | "gateway">("tasks");
+  const [section, setSection] = useState<"tasks" | "gateway" | "updates">("tasks");
   const [taskGroupKey, setTaskGroupKey] = useState<string | null>(null);
   const [gatewayGroupKey, setGatewayGroupKey] = useState<string | null>(null);
   const [taskKey, setTaskKey] = useState<string | null>(null);
@@ -290,7 +298,7 @@ export function SettingsPage() {
   );
   const invalid = dirty.filter((setting) => !isSubmittable(setting, drafts[setting.key]));
 
-  // 两级 tab：一级「后台任务 / 网关配置」；任务按后端下发的业务分组
+  // 一级「后台任务 / 网关配置 / 更新系统」；任务按后端下发的业务分组
   // （TASK_GROUPS）二级切换、组内每个任务一个 tab；配置按网关卡组二级切换。
   // 归属对不上的配置项落进「其他」，绝不吞掉配置。
   const groups = useMemo(() => data?.groups ?? [], [data]);
@@ -315,13 +323,16 @@ export function SettingsPage() {
     gatewayGroupOptions.push({ value: OTHER_TAB, label: "其他" });
   }
 
-  // 只有两边都有内容时才显示一级 tab；缺一边就直接落到另一边。
-  const hasSections = taskGroupOptions.length > 0 && gatewayGroupOptions.length > 0;
-  const activeSection: "tasks" | "gateway" = hasSections
-    ? section
-    : taskGroupOptions.length > 0
-      ? "tasks"
-      : "gateway";
+  // 缺少任务时仍可读网关配置；更新入口独立于两组数据的加载结果。
+  const sectionOptions = [
+    ...(taskGroupOptions.length > 0 ? [{ value: "tasks", label: "后台任务" }] : []),
+    ...(gatewayGroupOptions.length > 0 || taskGroupOptions.length === 0
+      ? [{ value: "gateway", label: "网关配置" }] : []),
+    { value: "updates", label: "更新系统" },
+  ];
+  const activeSection = section === "updates" ? "updates"
+    : taskGroupOptions.length > 0 && (section === "tasks" || gatewayGroupOptions.length === 0)
+      ? "tasks" : "gateway";
 
   const activeTaskGroup =
     taskGroupKey && taskGroupOptions.some((option) => option.value === taskGroupKey)
@@ -396,6 +407,15 @@ export function SettingsPage() {
       onReset={() => void reset(setting)}
     />
   );
+
+  const suggestMioraLimits = () => {
+    setDrafts((previous) => ({
+      ...previous,
+      ...Object.fromEntries(settings.filter((setting) => setting.key in MIORA_SUGGESTED)
+        .map((setting) => [setting.key, MIORA_SUGGESTED[setting.key]])),
+    }));
+    setNotice("已填入 Miora 保守限速建议；点击「保存」后生效。其它配置保留。上游仍可能临时限流。");
+  };
 
   // 卡片内分节（后端下发 `section`）：19 项平铺一列太长，按「基础与迟滞 /
   // 规则阈值 …」切段；没有 section 的配置项照旧直排，不插空标题。
@@ -485,7 +505,18 @@ export function SettingsPage() {
             </Notice>
           </div>
         )}
-        {isLoading ? (
+        <div className="mb-3 overflow-x-auto pb-1">
+          <Tabs
+            value={activeSection}
+            options={sectionOptions}
+            onChange={(value) => setSection(value as "tasks" | "gateway" | "updates")}
+            testId="settings-sections"
+            compact
+          />
+        </div>
+        {activeSection === "updates" ? (
+          <SystemUpdatePanel />
+        ) : isLoading ? (
           <PageSkeleton variant="table" rows={5} />
         ) : isError ? (
           <QueryErrorState
@@ -513,21 +544,6 @@ export function SettingsPage() {
               <PageSkeleton variant="table" rows={4} />
             ) : (
               <>
-                {hasSections && (
-                  <div className="mb-3 overflow-x-auto pb-1">
-                    <Tabs
-                      value={activeSection}
-                      options={[
-                        { value: "tasks", label: "后台任务" },
-                        { value: "gateway", label: "网关配置" },
-                      ]}
-                      onChange={(value) => setSection(value as "tasks" | "gateway")}
-                      testId="settings-sections"
-                      compact
-                    />
-                  </div>
-                )}
-
                 {activeSection === "tasks" ? (
                   <>
                     <div className="mb-3 overflow-x-auto pb-1">
@@ -589,6 +605,20 @@ export function SettingsPage() {
                         compact
                       />
                     </div>
+                    {activeGatewayGroup === groupTabValue("miora_throttle") && (
+                      <div className="mb-3 space-y-2 rounded-lg border border-border p-3"
+                        data-testid="miora-account-settings-help">
+                        <p className="text-xs text-muted-foreground">
+                          Miora 同账号保持串行，不同账号独立排队。建议 5 秒间隔、1 个在途名额，
+                          每 60 秒最多 3 次请求；这是本地保守设置，不是上游的硬门槛。
+                          429 会冷却该账号，优先遵守上游 Retry-After。账号启停和权重在凭证池设置。
+                        </p>
+                        <Button size="sm" variant="default" disabled={busy}
+                          data-testid="suggest-miora-limits" onClick={suggestMioraLimits}>
+                          填入保守建议
+                        </Button>
+                      </div>
+                    )}
                     {activeRows.length > 0 ? (
                       renderSettings(activeRows)
                     ) : (

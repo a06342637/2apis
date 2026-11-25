@@ -23,6 +23,8 @@ from ..engine.sse import SSE_COMMENT
 from ..key_quota import Lease, QuotaExceeded
 from ..provider.base import aclose_stream
 from ..runtime_settings import RuntimeSettings
+from .account_models import account_model_tables
+from .chat_media_gate import chat_account_tables, ensure_chat_endpoint, force_image_request
 from .deps import ApiKeyPrincipal, get_services, read_json_body
 from .streaming import respond_with_keepalive, respond_with_stream_start, with_keepalive
 
@@ -114,8 +116,20 @@ async def dispatch_compat(
     if on_body is not None:
         on_body(body)
     chat_request = parse(body)
+    chat_request, binding = force_image_request(get_services(request), chat_request, principal)
     ensure_model_allowed(chat_request, principal, settings)
-    binding = principal.provider_binding
+    execution_scope: dict[str, Any] = {}
+    tables = None
+    if principal.credential_ids:
+        tables = await account_model_tables(get_services(request),
+                                            principal.credential_ids, binding)
+        execution_scope = {"credential_ids": principal.credential_ids,
+                           "credential_models": tables,
+                           "credential_model_policy": (
+                               principal.allowed_models, principal.user_allowed_models)}
+    ensure_chat_endpoint(get_services(request), chat_request, principal, tables)
+    if tables is not None:
+        execution_scope["credential_models"] = chat_account_tables(tables)
     # 配额准入：读体 + 白名单之后、executor 之前。放在这里而不是鉴权依赖里，
     # 是因为 TPM 需要预估 token（要解析后的请求体）；放在 executor 里则会让
     # 三个出口各写一遍。超限返回 429，**不消耗**任何上游调用。
@@ -127,7 +141,7 @@ async def dispatch_compat(
         # 前置校验：在 200 响应头发出前拒绝不可能成功的请求（否则只能断流）
         try:
             target = executor.preflight(chat_request, binding,
-                                        username=principal.username)
+                                        username=principal.username, **execution_scope)
         except Exception:
             lease.release()          # 400 不该占着并发名额
             raise
@@ -144,6 +158,7 @@ async def dispatch_compat(
                                                         username=principal.username,
                                                         translator=translator,
                                                         provider_binding=binding,
+                                                        **execution_scope,
                                                         on_terminal=(
                                                             lambda code, message:
                                                             terminal.update(code=code,
@@ -159,11 +174,13 @@ async def dispatch_compat(
         return await respond_with_keepalive(
             lambda: executor.complete(chat_request, username=principal.username,
                                       provider_binding=binding,
+                                      **execution_scope,
                                       is_disconnected=request.is_disconnected),
             grace=keepalive, convert=convert, release=lease.release)
     try:
         completion = await executor.complete(chat_request, username=principal.username,
                                              provider_binding=binding,
+                                             **execution_scope,
                                              is_disconnected=request.is_disconnected)
     finally:
         lease.release()

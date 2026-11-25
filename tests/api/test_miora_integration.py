@@ -19,6 +19,7 @@ from src.provider.miora.client import MioraHTTPError, validate_payload
 from src.provider.miora.credential import MioraCredential
 from src.provider.miora.tools import parse_response, prepare_prompt
 from src.tasks import TaskReport
+from src.tasks.quota_probe import QuotaProbeTask
 from src.tasks.refresh import RefreshTask
 from tests.helpers.chat import jwt_token
 from tests.helpers.constants import SECRET
@@ -377,6 +378,26 @@ def test_miora_probe_skips_credential_removed_after_refresh(miora_app, monkeypat
     assert network.refreshes == [] and app.state.credentials.list_all() == []
 
 
+def test_paused_account_is_maintained_without_becoming_api_selectable(miora_app):
+    app, client, network = miora_app
+    now = int(time.time())
+    old = token("paused", "old", exp=now - 1)
+    account = app.state.credentials.add(provider="miora", credential_data={
+        "access_token": old, "refresh_token": "synthetic-refresh", "uid": "paused"})
+    app.state.credentials.set_enabled(account, False)
+    report = client.portal.call(app.state.task_runner.refresh_credential, account)
+    assert report.succeeded == 1 and len(network.refreshes) == 1
+    assert app.state.credentials.credential_data(account)["access_token"] != old
+    quota_task = QuotaProbeTask(app.state.credentials, app.state.services.registry)
+    assert client.portal.call(quota_task.run_once).succeeded == 1
+    row = app.state.credentials.list_all()[0]
+    assert row["enabled"] == 0 and row["quota_remaining"] == 250
+    response = client.post("/v1/chat/completions", headers=api_headers(app), json={
+        "model": "glm-5.3@miora", "messages": [{"role": "user", "content": "hello"}]})
+    assert response.status_code == 503
+    assert network.calls == []
+
+
 def test_models_selection_and_account_pool_isolation(miora_app):
     app, client, network = miora_app
     one = import_account(client)
@@ -404,6 +425,38 @@ def test_models_selection_and_account_pool_isolation(miora_app):
     )
     assert response.status_code == 200
     assert network.calls[-1][0] == "account-2"
+
+
+def test_429_cools_whole_account_and_retries_another_account(miora_app):
+    app, client, network = miora_app
+    import_account(client)
+    import_account(client, "account-2")
+    attempted = []
+    original = network.stream_chat
+    retry_at = int(time.time()) + 300
+
+    async def limited_once(credential, payload, model):
+        attempted.append(credential.uid)
+        if len(attempted) == 1:
+            raise MioraHTTPError(429, b"insufficient credit in burst window", retry_at=retry_at)
+        async for event in original(credential, payload, model):
+            yield event
+
+    network.stream_chat = limited_once
+    headers = api_headers(app)
+    for model in ("glm-5.3", "gpt-6-astra"):
+        response = client.post("/v1/chat/completions", headers=headers, json={
+            "model": f"{model}@miora", "messages": [{"role": "user", "content": "hello"}]})
+        assert response.status_code == 200, response.text
+
+    assert len(attempted) == 3 and attempted[0] != attempted[1] == attempted[2]
+    cooled = next(candidate for candidate in app.state.credentials.candidates(["miora"])
+                  if app.state.credentials.credential_data(candidate.credential_id)["uid"]
+                  == attempted[0])
+    row = next(row for row in app.state.credentials.list_all()
+               if row["id"] == cooled.credential_id)
+    assert row["cooling_kind"] == "soft" and cooled.cooling_until == retry_at
+    assert cooled.err_count == 0 and not cooled.disabled and not cooled.model_cooldowns
 
 
 @pytest.mark.parametrize("anthropic", [False, True])

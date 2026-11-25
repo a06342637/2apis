@@ -54,10 +54,8 @@ class GrowthTask:
             if growth is None:
                 report.skipped += 1                 # 该渠道没有成长中心（TRAE）
                 continue
-            # `enabled=0`（用户软暂停）同样跳过：口径与调度器 is_selectable、
-            # 签到/刷新/额度探测一致。漏判会让「暂停」只停调度不停后台任务——
-            # 号已经不想用了，成长中心还在替它领积分、活跃上报还在替它打卡。
-            if candidate.disabled or not candidate.enabled:
+            # 积分成长维护不受 API 软暂停影响，仍尊重全局成长设置和硬禁用。
+            if candidate.disabled:
                 report.skipped += 1
                 continue
             # 解不开（APP_SECRET 换过 / 密文损坏）→ 跳过这条凭证：一条坏凭证

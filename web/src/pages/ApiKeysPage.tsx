@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { type ApiKeyWindow, updateApiKey, USAGE_WINDOWS, USAGE_WINDOW_LABELS } from "../api/apiKeys";
 import { api } from "../api/client";
-import { useApiKeys, useQueryClient } from "../api/hooks";
+import { useApiKeys, useCredentials, useQueryClient } from "../api/hooks";
 import { EMPTY_QUOTA, type KeyQuota, quotaInput, quotaOf, setApiKeyQuota } from "../api/keyQuota";
 import type { ApiKey, ApiKeyCreated } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
@@ -15,6 +15,7 @@ import { DEFAULT_PAGE_SIZE } from "../lib/constants";
 import { errorText } from "../lib/errors";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { useSort } from "../hooks/useSort";
+import { useSessionContext } from "../Layout";
 import {
   Button,
   EmptyState,
@@ -33,6 +34,7 @@ import {
 import { AnthropicEntry, OpenAIEntry } from "./apikeys/clientEntry";
 import { CcSwitchImportButtons } from "./apikeys/ccSwitch";
 import { KeyRow } from "./apikeys/KeyRow";
+import { CredentialSelector, credentialSelectionIssue } from "./apikeys/CredentialSelector";
 import { expiresAtInput, PROVIDER_BINDING_OPTIONS, parseExpiresAt } from "./apikeys/meta";
 import { QuotaFields, QuotaSection } from "./apikeys/quota";
 import { CopyButton } from "./apikeys/shared";
@@ -53,6 +55,10 @@ export {
 } from "./apikeys/meta";
 
 export function ApiKeysPage() {
+  const session = useSessionContext();
+  const accountsQuery = useCredentials(session.username);
+  const accounts = !accountsQuery.isError && Array.isArray(accountsQuery.data?.credentials)
+    ? accountsQuery.data.credentials : undefined;
   const { sort, order, toggle } = useSort("created_at", "asc", { last_used_at: "desc" });
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
@@ -76,6 +82,7 @@ export function ApiKeysPage() {
   };
   const [name, setName] = useState("");
   const [binding, setBinding] = useState("");
+  const [credentialIds, setCredentialIds] = useState<string[]>([]);
   const [allowedIps, setAllowedIps] = useState("");
   const [allowedModels, setAllowedModels] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -87,6 +94,7 @@ export function ApiKeysPage() {
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [editName, setEditName] = useState("");
   const [editBinding, setEditBinding] = useState("");
+  const [editCredentialIds, setEditCredentialIds] = useState<string[]>([]);
   const [editIps, setEditIps] = useState("");
   const [editModels, setEditModels] = useState("");
   const [editExpiresAt, setEditExpiresAt] = useState("");
@@ -112,6 +120,8 @@ export function ApiKeysPage() {
   const [importKey, setImportKey] = useState("");
 
   const keys = data?.api_keys ?? [];
+  const createScopeIssue = credentialSelectionIssue(credentialIds, accounts, binding);
+  const editScopeIssue = credentialSelectionIssue(editCredentialIds, accounts, editBinding);
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -119,6 +129,10 @@ export function ApiKeysPage() {
     // state 更新是异步的，同一帧内的第二次提交读到的 `creating` 仍是 false，
     // 故再用 ref 兜一层真正的互斥。
     if (creatingRef.current) return;
+    if (createScopeIssue) {
+      setError(createScopeIssue);
+      return;
+    }
     creatingRef.current = true;
     setCreating(true);
     setError(null);
@@ -127,6 +141,7 @@ export function ApiKeysPage() {
       const result = await api.createApiKey({
         name,
         provider_binding: binding,
+        credential_ids: credentialIds,
         allowed_ips: allowedIps.trim(),
         allowed_models: allowedModels.trim(),
         expires_at: parseExpiresAt(expiresAt),
@@ -137,6 +152,7 @@ export function ApiKeysPage() {
       setCreated(result);
       setName("");
       setBinding("");
+      setCredentialIds([]);
       setAllowedIps("");
       setAllowedModels("");
       setExpiresAt("");
@@ -177,6 +193,7 @@ export function ApiKeysPage() {
     setEditingKey(key);
     setEditName(key.name);
     setEditBinding(key.provider_binding);
+    setEditCredentialIds([...(key.credential_ids ?? [])]);
     setEditIps(key.allowed_ips);
     setEditModels(key.allowed_models);
     setEditExpiresAt(expiresAtInput(key.expires_at));
@@ -191,14 +208,19 @@ export function ApiKeysPage() {
   const saveEdit = async () => {
     // 保存中早退：PUT 是幂等的，但连点会叠出多条「值相同」的审计判定
     if (!editingKey || savingEdit) return;
+    if (editScopeIssue) {
+      setError(editScopeIssue);
+      return;
+    }
     setSavingEdit(true);
     setError(null);
     try {
-      // 五个字段全量提交：未改的字段值与原值相同，服务端只按**实际差异**
+      // 字段全量提交：未改的字段值与原值相同，服务端只按**实际差异**
       // 写库与审计（`changed` 为空不发记录），因此不需要前端算 diff。
       await updateApiKey(editingKey.id, {
         name: editName,
         provider_binding: editBinding,
+        credential_ids: editCredentialIds,
         allowed_ips: editIps.trim(),
         allowed_models: editModels.trim(),
         expires_at: parseExpiresAt(editExpiresAt),
@@ -336,6 +358,7 @@ export function ApiKeysPage() {
                 <SortableHead label="渠道" columnKey="provider_binding"
                               active={sort === "provider_binding"} direction={order}
                               onToggle={toggleSort} testId="sort-provider_binding" />
+                <TableHead>账号范围</TableHead>
                 <SortableHead label="到期" columnKey="expires_at" active={sort === "expires_at"}
                               direction={order} onToggle={toggleSort} testId="sort-expires_at" />
                 <SortableHead label="最后使用" columnKey="last_used_at"
@@ -464,6 +487,9 @@ export function ApiKeysPage() {
                     ))}
                   </Select>
                 </Field>
+                <CredentialSelector credentials={accounts} selected={credentialIds} binding={binding}
+                                    onChange={setCredentialIds} testidPrefix="key"
+                                    loading={accountsQuery.isLoading} onRetry={() => void accountsQuery.refetch()} />
                 <Field label="来源 IP 白名单（逗号分隔 IP/CIDR，留空不限制）" htmlFor="key-allowed-ips-input">
                   <Input
                     id="key-allowed-ips-input"
@@ -505,7 +531,7 @@ export function ApiKeysPage() {
                   <Button type="button" variant="ghost" onClick={closeCreate}>
                     取消
                   </Button>
-                  <Button type="submit" variant="primary" disabled={creating}
+                  <Button type="submit" variant="primary" disabled={creating || Boolean(createScopeIssue)}
                           data-testid="create-key-submit">
                     <Plus className="mr-1 size-4" />
                     {creating ? "创建中…" : "创建"}
@@ -633,6 +659,9 @@ export function ApiKeysPage() {
                   ))}
                 </Select>
               </Field>
+              <CredentialSelector credentials={accounts} selected={editCredentialIds} binding={editBinding}
+                                  onChange={setEditCredentialIds} testidPrefix="edit-key"
+                                  loading={accountsQuery.isLoading} onRetry={() => void accountsQuery.refetch()} />
               <Field label="来源 IP 白名单（逗号分隔 IP/CIDR，留空不限制）"
                      htmlFor="edit-key-allowed-ips-input">
                 <Input
@@ -676,7 +705,7 @@ export function ApiKeysPage() {
                 <Button type="button" variant="ghost" onClick={closeEdit}>
                   取消
                 </Button>
-                <Button type="submit" variant="primary" disabled={savingEdit}
+                <Button type="submit" variant="primary" disabled={savingEdit || Boolean(editScopeIssue)}
                         data-testid="edit-key-save">
                   {savingEdit ? "保存中…" : "保存"}
                 </Button>

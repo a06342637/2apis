@@ -51,6 +51,7 @@ from ..model_alias import parse_model_aliases
 from ..pricing import PriceTable
 from ..provider.base import Model
 from ..provider.naming import normalize_model_key
+from .account_models import account_model_tables, account_provider_tables, restricted_entries
 from .deps import ApiKeyPrincipal, Services, api_key_user_anthropic
 from .model_catalog import load_catalog, save_catalog
 from .model_merge import (
@@ -558,7 +559,8 @@ def _efforts_of(services: Services) -> dict[str, dict[str, str]] | None:
 
 async def serve_models(services: Services, allowed_models: str = "",
                        request: Request | None = None, *,
-                       user_allowed_models: str = "") -> dict:
+                       user_allowed_models: str = "", credential_ids: tuple[str, ...] = (),
+                       provider_binding: str = "") -> dict:
     """HTTP 出口（`/v1/models`、Playground）：先回旧列表，过期渠道后台刷。
 
     stale-while-revalidate：TTL 到期不再把 zen 探活的十几秒压在请求上。只有某
@@ -575,6 +577,12 @@ async def serve_models(services: Services, allowed_models: str = "",
     Services 依赖）。不传（测试 / 内部调用）时条目不带 `benchmarks` 字段。
     刊例价（`cost`）走同一条 `app.state.price_table` 取法。
     """
+    if credential_ids or provider_binding:
+        entries = await _scoped_http_entries(services, credential_ids, provider_binding,
+                                            allowed_models, user_allowed_models)
+        return {"object": "list", "data": [
+            _entry_response(entry, _benchmarks_of(request), _prices_of(request),
+                            _efforts_of(services)) for entry in entries]}
     connected = await _revalidated_providers(services)
     return _build_response(services, connected, allowed_models,
                            _benchmarks_of(request), _prices_of(request),
@@ -584,7 +592,8 @@ async def serve_models(services: Services, allowed_models: str = "",
 
 async def serve_model(services: Services, model_id: str, allowed_models: str = "",
                       request: Request | None = None, *,
-                      user_allowed_models: str = "") -> dict[str, Any] | None:
+                      user_allowed_models: str = "", credential_ids: tuple[str, ...] = (),
+                      provider_binding: str = "") -> dict[str, Any] | None:
     """单模型查询（`GET /v1/models/{id}`）：命中返回条目，否则 None。
 
     刷新与合并完全复用列表那一段（`_revalidated_providers` + `_served_entries`）：
@@ -594,13 +603,30 @@ async def serve_model(services: Services, model_id: str, allowed_models: str = "
     `_served_entries` 已按白名单过滤，查不到即 404——不能让客户端用单查探测
     「池子里还有哪些模型」。
     """
-    connected = await _revalidated_providers(services)
-    entry = _match_entry(_served_entries(services, connected, allowed_models,
-                                         user_allowed_models), model_id)
+    if credential_ids or provider_binding:
+        entries = await _scoped_http_entries(services, credential_ids, provider_binding,
+                                            allowed_models, user_allowed_models)
+    else:
+        connected = await _revalidated_providers(services)
+        entries = _served_entries(services, connected, allowed_models, user_allowed_models)
+    entry = _match_entry(entries, model_id)
     if entry is None:
         return None
     return _entry_response(entry, _benchmarks_of(request), _prices_of(request),
                            _efforts_of(services))
+
+
+async def _scoped_http_entries(services: Services, credential_ids: tuple[str, ...],
+                               binding: str, allowed_models: str,
+                               user_allowed_models: str) -> list[dict[str, Any]]:
+    if credential_ids:
+        tables = account_provider_tables(services, await account_model_tables(
+            services, credential_ids, binding))
+    else:
+        connected = await _revalidated_providers(services)
+        tables = {provider: table for provider, table in services.model_list_cache.items()
+                  if provider in connected and provider == binding}
+    return restricted_entries(services, tables, allowed_models, user_allowed_models)
 
 
 async def list_models(services: Services,
@@ -640,7 +666,9 @@ def create_router(services: Services) -> APIRouter:
     async def list_v1_models(request: Request,
                              principal: ApiKeyPrincipal = Depends(api_key_user_anthropic)):
         return await serve_models(services, principal.allowed_models, request,
-                                  user_allowed_models=principal.user_allowed_models)
+                                  user_allowed_models=principal.user_allowed_models,
+                                  credential_ids=principal.credential_ids,
+                                  provider_binding=principal.provider_binding)
 
     @router.get("/v1/models/{model_id:path}")
     async def get_v1_model(model_id: str, request: Request,
@@ -655,7 +683,9 @@ def create_router(services: Services) -> APIRouter:
         的模型不能靠单查探测出「池子里有它」。
         """
         item = await serve_model(services, model_id, principal.allowed_models, request,
-                                 user_allowed_models=principal.user_allowed_models)
+                                 user_allowed_models=principal.user_allowed_models,
+                                 credential_ids=principal.credential_ids,
+                                 provider_binding=principal.provider_binding)
         if item is None:
             return JSONResponse(
                 status_code=404,

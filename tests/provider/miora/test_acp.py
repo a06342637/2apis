@@ -37,6 +37,27 @@ def test_short_ticket_classification(status, kind):
     assert AcpHTTPError(status, b"").kind() == kind
 
 
+@pytest.mark.parametrize("method,header", [
+    ("GET", True), ("POST", True), ("GET", False), ("POST", False)])
+async def test_acp_429_keeps_account_retry_hints(method, header, monkeypatch):
+    monkeypatch.setattr("src.provider.base.time.time", lambda: 1000)
+    async def handle(request):
+        return httpx.Response(429, json={"message": "usage reset at 1970-01-01 00:17:10 UTC+0"},
+                              headers={"Retry-After": "20"} if header else {})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        connection = AcpConnection(http, URL, "synthetic")
+        if method == "GET":
+            with pytest.raises(AcpHTTPError) as caught:
+                await connection.__aenter__()
+            error = caught.value
+        else:
+            await connection._post({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+            error = await connection._queue.get()
+        assert error.kind() == ErrKind.SOFT
+        assert error.retry_after_seconds == (20 if header else 30)
+        assert error.retry_at == (1020 if header else 1030)
+
+
 async def test_frame_control_json_and_event_filter():
     response = httpx.Response(200, content=(
         b'event: heartbeat\ndata: invalid\n\n'

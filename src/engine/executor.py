@@ -18,6 +18,7 @@ from typing import Any, Protocol
 import httpx
 from starlette.requests import ClientDisconnect
 
+from ..auth.access import model_allowed
 from ..compat.openai.errors import UpstreamStreamError, stream_error_frame
 from ..compat.openai.request import ChatRequest, InvalidRequest
 from ..compat.openai.response import (
@@ -37,6 +38,7 @@ from ..provider.base import (
     ErrKind,
     Event,
     EventKind,
+    Model,
     UpstreamProtocolViolation,
     UpstreamReloginRequired,
     UpstreamTransportError,
@@ -464,6 +466,8 @@ class _CandidateSnapshot:
     """
 
     rows: tuple[Candidate, ...]
+    bound: bool = False
+    upstream_models: dict[str, str] = field(default_factory=dict)
     excluded: dict[str, _LocalPenalty] = field(default_factory=dict)
 
     def all_rows(self, providers: Iterable[str] | None = None, *,
@@ -574,7 +578,10 @@ class Executor:
 
     # ---------------------------------------------------- 请求作用域候选快照
 
-    def _new_scope(self, model: str | None = None) -> _CandidateSnapshot:
+    def _new_scope(self, model: str | None = None, *, credential_ids: tuple[str, ...] = (),
+                   credential_models: dict[str, dict[str, Model]] | None = None,
+                   credential_model_policy: tuple[str, str] = ("", "")
+                   ) -> _CandidateSnapshot:
         """读一次候选表，得到本次请求（该模型）的只读快照。
 
         用仓储的默认口径（不传 `selectable_only`）：禁用 / 暂停由选号阶段各道
@@ -589,8 +596,30 @@ class Executor:
         尝试的模型**各读一次——同模型只读一次（普通请求就是一次；只有配置了
         `fallback_groups` 且真的切到下一个模型时才多一次）。
         """
-        return _CandidateSnapshot(
-            rows=tuple(self._deps.credentials.candidates(model=model)))
+        rows = tuple(self._deps.credentials.candidates(model=model))
+        raw_models: dict[str, str] = {}
+        if credential_ids:
+            rows = tuple(row for row in rows if row.credential_id in credential_ids)
+            if model is not None and any(not model_allowed(model, spec)
+                                         for spec in credential_model_policy):
+                rows = ()
+            if credential_models is not None and model is not None:
+                for row in rows:
+                    table = credential_models.get(row.credential_id, {})
+                    requested = (self._deps.upstream_model_name(row.provider, model)
+                                 if self._deps.upstream_model_name is not None else model)
+                    # 原始 ID 精确命中优先；同名变体不能被前一个目录项抢走。
+                    match = table.get(requested.lower())
+                    if match is None:
+                        matching = [entry for entry in table.values()
+                                    if normalize_model_key(model) in {
+                                        normalize_model_key(entry.id),
+                                        normalize_model_key(entry.name or entry.id)}]
+                        match = matching[0] if len(matching) == 1 else None
+                    if match is not None:
+                        raw_models[row.credential_id] = match.id
+                rows = tuple(row for row in rows if row.credential_id in raw_models)
+        return _CandidateSnapshot(rows=rows, bound=bool(credential_ids), upstream_models=raw_models)
 
     def _scope(self) -> _CandidateSnapshot:
         """当前请求的快照；不在请求作用域里（自检 / 直接单测）时现取一份。
@@ -612,9 +641,14 @@ class Executor:
         return _candidate_scope.get()
 
     @contextlib.contextmanager
-    def _request_scope(self, model: str | None = None) -> Iterator[_CandidateSnapshot]:
+    def _request_scope(self, model: str | None = None, *, credential_ids: tuple[str, ...] = (),
+                       credential_models: dict[str, dict[str, Model]] | None = None,
+                       credential_model_policy: tuple[str, str] = ("", "")
+                       ) -> Iterator[_CandidateSnapshot]:
         """进入一次「请求 × 模型」作用域：取一次快照，退出时还原上层的（若有）。"""
-        scope = self._new_scope(model)
+        scope = self._new_scope(model, credential_ids=credential_ids,
+                                credential_models=credential_models,
+                                credential_model_policy=credential_model_policy)
         token = _candidate_scope.set(scope)
         try:
             yield scope
@@ -781,7 +815,7 @@ class Executor:
     def _model_deadline(self, candidate: Candidate, penalty: _LocalPenalty | None,
                         target: ModelTarget) -> int | None:
         """该模型在该凭证上的冷却截止：快照行与本地惩罚取较晚者。"""
-        model_scope = self._model_scope(candidate.provider, target.model)
+        model_scope = self._model_scope(candidate.provider, target.model, candidate.credential_id)
         return _later(candidate.model_cooling_until(model_scope),
                       None if penalty is None else penalty.model_cooling.get(model_scope))
 
@@ -895,18 +929,24 @@ class Executor:
         """
         return observed if observed != "-" else self._registered(target)[0]
 
-    def _upstream_model(self, provider_id: str, model: str) -> str:
+    def _upstream_model(self, provider_id: str, model: str,
+                        credential_id: str | None = None) -> str:
         """归一模型名 → 该上游注册的原始 id（大小写变体映射，未知则原样）。"""
+        scope = _candidate_scope.get()
+        if scope is not None and credential_id in scope.upstream_models:
+            return scope.upstream_models[credential_id]
         if self._deps.upstream_model_name is None:
             return model
         return self._deps.upstream_model_name(provider_id, model)
 
     def resolve_target(self, request: ChatRequest,
-                       provider_binding: str | None = None) -> ModelTarget:
+                       provider_binding: str | None = None, *, account_bound: bool = False
+                       ) -> ModelTarget:
         target = resolve(request.model, live(self._deps.default_model)())
-        return self._apply_binding(target, provider_binding)
+        return self._apply_binding(target, provider_binding, account_bound=account_bound)
 
-    def _fallback_chain(self, target: ModelTarget) -> tuple[ModelTarget, ...]:
+    def _fallback_chain(self, target: ModelTarget, *, account_bound: bool = False
+                        ) -> tuple[ModelTarget, ...]:
         """请求模型的回退链；未配置或未命中任何组时只有它自己。
 
         兼容组 `fast=glm-4.6,glm-5`：组名只是入口别名（不进链），成员
@@ -949,7 +989,7 @@ class Executor:
         head_is_requested = resolved[0].model.lower() == target.model.lower()
         head = resolved[0] if head_is_requested else None
         rest = resolved[1:] if head_is_requested else resolved
-        filtered = [member for member in rest if self._fallback_allowed(member)]
+        filtered = [member for member in rest if account_bound or self._fallback_allowed(member)]
         if head is not None:
             return (head, *filtered)
         return tuple(filtered) or (target,)
@@ -978,7 +1018,7 @@ class Executor:
         return any(lower in aliases.get(pid, {}) for pid in target.providers)
 
     def _apply_binding(self, target: ModelTarget,
-                       binding: str | None) -> ModelTarget:
+                       binding: str | None, *, account_bound: bool = False) -> ModelTarget:
         """按 API Key 的渠道绑定收窄候选上游。
 
         绑定是 Key 的策略，不是请求参数：它把候选固定到该渠道，并把
@@ -995,7 +1035,7 @@ class Executor:
                 f"model {target.model!r} is bound to provider {target.providers[0]!r} "
                 f"but this api key is restricted to {binding!r}")
         aliases = self._deps.model_aliases
-        if aliases:
+        if aliases and not account_bound:
             lower = target.model.lower()
             known = tuple(pid for pid in aliases if lower in aliases.get(pid, {}))
             if known and binding not in known:
@@ -1007,7 +1047,9 @@ class Executor:
 
     def preflight(self, request: ChatRequest,
                   provider_binding: str | None = None,
-                  *, username: str = "unknown") -> ModelTarget:
+                  *, username: str = "unknown", credential_ids: tuple[str, ...] = (),
+                  credential_models: dict[str, dict[str, Model]] | None = None,
+                  credential_model_policy: tuple[str, str] = ("", "")) -> ModelTarget:
         """流式路由建立 StreamingResponse 之前的前置校验。
 
         生成器体内的异常发生在响应头（200）已发出之后，只能表现为连接被
@@ -1021,12 +1063,24 @@ class Executor:
         内容拒绝冻结也在这里前置：冻结是「该发起者在该渠道被停用」，
         必须在建流之前给 403，而不是等上游再拒一次才报错。
         """
-        target = self.resolve_target(request, provider_binding)
-        chain = self._fallback_chain(target)
-        self._ensure_access_allowed(chain, username)
+        target = self.resolve_target(request, provider_binding, account_bound=bool(credential_ids))
+        chain = self._fallback_chain(target, account_bound=bool(credential_ids))
+        self._ensure_access_allowed(chain, username, credential_ids=credential_ids,
+                                    credential_models=credential_models,
+                                    credential_model_policy=credential_model_policy)
         for attempt in chain:
-            if self._registered(attempt):
+            registered = ([pid for pid in attempt.providers if pid in self._deps.providers]
+                          if credential_ids else self._registered(attempt))
+            if registered:
+                if credential_ids:
+                    scope = self._new_scope(attempt.model, credential_ids=credential_ids,
+                                            credential_models=credential_models,
+                                            credential_model_policy=credential_model_policy)
+                    if not scope.rows:
+                        continue
                 return target
+        if credential_ids:
+            raise NoHealthyCredential("no available account in this api key's credential scope")
         raise NoProviderForModel(f"no provider registered for model {target.model!r}")
 
     # ------------------------------------------------------- 内容拒绝 / 冻结
@@ -1042,7 +1096,10 @@ class Executor:
         return get_api_key_id() or "unknown"
 
     def _ensure_access_allowed(self, chain: tuple[ModelTarget, ...],
-                               username: str) -> None:
+                               username: str, *, credential_ids: tuple[str, ...] = (),
+                               credential_models: dict[str, dict[str, Model]] | None = None,
+                               credential_model_policy: tuple[str, str] = ("", "")
+                               ) -> None:
         """冻结达阈值时前置 403；阈值 ≤0 或无仓储时完全不动（旧行为）。
 
         判定粒度是「链项的所有候选渠道都被冻结」才拦：多上游模型里只冻结
@@ -1058,7 +1115,15 @@ class Executor:
         subject = self._freeze_subject(username)
         blocked: list[str] = []
         for attempt in chain:
-            providers = self._registered(attempt)
+            if credential_ids:
+                scope = self._new_scope(attempt.model, credential_ids=credential_ids,
+                                        credential_models=credential_models,
+                                        credential_model_policy=credential_model_policy)
+                providers = list(dict.fromkeys(row.provider for row in scope.rows
+                                               if row.provider in attempt.providers
+                                               and row.provider in self._deps.providers))
+            else:
+                providers = self._registered(attempt)
             if not providers:
                 continue
             allowed = [provider for provider in providers
@@ -1108,6 +1173,9 @@ class Executor:
                              translator: StreamSink | None = None,
                              provider_binding: str | None = None,
                              on_terminal: Callable[[str, str], None] | None = None,
+                             credential_ids: tuple[str, ...] = (),
+                             credential_models: dict[str, dict[str, Model]] | None = None,
+                             credential_model_policy: tuple[str, str] = ("", ""),
                              ) -> AsyncIterator[bytes]:
         """流式出口的最终兜底：任何逃逸异常都转成 SSE 错误帧。
 
@@ -1121,6 +1189,8 @@ class Executor:
         inner = ContextBoundIterator(self.stream(request, username=username,
                             translator=translator,
                             provider_binding=provider_binding,
+                            credential_ids=credential_ids, credential_models=credential_models,
+                            credential_model_policy=credential_model_policy,
                             on_terminal=on_terminal))
         try:
             async for frame in inner:
@@ -1139,6 +1209,9 @@ class Executor:
                      translator: StreamSink | None = None,
                      provider_binding: str | None = None,
                      on_terminal: Callable[[str, str], None] | None = None,
+                     credential_ids: tuple[str, ...] = (),
+                     credential_models: dict[str, dict[str, Model]] | None = None,
+                     credential_model_policy: tuple[str, str] = ("", ""),
                      ) -> AsyncIterator[bytes]:
         """流式执行；上游错误按分类冷却并换号，最多 3 次。
 
@@ -1155,8 +1228,8 @@ class Executor:
         回调后立即关闭连接是正常收尾（SSE 流在 [DONE] 发出到结束帧
         more_body=False 之间有一拍竞态，框架会把它当断开），按成功记账。
         """
-        target = self.resolve_target(request, provider_binding)
-        chain = self._fallback_chain(target)
+        target = self.resolve_target(request, provider_binding, account_bound=bool(credential_ids))
+        chain = self._fallback_chain(target, account_bound=bool(credential_ids))
         state = _StreamState(translator=translator or StreamTranslator(target.model),
                              started=time.monotonic(), username=username)
         if self._deps.affinity is not None:
@@ -1169,7 +1242,9 @@ class Executor:
                 _note_upstream_degraded()
             # 每个链项一个「请求 × 模型」候选快照作用域：同模型内的选号 / 等待
             # 续上 / 成因拆解 / 归因复用同一份只读快照，不再逐次全表读库（P2-17）。
-            with self._request_scope(attempt.model):
+            with self._request_scope(attempt.model, credential_ids=credential_ids,
+                                     credential_models=credential_models,
+                                     credential_model_policy=credential_model_policy):
                 if translator is None:
                     # 每链项自成一路出口（默认 chat 出口）：模型名随链项走。
                     # 注入的 translator（responses / anthropic）由调用方持有，
@@ -1442,7 +1517,8 @@ class Executor:
                 if not broken:
                     # 上游正常结束：清错误累计、重新粘定、按成功记账并收尾
                     self._deps.credentials.save_success(
-                        credential_id, model=self._model_scope(provider_id, target.model))
+                        credential_id,
+                        model=self._model_scope(provider_id, target.model, credential_id))
                     self._confirm_probe(credential_id)
                     self._remember(request, state.username, credential_id,
                                    keep_existing=last_kind in STICKY_KEEP_KINDS)
@@ -1784,7 +1860,7 @@ class Executor:
         换号重试时每次调用都会重设，不会沿用上一个凭证的出口。
         """
         set_credential_id(credential_id)
-        upstream_model = self._upstream_model(provider_id, model)
+        upstream_model = self._upstream_model(provider_id, model, credential_id)
         stream = self._deps.providers[provider_id].stream_chat(
             credential_data, payload, upstream_model)
         # 续写上限可热更：0 表示关闭，每次请求读当前值
@@ -1905,6 +1981,9 @@ class Executor:
     async def complete(self, request: ChatRequest, *, username: str = "unknown",
                        provider_binding: str | None = None,
                        is_disconnected: Callable[[], Any] | None = None,
+                       credential_ids: tuple[str, ...] = (),
+                       credential_models: dict[str, dict[str, Model]] | None = None,
+                       credential_model_policy: tuple[str, str] = ("", ""),
                        ) -> dict[str, Any]:
         """非流式：按兼容组回退链依次尝试，逐链项走完整的换号重试。
 
@@ -1915,9 +1994,11 @@ class Executor:
         没有 SSE 的断开信号，聚合期间客户端早断只靠它发现；断开按与流式同一
         口径记 `client_disconnect`（能拿到多少用量记多少）且绝不冷却凭证。
         """
-        target = self.resolve_target(request, provider_binding)
-        chain = self._fallback_chain(target)
-        self._ensure_access_allowed(chain, username)
+        target = self.resolve_target(request, provider_binding, account_bound=bool(credential_ids))
+        chain = self._fallback_chain(target, account_bound=bool(credential_ids))
+        self._ensure_access_allowed(chain, username, credential_ids=credential_ids,
+                                    credential_models=credential_models,
+                                    credential_model_policy=credential_model_policy)
         last_error: Exception | None = None
         for index, attempt in enumerate(chain):
             if index:
@@ -1926,7 +2007,9 @@ class Executor:
             try:
                 # 每个链项一个候选快照作用域：同链项内的选号 / 等待续上 / 成因
                 # 拆解 / 归因复用同一份只读快照，不再逐次全表读库（P2-17）。
-                with self._request_scope(attempt.model):
+                with self._request_scope(attempt.model, credential_ids=credential_ids,
+                                         credential_models=credential_models,
+                                         credential_model_policy=credential_model_policy):
                     return await self._complete_model(
                         self._with_model(request, attempt.model), attempt, username,
                         is_disconnected=is_disconnected)
@@ -2253,7 +2336,8 @@ class Executor:
                         last_error, last_kind = error, kind
                 else:
                     self._deps.credentials.save_success(
-                        credential_id, model=self._model_scope(provider_id, target.model))
+                        credential_id,
+                        model=self._model_scope(provider_id, target.model, credential_id))
                     self._confirm_probe(credential_id)
                     self._remember(request, username, credential_id,
                                    keep_existing=last_kind in STICKY_KEEP_KINDS)
@@ -2512,7 +2596,8 @@ class Executor:
         模型列表只是展示口径，直连指定不受黑名单影响，见 README）。
         """
         aliases = self._deps.model_aliases
-        if target.forced or not aliases:
+        scope = _candidate_scope.get()
+        if target.forced or not aliases or (scope is not None and scope.bound):
             return target.providers
         lower = target.model.lower()
         known = tuple(
@@ -2716,8 +2801,12 @@ class Executor:
         """
         guard = self._deps.half_open
         while usable:
-            credential_id = (self._sticky(usable, tried, affinity_id)
-                             or self._deps.scheduler.select(usable, tried, now))
+            scope = _candidate_scope.get()
+            if scope is not None and scope.bound:
+                credential_id = self._deps.scheduler.select(usable, tried, now, round_robin=True)
+            else:
+                credential_id = (self._sticky(usable, tried, affinity_id)
+                                 or self._deps.scheduler.select(usable, tried, now))
             if credential_id is None:
                 return None
             if guard is None:
@@ -2746,7 +2835,7 @@ class Executor:
         cooling = candidate.cooling_until
         if cooling is not None and cooling <= now:
             return (credential_id, "")
-        scope = self._model_scope(candidate.provider, target.model)
+        scope = self._model_scope(candidate.provider, target.model, candidate.credential_id)
         model_until = candidate.model_cooling_until(scope)
         if model_until is not None and model_until <= now:
             return (credential_id, scope)
@@ -2779,9 +2868,10 @@ class Executor:
         scope = self._scope() if scope is None else scope
         selected = [
             c for c in candidates
-            if c.is_selectable(now, self._model_scope(c.provider, target.model))
+            if c.is_selectable(now, self._model_scope(c.provider, target.model, c.credential_id))
             and not scope.penalized(c.credential_id,
-                                    self._model_scope(c.provider, target.model), now)
+                                    self._model_scope(c.provider, target.model, c.credential_id),
+                                    now)
             and (guard is None or not guard.blocked(c, target.model))
             and (inflight is None or not inflight.blocked(c.credential_id))
         ]
@@ -2868,13 +2958,13 @@ class Executor:
         if self._deps.half_open is not None and kind is not ErrKind.QUEUE:
             # 又记了一次错误 → 之前「已探通」的结论作废，下次到期重新半开。
             # QUEUE 是「等几秒原号重开」，不是凭证故障，不必重置。
-            scope = self._model_scope(provider_id, model)
+            scope = self._model_scope(provider_id, model, credential_id)
             self._deps.half_open.reset(credential_id, "")
             self._deps.half_open.reset(credential_id, scope)
         outcome = self._deps.scheduler.note_error(
             self._candidate_or_none(credential_id, provider_id),
             kind, int(time.time()),
-            model=self._model_scope(provider_id, model),
+            model=self._model_scope(provider_id, model, credential_id),
             retry_at=getattr(error, "retry_at", None))
         if kind is ErrKind.DEAD:
             # 401/403 不都是 session 过期：11140 是账号被上游风控限制，管理台
@@ -3036,9 +3126,10 @@ class Executor:
         return _QueueRestart(wait=wait, rounds=rounds, attempts=attempts - 1,
                              pinned=(credential_id, credential_data))
 
-    def _model_scope(self, provider_id: str, model: str) -> str:
+    def _model_scope(self, provider_id: str, model: str,
+                     credential_id: str | None = None) -> str:
         """冷却表登记的模型名：用上游原始名（与 provider 实际调用的名字一致）。"""
-        return self._upstream_model(provider_id, model)
+        return self._upstream_model(provider_id, model, credential_id)
 
 @dataclass(slots=True)
 class _StreamState:

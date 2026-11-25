@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 import type { ModelBenchmarks, ModelInfo } from "../api/types";
 import { aliasTitle, isCustomAlias } from "../api/modelExtras";
 import { providerChartColor, providerLabel, providerRank } from "../api/providers";
+import { isChatModel, mioraModelGroup, modelPurpose } from "../lib/modelCapabilities";
+import type { ModelPurpose } from "../lib/modelCapabilities";
 import { ProviderIcon } from "./ProviderIcon";
 import { Badge, Input } from "../ui";
 
@@ -43,6 +45,7 @@ export function modelRate(item: ModelInfo): number | undefined {
 
 /** 默认选中：倍率最小的模型；全部无倍率时回退列表第一个。 */
 export function pickDefaultModel(models: PickableModel[]): string {
+  models = models.filter(item => isChatModel(item));
   let best: PickableModel | null = null;
   let bestRate = Infinity;
   for (const item of models) {
@@ -151,6 +154,9 @@ export interface ProviderModel {
   label: string;
   /** 该渠道下的倍率（`by_provider` 优先，单渠道回退合并值）；上游没给则为 undefined */
   rate?: number;
+  purpose?: ModelPurpose;
+  rawId?: string;
+  gatewayGroup?: ReturnType<typeof mioraModelGroup>;
 }
 
 /**
@@ -173,6 +179,10 @@ export function groupModelsByProvider(models: ModelInfo[]): Map<string, Provider
     for (const provider of item.providers) {
       const entry: ProviderModel = {
         id: item.id, label: displayName(item), rate: providerRate(item, provider),
+        ...(provider === "miora" ? {
+          purpose: modelPurpose(item, provider), rawId: providerRawId(item, provider) ?? item.id,
+          gatewayGroup: mioraModelGroup(item),
+        } : {}),
       };
       const bucket = grouped.get(provider);
       if (bucket) bucket.push(entry);
@@ -340,6 +350,8 @@ function ModelRow({
   onSelect: () => void;
 }) {
   const providers = sortProviders(item.providers);
+  const purpose = modelPurpose(item, item.providers.includes("miora") ? "miora" : undefined);
+  const mioraRaw = item.providers.includes("miora") ? providerRawId(item, "miora") ?? item.id : null;
   return (
     <button
       type="button"
@@ -369,11 +381,22 @@ function ModelRow({
         {/* 主名用上游人类可读名（Qwen3.8-Max）；与内部 id 不同时补一行小字 id，
             否则用户无法用 id 直连指定。 */}
         <span className="block truncate text-sm font-semibold">{displayName(item)}</span>
-        {displayName(item) !== item.id && (
+        {displayName(item) !== item.id && mioraRaw !== item.id && (
           <span className="block truncate font-mono text-[11px] text-muted-foreground">
             {item.id}
           </span>
         )}
+        <span data-testid="model-use" className="mt-1 block text-[11px] leading-snug text-muted-foreground">
+          {item.providers.length > 1 && item.providers.includes("miora") ? "Miora：" : ""}{purpose.label}
+          {purpose.route && (
+            <span className="ml-1 rounded bg-muted px-1 py-0.5 font-medium">
+              {purpose.route}
+            </span>
+          )}
+        </span>
+        {mioraRaw && <span className="mt-1 block break-all font-mono text-[10px] text-muted-foreground">
+          {item.providers.length > 1 ? "Miora " : ""}原始 ID：{mioraRaw}
+        </span>}
       </span>
       {/* 渠道 + 倍率常驻右侧：名称 `flex-1` 占满左侧后徽章组自然贴右；徽章组
           自身 `flex-wrap`，多渠道放不下时**在右侧区域内折行**，而不是整组掉到
@@ -406,7 +429,7 @@ function ModelRow({
  * 也能看清选中项。选中值语义见 `modelValue`。
  */
 export function ModelPicker({
-  models,
+  models: suppliedModels,
   value,
   onChange,
   onPin,
@@ -421,6 +444,7 @@ export function ModelPicker({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
+  const models = useMemo(() => suppliedModels.filter(item => isChatModel(item)), [suppliedModels]);
 
   const options = useMemo(() => filterOptions(models), [models]);
   const visible = useMemo(

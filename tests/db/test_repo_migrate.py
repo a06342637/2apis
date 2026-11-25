@@ -9,6 +9,33 @@ from src.db.conn import Database
 from src.db.migrate import apply_schema
 
 
+def test_api_key_account_binding_migrates_legacy_keys_without_widening(tmp_path):
+    """v39 老 Key 补 [] 保留全池；之后指定集合重启升级也不被重置。"""
+    from src.db.migrate import SCHEMA_VERSION
+
+    db = Database(tmp_path / "legacy-key.sqlite3")
+    conn = db.connect()
+    apply_schema(conn)
+    conn.execute("ALTER TABLE api_keys DROP COLUMN credential_ids")
+    conn.execute("PRAGMA user_version = 39")
+    conn.execute(
+        "INSERT INTO api_keys(id, username, key_digest, preview, created_at) "
+        "VALUES ('legacy', 'root', 'digest', 'preview', 12)"
+    )
+    apply_schema(conn)
+    assert (
+        conn.execute("SELECT credential_ids FROM api_keys WHERE id='legacy'").fetchone()[0] == "[]"
+    )
+    conn.execute("UPDATE api_keys SET credential_ids='[\"selected\"]' WHERE id='legacy'")
+    apply_schema(conn)
+    row = conn.execute(
+        "SELECT username, key_digest, created_at, credential_ids FROM api_keys WHERE id='legacy'"
+    ).fetchone()
+    assert tuple(row) == ("root", "digest", 12, '["selected"]')
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    db.close()
+
+
 def test_migration_declarations_match_schema_sql():
     """防漂移：迁移声明的列必须在 schema.sql 里存在，删表清单不得重建。
 
@@ -762,7 +789,7 @@ def test_schema_v39_adds_edit_version_and_model_whitelist_on_old_db(tmp_path):
     columns = {row[1] for row in db.connect().execute(
         "PRAGMA table_info(credentials)")}
     assert {"updated_at", "allowed_models"} <= columns
-    assert db.connect().execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 39
+    assert db.connect().execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     defaults = {row[1]: row[4] for row in db.connect().execute(
         "PRAGMA table_info(credentials)")}
     assert defaults["updated_at"] in ("0", 0)

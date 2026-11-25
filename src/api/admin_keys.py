@@ -14,6 +14,7 @@ from ..audit.actions import (
     ACTION_API_KEY_UPDATE,
 )
 from ..auth.access import normalize_allowed_ips, normalize_allowed_models
+from ..auth.account_binding import normalize_credential_ids
 from ..compat.openai.request import InvalidRequest
 from ..db.key_update import EDITABLE_COLUMNS, update_api_key_fields
 from ..engine.limits import day_start
@@ -64,6 +65,24 @@ def _parse_expires_at(raw: object) -> int | None:
     return value
 
 
+def _parse_credential_ids(raw: object) -> list[str]:
+    try:
+        return normalize_credential_ids(raw)
+    except ValueError as error:
+        raise InvalidRequest(str(error)) from error
+
+
+def _validate_accounts(services: Services, account_ids: list[str], binding: str) -> None:
+    """写入时校验存在性与渠道绑定；已删除的历史绑定保留到用户明确编辑。"""
+    rows = {row.credential_id: row for row in services.credentials.candidates()}
+    for account_id in account_ids:
+        candidate = rows.get(account_id)
+        if candidate is None:
+            raise InvalidRequest(f"credential not found: {account_id}")
+        if binding and candidate.provider != binding:
+            raise InvalidRequest(f"credential {account_id} does not belong to provider {binding}")
+
+
 def _parse_quota(raw: object) -> KeyQuota:
     """校验 Key 配额（dict 或 JSON 文本；空 = 不限制），错误归一为 400。"""
     try:
@@ -110,6 +129,7 @@ _KEY_FIELD_PARSERS: dict[str, Callable[[object], object]] = {
     "allowed_ips": _parse_allowed_ips,
     "allowed_models": _parse_allowed_models,
     "expires_at": _parse_expires_at,
+    "credential_ids": _parse_credential_ids,
 }
 
 # 审计 detail 里的字段名与「空值」文案：`''` 直接打印读不出含义
@@ -120,6 +140,7 @@ _FIELD_LABELS: dict[str, str] = {
     "allowed_ips": "来源 IP",
     "allowed_models": "模型白名单",
     "expires_at": "到期",
+    "credential_ids": "绑定账号",
 }
 _FIELD_EMPTY_TEXT: dict[str, str] = {
     "name": "(未命名)",
@@ -127,6 +148,7 @@ _FIELD_EMPTY_TEXT: dict[str, str] = {
     "allowed_ips": "不限制",
     "allowed_models": "不限制",
     "expires_at": "永不过期",
+    "credential_ids": "不限制",
 }
 
 
@@ -204,18 +226,21 @@ def create_router(services: Services) -> APIRouter:
         allowed_models = _parse_allowed_models(payload.get("allowed_models"))
         expires_at = _parse_expires_at(payload.get("expires_at"))
         quota = _parse_quota(payload.get("quota"))
+        account_ids = _parse_credential_ids(payload.get("credential_ids", []))
+        _validate_accounts(services, account_ids, binding)
         created = api_keys.create(
             principal.username, str(payload.get("name") or ""),
             provider_binding=binding, allowed_ips=allowed_ips,
             allowed_models=allowed_models, expires_at=expires_at,
-            quota=quota_text(quota))
+            quota=quota_text(quota), credential_ids=account_ids)
         # 发 Key 是「造了一把进网关的凭据」，必须留痕：明文只返回这一次，
         # 事后只能靠审计行回答「这把能刷全模型的 Key 是谁建的、什么时候」。
         services.audit.record(
             actor=principal.username, action=ACTION_API_KEY_CREATE,
             target=created["id"],
             detail=_policy_detail(str(payload.get("name") or ""), binding,
-                                  allowed_ips, allowed_models, expires_at, quota),
+                                  allowed_ips, allowed_models, expires_at, quota)
+                   + (f"；绑定账号 {', '.join(account_ids)}" if account_ids else ""),
             ip=request_ip(request, services.settings))
         return created          # 明文只在此返回一次
 
@@ -252,6 +277,9 @@ def create_router(services: Services) -> APIRouter:
                 "配额请用 PUT /api/api-keys/{key_id}/quota）")
         changes = {field: _KEY_FIELD_PARSERS[field](payload[field])
                    for field in EDITABLE_COLUMNS if field in payload}
+        if "credential_ids" in changes or "provider_binding" in changes:
+            _validate_accounts(services, changes.get("credential_ids", row["credential_ids"]),
+                               changes.get("provider_binding", row["provider_binding"]))
         diffs = _change_detail(row, changes)
         if not diffs:
             # 没提供字段 / 提供了但值没变：不写库、不留审计（空改动记录只会

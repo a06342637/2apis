@@ -13,6 +13,8 @@ import { notifyUnauthorized } from "../api/unauthorized";
 import { errorText } from "../lib/errors";
 import { PageHeader } from "../components/PageHeader";
 import { ModelPicker, modelValue, pickDefaultModel } from "../components/ModelPicker";
+import { MioraCapabilities } from "../components/MioraCapabilities";
+import { isChatModel, usesMioraOnly } from "../lib/modelCapabilities";
 import { buildSamplingParams, effortOptions } from "../lib/playgroundParams";
 import { Button, Card, Checkbox, Empty, Field, Input, Label, Notice, Panel, Select, Textarea } from "../ui";
 
@@ -48,7 +50,7 @@ export function PlaygroundPage() {
 
   // 每个模型的受控值：单渠道模型带 @provider（该组选项即强制指定），
   // 多渠道模型用裸 id（走自动路由）。
-  const models = fetched.map((item) => ({ ...item, value: modelValue(item) }));
+  const models = fetched.filter(item => isChatModel(item)).map((item) => ({ ...item, value: modelValue(item) }));
   const selectedModel = model || pickDefaultModel(models);
   // 选中模型的元数据：优先精确匹配 value，退化为按小写基础名匹配
   const selectedInfo =
@@ -56,6 +58,8 @@ export function PlaygroundPage() {
     models.find((item) => item.value === selectedModel.split("@")[0]);
   // 该模型可选的推理档位候选；null = 不适用，控件不渲染
   const efforts = effortOptions(selectedInfo);
+  const mioraOnly = usesMioraOnly(selectedInfo, selectedModel);
+  const supportsImages = mioraOnly ? false : selectedInfo?.supports_images;
   // 换模型时清空推理档位：档位是模型相关参数，沿用上一个模型的选择
   // 既可能落在新模型的枚举之外，也会悄悄改变请求行为。值没变时不动，
   // 避免重复点同一行把用户刚选的档位抹掉。
@@ -219,6 +223,11 @@ export function PlaygroundPage() {
           <p className="text-xs leading-relaxed text-muted-foreground">
             默认由调度器在可用渠道间自动选健康号；在「当前选择」条点渠道可强制走单一渠道（如 glm-5.2@trae）。
           </p>
+          {mioraOnly && (
+            <div data-testid="playground-miora-usage" className="rounded-lg border border-border bg-muted/30 px-3 py-2">
+              <MioraCapabilities />
+            </div>
+          )}
 
           {selectedInfo && (selectedInfo.max_input_tokens !== undefined ||
             selectedInfo.max_output_tokens !== undefined ||
@@ -246,15 +255,15 @@ export function PlaygroundPage() {
               )}
               {selectedInfo.supports_images !== undefined && (
                 <span className="inline-flex items-center gap-1">
-                  图片
-                  {selectedInfo.supports_images
+                  图像理解（输入）
+                  {supportsImages
                     ? <Check className="size-3.5 text-ok" />
                     : <X className="size-3.5 text-destructive" />}
                 </span>
               )}
               {selectedInfo.supports_tool_call !== undefined && (
                 <span className="inline-flex items-center gap-1">
-                  工具调用
+                  {mioraOnly ? "客户端工具（JSON模拟）" : "工具调用"}
                   {selectedInfo.supports_tool_call
                     ? <Check className="size-3.5 text-ok" />
                     : <X className="size-3.5 text-destructive" />}

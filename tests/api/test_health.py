@@ -9,14 +9,14 @@ from tests.helpers.auth import isolated_settings as _settings
 
 
 def test_healthz_reports_pool_counts(client):
+    client.app.state.credentials.add(provider="trae", credential_data={"accessToken": "user-added"})
     response = client.get("/healthz")
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok" and body["service"] == "coding2api"
     assert body["version"]
     counts = body["credentials"]
-    # 默认装配会种子 zen / kilo 两条无凭证虚拟凭证（可选中 → ready）
-    assert counts == {"total": 2, "ready": 2, "cooling": 0, "paused": 0, "disabled": 0}
+    assert counts == {"total": 1, "ready": 1, "cooling": 0, "paused": 0, "disabled": 0}
     # 老端点保留
     assert client.get("/health").json() == {"status": "ok"}
 
@@ -59,8 +59,8 @@ def test_healthz_counts_partition_the_pool(tmp_path):
     conn.close()
     with TestClient(app) as http:
         counts = http.get("/healthz").json()["credentials"]
-    # 4 条 trae + 种子的一条 zen、一条 kilo（都 ready）
-    assert counts == {"total": 6, "ready": 3, "cooling": 1, "paused": 1,
+    # 池中只有用户显式添加的 4 条 TRAE。
+    assert counts == {"total": 4, "ready": 1, "cooling": 1, "paused": 1,
                       "disabled": 1}
 
 
@@ -74,7 +74,7 @@ def test_healthz_returns_503_when_no_ready_credential(tmp_path):
 
     settings = _settings(tmp_path)
     app = build_app(settings)
-    # 把种子（zen / kilo）连同新加的凭证全部禁用 → ready=0
+    # 把用户添加的凭证暂停 → ready=0。
     repo = app.state.credentials
     repo.add(provider="trae", credential_data={"accessToken": "a"})
     conn = sqlite3.connect(settings.db_path)
@@ -87,21 +87,16 @@ def test_healthz_returns_503_when_no_ready_credential(tmp_path):
         body = response.json()
         assert body["status"] == "unavailable"
         assert body["credentials"]["ready"] == 0
-        assert body["credentials"]["total"] == body["credentials"]["paused"] == 3
+        assert body["credentials"]["total"] == body["credentials"]["paused"] == 1
         # 存活探针不受池子影响
         assert http.get("/health").status_code == 200
 
 
 def test_healthz_503_when_pool_is_empty(tmp_path):
-    """空池（连种子都被删光）同样不可用 → 503，计数全 0。"""
-    import sqlite3
+    """新库默认空池不可用 → 503，计数全 0。"""
 
     settings = _settings(tmp_path)
     app = build_app(settings)
-    conn = sqlite3.connect(settings.db_path)
-    conn.execute("DELETE FROM credentials")
-    conn.commit()
-    conn.close()
     with TestClient(app) as http:
         response = http.get("/healthz")
     assert response.status_code == 503
@@ -126,6 +121,7 @@ def test_healthz_accepts_head(tmp_path):
 
     settings = _settings(tmp_path)
     app = build_app(settings)
+    app.state.credentials.add(provider="zen", credential_data={}, added_by="root")
     with TestClient(app) as http:
         ready = http.head("/healthz")
     assert ready.status_code == 200

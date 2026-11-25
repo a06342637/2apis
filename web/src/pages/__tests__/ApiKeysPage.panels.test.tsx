@@ -151,9 +151,13 @@ describe("CC Switch 一键导入", () => {
     expect(screen.queryByTestId("ccswitch-import")).not.toBeInTheDocument();
   });
 
-  it("默认模型下拉来自 Playground 模型列表，选中后写进深链", async () => {
-    await createKey();
-    await waitFor(() => expect(screen.getByTestId("ccswitch-claude")).toHaveAttribute("href"));
+  it("默认模型下拉来自实际 Key 的模型列表，选中后写进深链", async () => {
+    const fetchSpy = await createKey();
+    await screen.findByRole("option", { name: "glm-5.2" });
+    expect(fetchSpy).toHaveBeenCalledWith("/v1/models", expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer sk-real-key" }),
+    }));
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/api/playground/models"))).toBe(false);
 
     // 下拉分组展示模型（多渠道自动调度 / 仅 XX），值为 Playground 口径
     await userEvent.selectOptions(screen.getByTestId("ccswitch-model"), "glm-5.2");
@@ -176,7 +180,7 @@ describe("API Key 列表「导入 CC Switch」", () => {
   it("行内按钮打开对话框：未粘贴 Key 时导入按钮禁用，粘贴后生成深链", async () => {
     mockFetch({
       "/api/api-keys": { api_keys: [KEY] },
-      "/api/playground/models": PLAYGROUND_MODELS,
+      "/v1/models": PLAYGROUND_MODELS,
     });
     renderPage(<ApiKeysPage />);
     await settle();
@@ -196,7 +200,7 @@ describe("API Key 列表「导入 CC Switch」", () => {
   it("关闭对话框后清除粘贴的 Key 并卸载按钮", async () => {
     mockFetch({
       "/api/api-keys": { api_keys: [KEY] },
-      "/api/playground/models": PLAYGROUND_MODELS,
+      "/v1/models": PLAYGROUND_MODELS,
     });
     renderPage(<ApiKeysPage />);
     await settle();
@@ -300,7 +304,7 @@ async function createKey() {
       return jsonResponse({ ...KEY, api_key: "sk-real-key" });
     }
     if (url === "/api/api-keys") return jsonResponse({ api_keys: [] });
-    if (url.includes("/api/playground/models")) return jsonResponse(PLAYGROUND_MODELS);
+    if (url === "/v1/models") return jsonResponse(PLAYGROUND_MODELS);
     throw new Error(`未 mock: ${url}`);
   });
   vi.stubGlobal("fetch", fetchSpy);
@@ -310,9 +314,10 @@ async function createKey() {
   await userEvent.type(screen.getByTestId("key-name"), "test");
   await userEvent.click(screen.getByRole("button", { name: "创建" }));
   expect(await screen.findByTestId("new-key-plaintext")).toHaveTextContent("sk-real-key");
+  return fetchSpy;
 }
 
-/** Playground 模型列表（`/api/playground/models`）：一个多渠道 + 两个单渠道。 */
+/** Key 模型列表（`/v1/models`）：一个多渠道 + 两个单渠道。 */
 const PLAYGROUND_MODELS = {
   object: "list",
   data: [

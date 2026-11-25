@@ -178,6 +178,7 @@ describe("ApiKeysPage 配额 UI", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/credentials") return jsonResponse({ credentials: [] });
         if (String(input) === "/api/api-keys" && init?.method === "POST") {
           calls.push(JSON.parse(String(init.body)));
           return jsonResponse({ ...KEY, api_key: "sk-x" });
@@ -192,7 +193,7 @@ describe("ApiKeysPage 配额 UI", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
     await screen.findByTestId("new-key-plaintext");
     expect(calls).toEqual([
-      { name: "no-quota", provider_binding: "", allowed_ips: "", allowed_models: "", expires_at: null },
+      { name: "no-quota", provider_binding: "", credential_ids: [], allowed_ips: "", allowed_models: "", expires_at: null },
     ]);
   });
 
@@ -201,6 +202,7 @@ describe("ApiKeysPage 配额 UI", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input) === "/api/credentials") return jsonResponse({ credentials: [] });
         if (String(input) === "/api/api-keys" && init?.method === "POST") {
           calls.push(JSON.parse(String(init.body)));
           return jsonResponse({ ...KEY, api_key: "sk-x" });
@@ -220,6 +222,7 @@ describe("ApiKeysPage 配额 UI", () => {
       {
         name: "",
         provider_binding: "",
+        credential_ids: [],
         allowed_ips: "",
         allowed_models: "",
         expires_at: null,

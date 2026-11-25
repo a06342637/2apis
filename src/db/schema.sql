@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- 与到期时间（epoch 秒，NULL=永不过期）。
     allowed_models TEXT NOT NULL DEFAULT '',
     expires_at    INTEGER,
+    -- 指定账号 ID 集合（JSON string[]）；[] 不限制，删除账号不清空此策略。
+    credential_ids TEXT NOT NULL DEFAULT '[]',
     -- Key 级配额（JSON 文本，''=不限制）。结构见 src/auth/access.py
     -- 的 parse_key_quota：daily_requests / daily_tokens / daily_cost_usd /
     -- rpm / tpm / max_concurrency，0 或缺失的键 = 该项关闭。

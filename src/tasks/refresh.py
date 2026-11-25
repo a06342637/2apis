@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Callable
@@ -37,16 +38,23 @@ class RefreshTask:
         self.skew_seconds = skew_seconds
         self._now = now or (lambda: int(time.time()))
         self._pacer = pacer
+        self._rotations: set[asyncio.Task] = set()
+        self._stopping = False
+
+    def resume(self) -> None:
+        """仅 runner 明确重新启动时恢复维护，停机闸门不改数据库启停状态。"""
+        self._stopping = False
 
     async def run_once(self, *, credential_id: str | None = None) -> TaskReport:
         report = TaskReport()
         current = self._now()
         for candidate in self._credentials.candidates():
+            if self._stopping:
+                break
             if credential_id is not None and candidate.credential_id != credential_id:
                 continue
-            # 硬禁用与用户软暂停（enabled=0）都跳过：暂停凭证不该被预刷新占用
-            # 调度窗口，线上失败的也只会是早已停用的旧凭证（掩盖真实状态）。
-            if candidate.disabled or not candidate.enabled:
+            # 软暂停只停 API 调度，预刷新仍须维护登录态；硬禁用票据不再尝试。
+            if candidate.disabled:
                 report.skipped += 1
                 continue
             provider = self._providers.get(candidate.provider)
@@ -89,32 +97,70 @@ class RefreshTask:
                 if not _needs_refresh(provider, data, self.skew_seconds, current):
                     report.skipped += 1
                     continue
+                if self._stopping:
+                    report.skipped += 1
+                    continue
+                # shield 的单位必须包含上游轮转与同步落库；取消不能在两者之间丢票。
+                operation = asyncio.create_task(self._rotate_and_save(
+                    provider, candidate.credential_id, data, report))
+                self._rotations.add(operation)
                 try:
-                    with credential_scope(candidate.credential_id):
-                        refreshed = await provider.refresh(data)
-                except UpstreamReloginRequired as error:
-                    # 续期凭据已作废：重试无意义，且重试只会继续污染凭证状态。
-                    # 标记成需重新登录后本任务下轮直接跳过（candidates 的 disabled
-                    # 分支），不再每小时刷一条同样的 warning。
-                    logger.warning(
-                        "refresh for %s needs re-login, disabling credential: %s",
-                        candidate.credential_id, error_text(error))
-                    # 落库文案固定，不写 `str(error)`：该值经 GET /api/credentials
-                    # 回显管理台，固定文案可保证「将来有人往异常里塞上游原文」时
-                    # 也不会把上游响应写进凭证状态。
-                    self._credentials.mark_relogin_required(
-                        candidate.credential_id, RELOGIN_REASON)
-                    report.failed += 1
-                    continue
-                except Exception as error:  # noqa: BLE001
-                    logger.warning("refresh failed for %s: %s",
-                                   candidate.credential_id, error_text(error))
-                    report.failed += 1
-                    continue
-                # 先持久化轮换后的 token，再同步账号（AGENTS.md 顺序约束）
-                self._credentials.save_credential_data(candidate.credential_id, refreshed)
-            report.succeeded += 1
+                    await _wait_committed(operation)
+                finally:
+                    self._rotations.discard(operation)
         return report
+
+    async def _rotate_and_save(self, provider, credential_id: str, data: dict,
+                               report: TaskReport) -> None:
+        """由 run_once 的编辑锁保护，停机也先完成票据与凭证状态的同步写入。"""
+        try:
+            with credential_scope(credential_id):
+                refreshed = await provider.refresh(data)
+        except UpstreamReloginRequired as error:
+            logger.warning("refresh for %s needs re-login, disabling credential: %s",
+                           credential_id, error_text(error))
+            # 固定文案避免上游原文或票据被回显；失效状态也必须在停机前落库。
+            self._credentials.mark_relogin_required(credential_id, RELOGIN_REASON)
+            report.failed += 1
+            return
+        except Exception as error:  # noqa: BLE001 - 一条失败不阻断其他账号维护
+            logger.warning("refresh failed for %s: %s", credential_id, error_text(error))
+            report.failed += 1
+            return
+        try:
+            self._credentials.save_credential_data(credential_id, refreshed)
+        except Exception as error:  # noqa: BLE001 - 落库失败必须留痕，不能算作刷新成功
+            logger.error("refresh credential commit failed for %s: %s",
+                         credential_id, error_text(error))
+            raise
+        report.succeeded += 1
+
+    async def drain(self) -> None:
+        """停机前排空手工触发等非周期路径的活动刷新，仍不取消上游已提交的请求。"""
+        self._stopping = True
+        if not self._rotations:
+            return
+        results = await _wait_committed(asyncio.gather(*self._rotations, return_exceptions=True))
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
+
+
+async def _wait_committed(operation: asyncio.Future):
+    """取消只延后到操作完成；重复取消也不能取消轮转任务或跳过同步落库。"""
+    cancellation: asyncio.CancelledError | None = None
+    while not operation.done():
+        try:
+            await asyncio.shield(operation)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except Exception:  # noqa: BLE001 - 下方 result 重新抛出操作的真实错误
+            break
+    try:
+        return operation.result()
+    finally:
+        if cancellation is not None:
+            raise cancellation
 
 
 def _needs_refresh(provider, data: dict, skew_seconds: int, now: int) -> bool:

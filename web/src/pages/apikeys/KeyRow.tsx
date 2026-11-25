@@ -46,6 +46,9 @@ export function KeyRow({
       <TableCell label="渠道" className="text-xs" data-testid={`key-binding-${item.id}`}>
         {providerBindingLabel(item.provider_binding)}
       </TableCell>
+      <TableCell label="账号范围" className="text-xs" data-testid={`key-credentials-${item.id}`}>
+        {item.credential_ids?.length ? `指定 ${item.credential_ids.length} 个账号` : "全部账号"}
+      </TableCell>
       <TableCell label="到期" className="text-xs tabular-nums" data-testid={`key-expires-${item.id}`}>
         {item.expires_at ? formatTime(item.expires_at) : "永不过期"}
       </TableCell>

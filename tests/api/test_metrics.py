@@ -165,8 +165,8 @@ def test_metrics_reflects_pool_counts_and_usage(tmp_path):
                      error_type="rate_limit")
     with TestClient(app, client=LOOPBACK) as http:
         samples = _samples(http.get("/metrics").text)
-    # 种子 zen / kilo 两条虚拟凭证 → ready=2
-    assert samples['coding2api_credentials{state="ready"}'] == "2"
+    # 使用量记录不会隐式创建渠道账号。
+    assert samples['coding2api_credentials{state="ready"}'] == "0"
     assert samples[_req("trae", "glm-5.2", "ok")] == "1"
     assert samples[_req("trae", "glm-5.2", "error")] == "1"
     assert samples['coding2api_tokens_total{provider="trae",type="input"}'] == "7"

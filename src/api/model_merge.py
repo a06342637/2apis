@@ -76,7 +76,8 @@ logger = logging.getLogger(__name__)
 # 上游人类可读名（Qoder 的 `Qwen3.8-Max`），前端优先展示它而非内部代号。
 _META_FIELDS = ("name", "credit_rate", "max_input_tokens", "max_output_tokens",
                 "supports_images", "supports_tool_call",
-                "supports_reasoning", "default_effort")
+                "supports_reasoning", "default_effort",
+                "gateway_endpoints", "output_modalities")
 
 # OpenRouter 风格别名 → 本仓字段（同值双发，内部模型不变）。OpenRouter 生态的
 # 客户端（Claude Code 的 auto-compact 窗口、各家 SDK 的 max_completion_tokens）
@@ -587,6 +588,9 @@ def _entry_response(entry: dict[str, Any],
         detail: dict[str, Any] = {"raw_id": entry["raw_ids"][pid]}
         if meta["credit_rate"] is not None:
             detail["credit_rate"] = meta["credit_rate"]
+        for field in ("gateway_endpoints", "output_modalities"):
+            if meta.get(field) is not None:
+                detail[field] = meta[field]
         by_provider[pid] = detail
     # 单渠道也下发 by_provider：PROPOSAL §3.4「原代号进 by_provider.{渠道}.raw_id」
     # 没有「多渠道才给」这条例外。以前只给多渠道，单渠道模型的原代号对外完全

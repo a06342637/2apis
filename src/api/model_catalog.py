@@ -129,4 +129,7 @@ def _model_from_dict(raw: Any) -> Model | None:
         return None
     fields_in = {name: raw[name] for name in _MODEL_FIELDS
                  if name != "id" and name in raw}
+    for name in ("gateway_endpoints", "output_modalities"):
+        if fields_in.get(name) is not None:
+            fields_in[name] = tuple(fields_in[name])
     return Model(id=model_id, **fields_in)

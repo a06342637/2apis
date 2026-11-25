@@ -49,6 +49,7 @@ from ..db.repo import (
 from ..engine.executor import Executor
 from ..engine.limits import LimitGuard
 from ..key_quota import KeyQuota, KeyQuotaGuard, load_key_quota
+from ..media.context import set_media_principal
 from ..request_context import set_api_key_id
 from ..runtime_settings import RuntimeSettings
 from ..stats.live import LiveEventHub
@@ -140,6 +141,10 @@ class Services:
     # executor 也持有**同一引用**（ExecutorDeps.model_list_cache）：聊天路径的
     # 倍率查询（免费优先调度档）从这里读 credit_rate，目录刷新后立即可见。
     model_list_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # 绑定 Key 的按账号目录缓存；策略过滤在每次响应现算，不混入渠道共享目录。
+    credential_model_cache: dict[str, tuple[float, dict[str, Any]]] = field(default_factory=dict)
+    # 仅内部保存凭证指纹；登录轮转后目录缓存立即失效，不记录或回显该值。
+    credential_model_versions: dict[str, str] = field(default_factory=dict)
     # 上次**尝试**拉取时间（monotonic，成功或失败都刷新）：TTL 内的请求不再打
     # 上游——有缓存用缓存，无缓存则跳过该渠道（负缓存）。
     model_list_fetched_at: dict[str, float] = field(default_factory=dict)
@@ -164,6 +169,8 @@ class Services:
     # 日志落库（`log_events`）：`/api/logs` 在内存环为空（刚重启）或要按
     # `request_id` 回溯时读它。None = 只有内存环（测试替身）。
     log_repo: Any = None
+    # 标准媒体接口与 Miora 对话中的媒体工具使用同一个服务。
+    media: Any = None
 
 
 def get_services(request: Request) -> Services:
@@ -244,6 +251,7 @@ class ApiKeyPrincipal:
     # 而 /v1 原来只判 Key 自己的 quota）。
     user_quota: KeyQuota = field(default_factory=KeyQuota)
     key_id: str = ""                # api_keys.id（Key 级配额与自助用量的归属）
+    credential_ids: tuple[str, ...] = ()  # 空 = 全池；非空集合在任何重试中都不放宽
     quota: KeyQuota = field(default_factory=KeyQuota)  # 该 Key 的配额（全关=不受限）
 
 
@@ -296,10 +304,12 @@ def _api_key_principal(services: Services, request: Request,
                                     policy.get("allowed_models") or ""),
                                 user_quota=load_key_quota(policy.get("quota")),
                                 key_id=record["id"],
+                                credential_ids=tuple(record.get("credential_ids") or ()),
                                 quota=load_key_quota(record.get("quota")))
     # 归属权只认鉴权结果（绝不读入站头）：统计写入经 contextvar 现读，
     # 请求结束由 RequestIdMiddleware 复原（流式响应体也在中间件作用域内）。
     set_api_key_id(principal.key_id)
+    set_media_principal(principal)
     return principal
 
 

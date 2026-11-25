@@ -1,0 +1,24 @@
+[Unit]
+Description=2apis isolated host system update helper
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=2apis-update
+WorkingDirectory=/opt/2apis-update-helper
+ExecStart=/usr/bin/python3 -m scripts.update_host --config /etc/2apis-update/config.json
+Restart=on-failure
+RestartSec=5
+UMask=0027
+RuntimeDirectory=2apis-update
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/2apis /var/lib/2apis-update /run/2apis-update
+
+[Install]
+WantedBy=multi-user.target

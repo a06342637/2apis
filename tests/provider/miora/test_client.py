@@ -771,6 +771,39 @@ def test_public_catalog_keeps_all_routes_and_raw_ids():
     assert all(aliases["miora"][model.id.lower()] == model.id for model in models)
 
 
+@pytest.mark.parametrize("logical,header", [
+    (False, True), (True, True), (False, False), (True, False)])
+async def test_429_preserves_account_retry_hints(logical, header, monkeypatch):
+    monkeypatch.setattr("src.provider.base.time.time", lambda: 1000)
+    body = {"code": 10005, "httpStatus": 429,
+            "message": "usage reset at 1970-01-01 00:17:10 UTC+0"}
+    def handle(request):
+        return httpx.Response(200 if logical else 429, json=body,
+                              headers={"Retry-After": "20"} if header else {})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        client = MioraClient(short_client=http)
+        with pytest.raises(MioraHTTPError) as caught:
+            await client._request(MioraCredential("synthetic"), "GET", "/test")
+        assert caught.value.kind() == ErrKind.SOFT
+        assert caught.value.retry_after_seconds == (20 if header else 30)
+        assert caught.value.retry_at == (1020 if header else 1030)
+
+
+async def test_token_refresh_429_preserves_hint_without_rotating_credentials(monkeypatch):
+    monkeypatch.setattr("src.provider.base.time.time", lambda: 1000)
+    def handle(request):
+        return httpx.Response(429, headers={"Retry-After": "35"}, content=b"rate limited")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        client = MioraClient(short_client=http)
+        credential = MioraCredential("synthetic", "synthetic-refresh")
+        with pytest.raises(MioraHTTPError) as caught:
+            await client.refresh_token(credential)
+        assert caught.value.kind() == ErrKind.SOFT
+        assert caught.value.retry_at == 1035 and caught.value.retry_after_seconds == 35
+        assert credential.access_token == "synthetic"
+        assert credential.refresh_token == "synthetic-refresh"
+
+
 @pytest.mark.parametrize(
     "hint,expected",
     [

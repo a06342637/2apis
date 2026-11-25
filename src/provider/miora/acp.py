@@ -16,7 +16,13 @@ from typing import Any
 import httpx
 
 from ...engine.sse import iter_frames
-from ..base import ErrKind, UpstreamHTTPError, UpstreamProtocolViolation, read_body_bounded
+from ..base import (
+    ErrKind,
+    UpstreamHTTPError,
+    UpstreamProtocolViolation,
+    read_body_bounded,
+    retry_hints,
+)
 from .events import classify_status
 
 
@@ -77,7 +83,9 @@ class AcpConnection:
             async with asyncio.timeout(min(self.timeout, 30)):
                 response = await self._context.__aenter__()
                 if response.status_code >= 400:
-                    raise AcpHTTPError(response.status_code, await read_body_bounded(response))
+                    body = await read_body_bounded(response)
+                    raise AcpHTTPError(response.status_code, body,
+                                       **retry_hints(response.headers, body=body))
                 connection = response.headers.get("Acp-Connection-Id")
                 if not connection:
                     raise UpstreamProtocolViolation("Miora ACP 缺少连接标识")
@@ -117,7 +125,9 @@ class AcpConnection:
                         **self.headers, "Accept": "application/json, text/event-stream"},
                     json=request) as response:
                 if response.status_code >= 400:
-                    raise AcpHTTPError(response.status_code, await read_body_bounded(response))
+                    body = await read_body_bounded(response)
+                    raise AcpHTTPError(response.status_code, body,
+                                       **retry_hints(response.headers, body=body))
                 content_type = response.headers.get("Content-Type", "")
                 if "text/event-stream" in content_type:
                     received_result = False
