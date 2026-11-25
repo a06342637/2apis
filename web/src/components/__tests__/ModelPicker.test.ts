@@ -31,6 +31,17 @@ describe("modelValue", () => {
     expect(modelValue({ id: "kimi", providers: ["trae"] })).toBe("kimi@trae");
     expect(modelValue({ id: "glm", providers: ["codebuddy", "trae"] })).toBe("glm");
   });
+
+  it("Miora 动态模型逐个可选，渠道强制值包含原模型名", () => {
+    const items = ["hy4flash-free", "glm-5.3", "gpt-6-astra", "kimi-k3.1-pro"]
+      .map(id => pickable({ id, providers: ["miora"] }));
+    const sections = buildSections(items);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].label).toBe("仅 Miora");
+    expect(sections[0].items.map(item => item.value))
+      .toEqual(items.map(item => `${item.id}@miora`));
+    expect(filterOptions(items)).toContainEqual({ value: "miora", label: "Miora" });
+  });
 });
 
 describe("providerRate", () => {

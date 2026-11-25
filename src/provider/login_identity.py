@@ -112,8 +112,19 @@ def raccoon_login_identities(credential_data: dict[str, Any]) -> IdentitySet:
     return frozenset({uid}) if uid else frozenset()
 
 
+def miora_login_identity(credential_data: dict[str, Any]) -> str:
+    """Miora JWT sub 归一后的 uid；重新导入同账号只更新原凭证。"""
+    return _text(credential_data, "uid", "user_id", "userId")
+
+
+def miora_login_identities(credential_data: dict[str, Any]) -> IdentitySet:
+    uid = miora_login_identity(credential_data)
+    return frozenset({uid}) if uid else frozenset()
+
+
 #: 首选身份（展示 / 门面转发用）；只有声明了身份的渠道才参与重新登录合并。
 LOGIN_IDENTITIES: dict[str, Callable[[dict[str, Any]], str]] = {
+    "miora": miora_login_identity,
     "codearts": codearts_login_identity,
     "officeace": officeace_login_identity,
     "lingxi": lingxi_login_identity,
@@ -122,6 +133,7 @@ LOGIN_IDENTITIES: dict[str, Callable[[dict[str, Any]], str]] = {
 
 #: 别名集合（合并匹配用）：与 `LOGIN_IDENTITIES` 必须覆盖同一批渠道。
 LOGIN_IDENTITY_SETS: dict[str, Callable[[dict[str, Any]], IdentitySet]] = {
+    "miora": miora_login_identities,
     "codearts": codearts_login_identities,
     "officeace": officeace_login_identities,
     "lingxi": lingxi_login_identities,
@@ -132,7 +144,7 @@ LOGIN_IDENTITY_SETS: dict[str, Callable[[dict[str, Any]], IdentitySet]] = {
 #: 就是顶掉旧会话（灵犀 Cookie / 小浣熊 `xhx_token`，约 30 天到期需重取）。
 #: 只有它们走「同身份就地合并」；CodeArts / OfficeAce 手工导入的是 AK/SK，
 #: 同账号可并存多把密钥，合并会吞掉一把，故不在此列。
-MANUAL_MERGE_PROVIDERS: frozenset[str] = frozenset({"lingxi", "raccoon"})
+MANUAL_MERGE_PROVIDERS: frozenset[str] = frozenset({"lingxi", "raccoon", "miora"})
 
 
 def _safe_call(getter: Callable[[dict[str, Any]], Any],

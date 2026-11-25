@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPage } from "../StatsPage";
 import { jsonResponse, mockFetch, renderPage, settle, userEvent } from "@/test-utils";
 import {
@@ -20,8 +20,12 @@ describe("StatsPage 分组与明细", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it("请求明细分页：下一页按 before 取数，上一页回退，换每页数量重置", async () => {
+    // 显式跨秒验证 since 漂移；不把两次真实 sleep 塞进整个测试的 5 秒预算。
+    let currentTime = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => currentTime);
     const fetchSpy = mockFetch({
       "/api/stats/overview": OVERVIEW,
       "/api/stats/by-provider": PROVIDERS,
@@ -42,7 +46,8 @@ describe("StatsPage 分组与明细", () => {
       expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("before=2"))).toBe(true),
     );
     // 跨过 1 秒再断言：since 锚定后翻页状态不会被「范围变化重置」打回第一页
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    currentTime += 1200;
+    await settle();
     expect(screen.getByTestId("events-table")).toHaveTextContent("kimi-k3");
     expect(screen.getByTestId("events-page-info")).toHaveTextContent("第 2 页");
     expect(screen.getByTestId("events-next")).toBeDisabled();          // 到底
@@ -69,7 +74,8 @@ describe("StatsPage 分组与明细", () => {
     await waitFor(() =>
       expect(screen.getByTestId("events-page-info")).toHaveTextContent("第 2 页"),
     );
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    currentTime += 1200;
+    await settle();
     await userEvent.click(screen.getByTestId("range-tabs-24h"));
     await waitFor(() =>
       expect(screen.getByTestId("events-page-info")).toHaveTextContent("第 1 页"),

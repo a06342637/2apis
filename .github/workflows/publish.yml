@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要打的版本号（如 v0.14.3，留空则跳过）'
+        description: '要打的版本号（如 v0.1.0，留空则跳过）'
         required: false
         default: ''
 
@@ -49,7 +49,7 @@ jobs:
           # （"v1.2.3\n恶意命令"）的第一行就能命中、整体放行；bash 正则对
           # 整个字符串做锚定匹配，$ 后面多一个换行也判不合法。
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag 格式非法: $TAG（应为 vX.Y.Z，例如 v0.14.3）"
+            echo "::error::tag 格式非法: $TAG（应为 vX.Y.Z，例如 v0.1.0）"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -117,11 +117,11 @@ jobs:
         with:
           context: .
           push: true
-          # ghcr.io 用户名必须小写；robbsluo 已全小写
+          # 发布到二次开发仓库自己的镜像，不覆盖原作者制品。
           # 两个 tag：语义版本 + latest（compose 里引用的是 :latest）
           tags: |
-            ghcr.io/robbsluo/coding2api:${{ steps.meta.outputs.tag }}
-            ghcr.io/robbsluo/coding2api:latest
+            ghcr.io/a06342637/2apis:${{ steps.meta.outputs.tag }}
+            ghcr.io/a06342637/2apis:latest
           # 层缓存：同 commit 反复 push 直接命中，冷启动也能复用远端 cache
           cache-from: type=gha,scope=build
           cache-to: type=gha,scope=build,mode=max

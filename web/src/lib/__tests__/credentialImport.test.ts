@@ -49,6 +49,36 @@ describe("parseCredentialInput", () => {
     expect(parsed.ok && parsed.provider).toBe("trae");
   });
 
+  it("Miora authToken 优先于共享的 refreshToken 字段，不会误识别成 TRAE", () => {
+    expect(parseCredentialInput('{"authToken":"a","refreshToken":"r"}', "trae"))
+      .toEqual({
+        ok: true, provider: "miora", detected: "miora",
+        credential: { authToken: "a", refreshToken: "r" },
+      });
+  });
+
+  it("Miora snake_case JSON 通过 JWT issuer 识别，不猜其他渠道的 token", () => {
+    const token = jwt({ iss: "https://miora.design", sub: "account-1" });
+    expect(parseCredentialInput(JSON.stringify({ access_token: token, refresh_token: "r" }), "trae"))
+      .toEqual({
+        ok: true, provider: "miora", detected: "miora",
+        credential: { access_token: token, refresh_token: "r" },
+      });
+    expect(parseCredentialInput('{"access_token":"opaque","refresh_token":"r"}', "miora"))
+      .toMatchObject({ ok: true, provider: "miora", detected: null });
+    expect(detectProvider(jwt({ iss: "https://miora.design.attacker.example" }))).toBeNull();
+  });
+
+  it("Miora Cookie 和裸 JWT 可导入，refreshToken 缺失由后端标示到期需重登", () => {
+    const token = jwt({ iss: "https://miora.design" });
+    expect(parseCredentialInput(`authToken=${token}`, "codebuddy")).toEqual({
+      ok: true, provider: "miora", detected: "miora", credential: { cookie: `authToken=${token}` },
+    });
+    expect(parseCredentialInput(token, "trae")).toEqual({
+      ok: true, provider: "miora", detected: "miora", credential: { authToken: token },
+    });
+  });
+
   it("整段 Cookie 按 wps_sid 自动识别为灵犀", () => {
     expect(parseCredentialInput("wps_sid=abc; uid=42", "codebuddy")).toEqual({
       ok: true,
@@ -165,5 +195,32 @@ describe("headersFromCurl", () => {
     );
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) expect(parsed.error).toContain("没有 Cookie 或 Authorization");
+  });
+
+  it("Miora cURL 按目标主机识别，并保留 Cookie 和 Bearer", () => {
+    expect(parseCredentialInput(
+      "curl 'https://miora.design/api/ai/user/profile' -H 'Cookie: locale=zh' -H 'Authorization: Bearer opaque'",
+      "codebuddy",
+    )).toEqual({
+      ok: true, provider: "miora", detected: "miora",
+      credential: { cookie: "locale=zh", authToken: "opaque" },
+    });
+    expect(parseCredentialInput(
+      "curl --location 'https://miora.design/api' -H 'Authorization: Bearer opaque'", "codebuddy",
+    )).toMatchObject({ ok: true, provider: "miora", credential: { authToken: "opaque" } });
+  });
+
+  it("不把其他主机、请求体里的 Miora 链接或坏 URL 识别为 Miora", () => {
+    for (const url of ["https://miora.design.attacker.example/api", "https://bad:port/api"]) {
+      expect(parseCredentialInput(`curl '${url}' -H 'Authorization: Bearer opaque'`, "qoder"))
+        .toMatchObject({ ok: true, provider: "qoder", detected: null });
+    }
+    expect(parseCredentialInput(
+      "curl 'https://example.com/api' -H 'Authorization: Bearer opaque' --data 'https://miora.design/'",
+      "qoder",
+    )).toMatchObject({ ok: true, provider: "qoder", detected: null });
+    expect(parseCredentialInput(
+      "curl 'https://miora.design/api' -H 'Authorization: Bearer opaque'", "qoder", false,
+    )).toMatchObject({ ok: true, provider: "qoder", detected: null });
   });
 });

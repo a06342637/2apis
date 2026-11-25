@@ -75,19 +75,20 @@ export function matchesFilters(
 /**
  * 一个渠道组展示的是哪本账。
  *
- * `pool`＝套餐 / 每日池口径的余额，`credits`＝积分口径（CodeArts 与
- * 小浣熊：两家都按积分扣费，与套餐/每日池不是同一本账）。组头额度合计、行内额度数字、变动流水都按它取。
+ * `pool`＝套餐 / 每日池口径的余额，`credits`＝积分口径（CodeArts、
+ * 小浣熊、灵犀与 Miora）。组头额度合计、行内额度数字、变动流水都按它取。
  */
 export type Ledger = "pool" | "credits";
 
 /**
  * 渠道 → 账本。与后端 `db.repo.quota_ledger` 同口径：CodeArts 的额度来自积分
- * 接口（内置模型按积分计费），记 `credits`；其余渠道记 `pool`。两本账在上游是
+ * 接口（内置模型按积分计费），与小浣熊、灵犀、Miora 同记 `credits`；
+ * 其余渠道记 `pool`。两本账在上游是
  * 两套接口、数值量级也不同，混读会被当成同一本账的连续读数。
  */
 export function providerLedger(provider: string): Ledger {
   return provider === "codearts" || provider === "raccoon"
-    || provider === "lingxi" ? "credits" : "pool";
+    || provider === "lingxi" || provider === "miora" ? "credits" : "pool";
 }
 
 /** 组间顺序：按全站渠道顺序，最后按 key 定序（同渠道只有一组，用于兜底稳定排序）。 */

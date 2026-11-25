@@ -22,6 +22,17 @@ function LingxiLogo({ size = 14, className }: { size?: number | string; classNam
   return <img src={lingxiLogo} alt="" aria-hidden width={size} height={size} className={className} />;
 }
 
+/** Miora 沿用文字标记，不引入额外图片资产。 */
+function MioraMark({ size = 14, className }: { size?: number | string; className?: string }) {
+  return (
+    <span aria-hidden className={className} style={{
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      width: size, height: size, fontSize: typeof size === "number" ? size * 0.65 : size,
+      fontWeight: 700, lineHeight: 1,
+    }}>M</span>
+  );
+}
+
 const BRAND: Record<string, { Main: BrandComp; Color: BrandComp }> = {
   codebuddy: { Main: CodeBuddyMono, Color: CodeBuddyColor },
   // 国际版与国内站同一品牌、同一 logo，用渠道名区分而非图标
@@ -40,6 +51,7 @@ const BRAND: Record<string, { Main: BrandComp; Color: BrandComp }> = {
   raccoon: { Main: SenseNovaMono, Color: SenseNovaMono },
   // WPS 灵犀：库内无品牌图标，用官方 logo（彩色 PNG，无 Mono 变体）
   lingxi: { Main: LingxiLogo, Color: LingxiLogo },
+  miora: { Main: MioraMark, Color: MioraMark },
 };
 
 /**

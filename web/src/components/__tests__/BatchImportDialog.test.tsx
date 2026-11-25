@@ -5,6 +5,17 @@ import { api, ApiError } from "../../api/client";
 import { BatchImportDialog, parseBatchText } from "../BatchImportDialog";
 
 describe("parseBatchText", () => {
+  it("Miora 多账号 JSONL 保留各账号独立的刷新凭证", () => {
+    const { entries, errors } = parseBatchText([
+      '{"provider":"miora","nickname":"account-1","credential":{"authToken":"a","refreshToken":"ra"}}',
+      '{"provider":"miora","nickname":"account-2","credential":{"authToken":"b","refreshToken":"rb"}}',
+    ].join("\n"));
+    expect(errors).toEqual([]);
+    expect(entries).toMatchObject([
+      { provider: "miora", nickname: "account-1", credential: { authToken: "a", refreshToken: "ra" } },
+      { provider: "miora", nickname: "account-2", credential: { authToken: "b", refreshToken: "rb" } },
+    ]);
+  });
   it("空文本不报错", () => {
     expect(parseBatchText("  \n ")).toEqual({ entries: [], errors: [] });
   });

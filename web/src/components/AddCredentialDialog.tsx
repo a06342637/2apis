@@ -54,7 +54,28 @@ const IMPORT_TEMPLATES: Partial<Record<Provider, string>> = {
     '{\n  "model_app_key": "",\n  "model_app_secret": "",\n  "model_base_url": "https://modelgw-xxxx.officeace.cn-southwest-2.huaweicloud-agentarts.com"\n}',
   raccoon: '{\n  "access_token": ""\n}',
   lingxi: '{\n  "cookie": "wps_sid=…; uid=…"\n}',
+  miora: '{\n  "authToken": "",\n  "refreshToken": ""\n}',
 };
+
+function MioraImportHelp() {
+  return (
+    <div className="space-y-2 text-xs text-muted-foreground" data-testid="miora-import-help">
+      <p>
+        <a href="https://miora.design/" target="_blank" rel="noopener noreferrer"
+          className="underline underline-offset-2">打开 Miora 登录</a>
+        ，登录后按 F12 → Console，运行下面命令并粘贴复制出的 JSON。
+        带 refreshToken 可预刷新登录态；只导入 Cookie / token 时到期需重新导入。
+      </p>
+      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded border border-border p-2">
+        {`copy(JSON.stringify({authToken:localStorage.getItem("authToken"),refreshToken:localStorage.getItem("refreshToken")},null,2))`}
+      </pre>
+      <p>
+        多账号请分别登录、逐个导入，或使用「批量导入」。同一账号重登会更新已有凭证。
+        模型列表由上游动态加载，可在 Playground 选择或用 <code>模型名@miora</code> 指定渠道。
+      </p>
+    </div>
+  );
+}
 
 type TabValue = "login" | "import";
 
@@ -355,9 +376,10 @@ export function AddCredentialDialog({
       } catch {
         // 存储不可用不影响导入本身
       }
+      const notice = created?.merged ? "已更新账号登录凭证。" : "凭证已导入。";
       onImported(created?.tos && created.tos.level !== "green"
-        ? `凭证已导入。注意：该渠道 ToS 评级为 ${created.tos.level} —— ${created.tos.reason}`
-        : "凭证已导入。");
+        ? `${notice}注意：该渠道 ToS 评级为 ${created.tos.level} —— ${created.tos.reason}`
+        : notice);
     } catch (caught) {
       onError(errorText(caught, "导入失败"));
     } finally {
@@ -495,6 +517,24 @@ export function AddCredentialDialog({
                 </div>
               </div>
             )}
+            <div className="border-t border-border pt-3" data-testid="miora-login-entry">
+              <MioraImportHelp />
+              <Button
+                className="mt-2"
+                size="sm"
+                variant="primary"
+                data-testid="add-miora-account"
+                disabled={busy}
+                onClick={() => {
+                  setImportProvider("miora");
+                  setManualProvider("miora");
+                  setRaw((current) => current.trim() === "" ? IMPORT_TEMPLATES.miora ?? "" : current);
+                  setTab("import");
+                }}
+              >
+                添加 Miora 账号
+              </Button>
+            </div>
             <div className="border-t border-border pt-3">
               <div className="mb-2 text-xs text-muted-foreground">
                 小浣熊没有 OAuth 登录轨道，凭据是网页会话 JWT：在浏览器 DevTools →
@@ -688,6 +728,7 @@ export function AddCredentialDialog({
                 </Field>
               </div>
             </div>
+            {effectiveProvider === "miora" && <MioraImportHelp />}
             {effectiveProvider === "lingxi" && lingxiCount > 0 && (
               <div data-testid="import-lingxi-warning">
                 <Notice tone="warn">

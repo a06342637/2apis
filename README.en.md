@@ -1,9 +1,11 @@
-# Coding2API
+# 2apis · v0.1.0
 
-[![CI](https://github.com/RobbsLuo/Coding2API/actions/workflows/ci.yml/badge.svg)](https://github.com/RobbsLuo/Coding2API/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/RobbsLuo/Coding2API)](https://github.com/RobbsLuo/Coding2API/releases)
+Fork of [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api), with Miora multi-account credentials, dynamic models, token refresh, and OpenAI/Anthropic endpoints. See the [Miora setup and protocol limitations](README.md#miora-接入). Client tools use a validated JSON bridge; output token limits are best effort. Original MIT attribution is retained.
+
+[![CI](https://github.com/a06342637/2apis/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/2apis/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/a06342637/2apis)](https://github.com/a06342637/2apis/releases)
 [![License: MIT](https://img.shields.io/github/license/RobbsLuo/Coding2API)](LICENSE)
-[![Image](https://img.shields.io/badge/image-ghcr.io%2Frobbsluo%2Fcoding2api-blue)](https://github.com/RobbsLuo/Coding2API/pkgs/container/coding2api)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Fa06342637%2F2apis-blue)](https://github.com/a06342637/2apis/pkgs/container/2apis)
 
 Ten upstream channels — **CodeBuddy** (China + international, two separate channels), **TRAE SOLO**, **OpenCode Zen**, **Kilo**, **Qoder**, **CodeArts**, **OfficeAce**, **Raccoon**, **Lingxi** — plus an optional **generic OpenAI-compatible upstream**, exposed as an OpenAI-compatible API: shared credential pool, unified model names and scheduling, per-user usage accounting.
 
@@ -72,7 +74,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-Pull the image: `docker compose pull` (or `docker pull ghcr.io/robbsluo/coding2api:v0.14.3`). Pushing a `v*` tag to main runs `.github/workflows/publish.yml` → publishes `<tag>` + `:latest`. For https on a VPS with a public IP see "[Public deployment](#public-deployment-docker--caddy-automatic-https)".
+Pull the image: `docker compose pull` (or `docker pull ghcr.io/a06342637/2apis:v0.1.0`). Pushing a `v*` tag to main runs `.github/workflows/publish.yml` → publishes `<tag>` + `:latest`. For https on a VPS with a public IP see "[Public deployment](#public-deployment-docker--caddy-automatic-https)".
 
 ## Users and roles
 

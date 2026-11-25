@@ -25,4 +25,11 @@ describe("ProviderIcon", () => {
     const { container } = render(<ProviderIcon provider="unknown" />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("Miora 使用装饰性文字标记", () => {
+    const { container } = render(<ProviderIcon provider="miora" size={16} />);
+    expect(container.querySelector("span")).toHaveTextContent("M");
+    expect(container.querySelector("span")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector("img")).toBeNull();
+  });
 });

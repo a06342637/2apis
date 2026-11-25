@@ -55,3 +55,6 @@ web/*.tsbuildinfo
 
 # Archify 工作目录（中间产物与截图）
 .archify/
+
+# 本地上游协议研究与实测凭证
+.local/

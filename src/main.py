@@ -74,6 +74,7 @@ from .config import (
     validate_generic_endpoint_allowed,
     validate_kilo_endpoint_allowed,
     validate_lingxi_endpoint_allowed,
+    validate_miora_endpoint_allowed,
     validate_officeace_endpoint_allowed,
     validate_qoder_endpoint_allowed,
     validate_raccoon_endpoint_allowed,
@@ -126,6 +127,8 @@ from .provider.generic.client import GenericClient, GenericProvider, split_model
 from .provider.kilo.client import KiloClient, KiloProvider
 from .provider.lingxi import LingxiProvider
 from .provider.lingxi.client import LingxiClient
+from .provider.miora import MioraProvider
+from .provider.miora.client import MioraClient
 from .provider.officeace import OfficeAceProvider
 from .provider.officeace.client import OfficeAceClient
 from .provider.officeace.oauth import OfficeAceOAuth
@@ -304,6 +307,15 @@ def _qoder_host(config: Settings) -> str:
                              validator=validate_qoder_endpoint_allowed,
                              env_name="QODER_API_ENDPOINT",
                              allowed_name="QODER_ALLOWED_ENDPOINTS")
+
+
+def _miora_endpoint(config: Settings) -> str:
+    """Miora 账号登录态只发给配置白名单中的控制面。"""
+    return _resolve_endpoint(config, attr="miora_api_endpoint",
+                             validator=validate_miora_endpoint_allowed,
+                             env_name="MIORA_API_ENDPOINT",
+                             allowed_name="MIORA_ALLOWED_ENDPOINTS",
+                             strip_slash=True)
 
 
 def _qoder_gateway(config: Settings) -> str:
@@ -506,6 +518,10 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     lingxi_pacer = Pacer(lambda: runtime.lingxi_chat_min_interval,
                          lambda: runtime.lingxi_chat_min_interval,
                          allow_concurrent=True)
+    miora_pacer = Pacer(lambda: runtime.miora_chat_min_interval,
+                        lambda: runtime.miora_chat_min_interval,
+                        allow_concurrent=True,
+                        max_concurrency=lambda: runtime.miora_max_concurrency)
     # Qoder / CodeArts 是真实账号渠道，上游按账号频控；各自独立 pacer，
     # 与其余渠道互不排队（同渠道同凭证共桶、桶内允许并发）。
     qoder_pacer = Pacer(lambda: runtime.qoder_chat_min_interval,
@@ -591,6 +607,10 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
             client=LingxiClient(host=_lingxi_endpoint(config),
                                 proxy=proxies.get("lingxi")),
             pacer=lingxi_pacer),
+        "miora": MioraProvider(
+            client=MioraClient(host=_miora_endpoint(config),
+                               proxy=proxies.get("miora")),
+            pacer=miora_pacer),
         "officeace": OfficeAceProvider(
             client=OfficeAceClient(cloud_base=_officeace_endpoint(config),
                                    proxy=proxies.get("officeace")),

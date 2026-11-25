@@ -1,9 +1,81 @@
-# Coding2API
+# 2apis · v0.1.0
 
-[![CI](https://github.com/RobbsLuo/Coding2API/actions/workflows/ci.yml/badge.svg)](https://github.com/RobbsLuo/Coding2API/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/RobbsLuo/Coding2API)](https://github.com/RobbsLuo/Coding2API/releases)
+基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## Miora 接入
+
+Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，重新导入同一账号会更新原凭证。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。
+
+1. 管理台「添加凭证」→ Miora → 打开官网并登录。
+2. 在官网 F12 → Console 运行以下命令，将复制的 JSON 粘贴到管理台导入框。可为不同账号重复操作，也可通过「批量导入」添加多条凭证。
+
+```js
+copy(JSON.stringify({authToken: localStorage.getItem("authToken"), refreshToken: localStorage.getItem("refreshToken")}, null, 2))
+```
+
+导入也支持包含 `authToken` 的 Cookie、官网请求的 Copy as cURL，以及 `{"access_token":"…","refresh_token":"…"}`。仅有 access token 时可调用，但不能自动续期。凭证 JSON、Cookie 和抓包记录不得提交到 Git。
+
+每个账号自动查找或创建一个 `2apis API workspace` 项目，后续复用该项目和运行时；每次 API 调用创建独立对话，把客户端历史完整传入，避免不同用户上下文串话。已有项目可在导入 JSON 中用 `project_id` 指定。模型目录预热会预取运行时短票，连接前重新领取短票，未发送推理时遇到短票 401 可重建一次；不会自动重放已发送的推理。同一账号串行对话以隔离运行时全局选模参数，不同账号可以并行。
+
+### 可选模型
+
+目录来自账号运行时的 ACP `session/load`，不硬编码网页的“自动”选项。2026-11-25 实测返回 **32 个模型/路由条目，加 3 个网页模式，共 35 个选项**；以后随上游目录更新。模型是否允许实际调用由账号套餐、积分和上游权限决定。
+
+| 模型系列 | 上游模型 ID 示例 |
+|---|---|
+| Hy4 | `hy4std`、`hy4flash`、`hy4flash-free` |
+| GLM | `glm-5.3`、`glm-5.3-flash`、`glm-5.2` |
+| GPT | `gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-sol`、`gpt-6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4` |
+| DeepSeek | `deepseek-v4.1-flash`、`deepseek-v4.1-flash-sg` |
+| Gemini | `gemini-3.8-flash`、`gemini-3.5-flash` |
+| Kimi | `kimi-k3`、`kimi-k2.6`、`kimi-k3.1-pro`、`kimi-k3.1-pro-highspeed`、`kimi-k2.8-preview` |
+| 其他 | `grok-4.7`、`space-bunny`、`step-5-preview` |
+| 上游默认路由 | `default-model`、`fast-model`、`balanced-model`、`primary-model`、`deep-model` |
+| 网页模式 | `miora-standard`（快速）、`miora-pro`（进阶）、`miora-max`（专家） |
+
+以管理台或 `GET /v1/models` 返回的模型名为准；既可使用归一后的名称，也可使用上游原始 ID。加 `@miora` 强制走 Miora，例如 `glm-5.3@miora`；不加后缀则参与原有多渠道调度。
+
+### OpenAI 客户端接入
+
+Base URL：`http://127.0.0.1:8000/v1`，API Key 使用本服务「API Key」页创建的 `sk-…`，模型选择 `glm-5.3@miora` 等目录条目。
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="sk-你的本地服务Key")
+response = client.chat.completions.create(
+    model="hy4flash-free@miora",
+    messages=[{"role": "user", "content": "写一个 Python 二分查找函数"}],
+)
+print(response.choices[0].message.content)
+```
+
+### Anthropic 客户端接入
+
+Base URL：`http://127.0.0.1:8000`，同样使用本服务 API Key；出口为 `POST /v1/messages`。
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(base_url="http://127.0.0.1:8000", api_key="sk-你的本地服务Key")
+response = client.messages.create(
+    model="glm-5.3@miora",
+    max_tokens=1024,
+    messages=[{"role": "user", "content": "解释这段代码的边界条件"}],
+)
+print(response.content)
+```
+
+两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用严格 JSON 模拟**：传入客户端工具定义，校验函数白名单、参数对象及常见类型/必填/属性约束，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`；工具由原客户端执行。支持 `auto` / `none` / `required` / 指定函数与关闭并行调用。发现 Miora 内置云端工具请求会中止该轮，异常断流会取消未完成的上游推理。媒体生成、云端文件操作不属于本渠道的代码 API 能力。
+
+ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completion_tokens` 会作为提示中的输出预算，**不能保证硬 token 上限**；非默认 `temperature` / `top_p` / penalties 及 `stop`、`logprobs`、`seed`、`response_format`、`prediction` 等无法兑现的参数会明确返回 400。图片、音频、文件输入及音频输出在联网前返回能力不支持的 400。`reasoning_effort` 支持 `low` / `medium` / `high`，每轮显式设置，省略时使用 `medium`，不会继承上一位调用者的档位。工具响应需缓冲后校验，调用帧会在校验通过后发出。
+
+配置：`MIORA_API_ENDPOINT=https://miora.design`、`MIORA_ALLOWED_ENDPOINTS=https://miora.design`；`MIORA_CHAT_MIN_INTERVAL=0` 与 `MIORA_MAX_CONCURRENCY=1` 可在管理台热更。每账号仍受运行时串行锁保护。
+
+[![CI](https://github.com/a06342637/2apis/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/2apis/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/a06342637/2apis)](https://github.com/a06342637/2apis/releases)
 [![License: MIT](https://img.shields.io/github/license/RobbsLuo/Coding2API)](LICENSE)
-[![Image](https://img.shields.io/badge/image-ghcr.io%2Frobbsluo%2Fcoding2api-blue)](https://github.com/RobbsLuo/Coding2API/pkgs/container/coding2api)
+[![Image](https://img.shields.io/badge/image-ghcr.io%2Fa06342637%2F2apis-blue)](https://github.com/a06342637/2apis/pkgs/container/2apis)
 
 把十路渠道——**CodeBuddy**（国内 / 国际两个独立渠道）、**TRAE SOLO**、**OpenCode Zen**、**Kilo**、**Qoder**、**CodeArts**、**OfficeAce**、**小浣熊**、**灵犀**——外加可选的**通用 OpenAI 兼容上游**，封装成 OpenAI 兼容 API：公共凭证池、统一模型名与调度、按人用量统计。
 
@@ -72,7 +144,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/robbsluo/coding2api:v0.14.3`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.0`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

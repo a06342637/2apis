@@ -61,6 +61,50 @@ describe("AddCredentialDialog", () => {
     expect(props.onImported).toHaveBeenCalledWith("已添加小浣熊渠道");
   });
 
+  it("Miora 登录入口跳到 JSON 导入并支持刷新凭证与多账号说明", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : null });
+      return jsonResponse({ id: "miora_1", merged: false });
+    }));
+    const props = renderDialog();
+    expect(screen.getByTestId("miora-import-help")).toHaveTextContent("多账号");
+    expect(screen.getByRole("link", { name: "打开 Miora 登录" }))
+      .toHaveAttribute("href", "https://miora.design/");
+    await userEvent.click(screen.getByTestId("add-miora-account"));
+    expect(screen.getByTestId("import-provider")).toHaveValue("miora");
+    expect(screen.getByTestId("import-payload"))
+      .toHaveValue('{\n  "authToken": "",\n  "refreshToken": ""\n}');
+    expect(screen.getByTestId("miora-import-help")).toHaveTextContent('localStorage.getItem("refreshToken")');
+    await userEvent.clear(screen.getByTestId("import-payload"));
+    await userEvent.paste('{"authToken":"session-a","refreshToken":"refresh-a"}');
+    await userEvent.click(screen.getByTestId("import-submit"));
+    expect(calls.find(call => call.url.endsWith("/api/credentials"))?.body).toMatchObject({
+      provider: "miora", credential: { authToken: "session-a", refreshToken: "refresh-a" },
+    });
+    expect(props.onImported).toHaveBeenCalledWith(expect.stringContaining("凭证已导入"));
+    expect(localStorage.getItem("coding2api.importProvider")).toBe("miora");
+  });
+
+  it.each([
+    { provider: "miora", payload: '{"authToken":"new-session","refreshToken":"new-refresh"}' },
+    { provider: "lingxi", payload: '{"cookie":"wps_sid=new-session"}' },
+  ])("$provider 同账号重新导入显示更新提示，并保留渠道风险说明", async ({ provider, payload }) => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({
+      id: "existing-account", merged: true,
+      tos: { level: "gray", reason: "网页登录态", basis: "运营判断" },
+    })));
+    const props = renderDialog();
+    await userEvent.click(screen.getByTestId("add-credential-tab-import"));
+    await userEvent.selectOptions(screen.getByTestId("import-provider"), provider);
+    await userEvent.clear(screen.getByTestId("import-payload"));
+    await userEvent.paste(payload);
+    await userEvent.click(screen.getByTestId("import-submit"));
+    expect(props.onImported).toHaveBeenCalledWith(
+      "已更新账号登录凭证。注意：该渠道 ToS 评级为 gray —— 网页登录态",
+    );
+  });
+
   it("灵犀在「登录渠道」页粘贴 Cookie 即可添加（无 OAuth 轨道）", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

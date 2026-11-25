@@ -1,7 +1,7 @@
 services:
   coding2api:
     build: .
-    image: ghcr.io/robbsluo/coding2api:latest
+    image: ghcr.io/a06342637/2apis:latest
     container_name: coding2api
     restart: unless-stopped
     # 让容器能通过 host.docker.internal 访问宿主（Docker Desktop 自带，
@@ -39,6 +39,10 @@ services:
       # noexec,nosuid：临时目录不需要可执行位，挡住「落一个脚本再执行」的路径。
       - /tmp:rw,noexec,nosuid,size=64m
     environment:
+      MIORA_API_ENDPOINT: ${MIORA_API_ENDPOINT:-https://miora.design}
+      MIORA_ALLOWED_ENDPOINTS: ${MIORA_ALLOWED_ENDPOINTS:-https://miora.design}
+      MIORA_CHAT_MIN_INTERVAL: ${MIORA_CHAT_MIN_INTERVAL:-0}
+      MIORA_MAX_CONCURRENCY: ${MIORA_MAX_CONCURRENCY:-1}
       # 必填：凭证列加密密钥。丢失后已存凭证全部不可解，只能重录。
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
       # 管理台管理员用户名（逗号分隔）；留空则所有用户只读

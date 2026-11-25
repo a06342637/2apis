@@ -1,5 +1,16 @@
 # Coding2API 设计文档
 
+## 2apis v0.1.0：Miora 渠道
+
+- 新增 `miora` 到现有 provider 注册表、统一模型解析、API Key 渠道绑定与公共凭证池；复用 OpenAI `/v1/chat/completions` 和 Anthropic `/v1/messages` 的协议转换，无新增 SQLite schema。
+- 鉴权为网页 `authToken` JWT 和 `refreshToken`，JWT `sub` 归一为稳定账号身份。同账号重新导入就地更新，不同账号分别保存；凭证经现有 `APP_SECRET` 加密落库。唯一刷新写者为 `RefreshTask`，先持久化轮转票据；额度与聊天不消费长期刷新票据。
+- 控制面 `/api/ai/workflow/create` → `/api/ai/cloud-agent/runtimes` → `/api/ai/cloud-agent/sessions`，推理通过上游签发的 CloudStudio ACP 链接。每账号复用专用项目、每请求新建独立会话；同账号整轮串行防止运行时 `tierKey` / `effort` 配置交叉覆盖，不同账号并行。ACP 先 GET 领取连接 ID，再 POST JSON-RPC；内容与控制结果可能分别在 GET / POST 流中，终态栅栏必须等两边完成。
+- 模型清单从 ACP `session/load` 动态读取，网页 `/api/ai/public/cloud-agent/tiers` 补充计费倍率及三档模式。2026-11-25 实测 32 个真实目录条目 + 3 个模式。真实 `session/set_model` 负责选模，未知 ID 明确拒绝，不回落自动模型。
+- token 预热分两层：模型目录启动/导入预热领取短运行时票，连接前重新获取短票；长登录票进入既有刷新窗口后由共享任务续期。仅尚未发推理的短票 401 可重建一次；流中断不自动重放已计费对话，并发送 `session/cancel`。
+- 代码/客户端工具专用通路。当前 ACP 没有可验证的 OpenAI 函数注册入口，采用严格 JSON 工具模拟；函数白名单及常见参数 schema 校验后输出中立 `TOOL_CALLS`，由客户端执行并回传结果，云端实际执行工具事件不能冒充客户端工具。媒体生成不接入。工具响应需要缓冲校验，异常响应按协议违规处理。
+- ACP `max_tokens` 仅提示预算，不是硬上限；不支持的采样/结构化输出参数返回 400，非文本输入/输出在联网前拒绝。每轮推理档位明确设置，省略时使用本服务默认 `medium`；同账号跨项目别名共享锁。工具定义的常见 schema 格式在请求阶段校验，坏定义不会先产生上游推理费用。额度查询使用 `POST /api/miora-billing/credit` 的 `totalAmount - usedAmount`，未知/失败不伪造零余额。
+- 本地抓包、真实会话票据和验证环境位于 `.local/`，该目录被 Git 忽略。公开代码与测试只使用合成凭证和注入网络边界。
+
 > 结论：九个上游厂商、十个渠道（CodeBuddy 国内 / 国际、TRAE SOLO、OpenCode Zen、Kilo、Qoder、CodeArts、OfficeAce、小浣熊、灵犀）统一为一条 OpenAI 兼容出口，公共凭证池 + 统一模型名 + 自动调度 + 按人用量统计；实现见 [TECHNICAL.md](TECHNICAL.md)，使用与部署见 [README.md](README.md)。
 
 本文只记仍成立的目标、上游事实、架构与约束。

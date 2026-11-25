@@ -193,7 +193,11 @@ describe("App 路由守卫", () => {
         });
       }),
     );
+    // 先加载真实路由模块，再检查会话驱动的首页路由。
+    // useSession 的异步响应可能在 dynamicImportSettled 之后才发起 lazy import。
+    await import("../pages/CredentialsPage");
     renderWithProviders(<App />);
+    await vi.dynamicImportSettled();
     expect(await screen.findByTestId("credentials-page")).toBeInTheDocument();
   });
 

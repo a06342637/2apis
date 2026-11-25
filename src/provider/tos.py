@@ -41,6 +41,10 @@ class TosRisk:
 
 
 CHANNEL_TOS: dict[str, TosRisk] = {
+    "miora": TosRisk(
+        "gray",
+        "复用 Miora 网页会话和项目运行时 ACP 协议；条款未明确允许第三方转发与多用户共享",
+        basis="运营判断"),
     "zen": TosRisk(
         "green",
         "官方公开网关 /zen/v1，免费层免鉴权，调用不依赖逆向客户端",

@@ -12,7 +12,8 @@ import type { Provider } from "../api/types";
  *    头，HttpOnly cookie 也能拿到，这是浏览器里唯一零安装的取凭据方式。
  *
  * 渠道识别只认**无歧义特征**：`wps_sid` → 灵犀、`xhx_token` 或
- * `iss=xiaohuanxiong` → 小浣熊、`accessToken`/`refreshToken` → TRAE、
+ * `iss=xiaohuanxiong` → 小浣熊、`authToken` / `iss=https://miora.design` → Miora、
+ * `accessToken`/`refreshToken` → TRAE、
  * AK/SK → CodeArts、`model_app_key` → OfficeAce。CodeBuddy / Qoder 的
  * `token` / `access_token` 长得一样，故意不猜，沿用下拉选中的渠道——猜错
  * 会把凭证落到错池，直到一次 401 才暴露。
@@ -28,6 +29,7 @@ export const IMPORT_PROVIDERS: Provider[] = [
   "officeace",
   "raccoon",
   "lingxi",
+  "miora",
 ];
 
 export type ParsedCredential =
@@ -60,13 +62,14 @@ function jwtClaims(token: string): Record<string, unknown> | null {
   }
 }
 
-/** 从 JWT 的 `iss` 认小浣熊；其余 token 一律不猜。 */
+/** 从 JWT 的 `iss` 认已知网页渠道；只读元数据，不替代服务端验证。 */
 function providerFromToken(token: string): Provider | null {
   const claims = jwtClaims(token.trim());
   const issuer = claims?.iss;
   if (typeof issuer === "string" && issuer.toLowerCase().includes("xiaohuanxiong")) {
     return "raccoon";
   }
+  if (issuer === "https://miora.design") return "miora";
   return null;
 }
 
@@ -78,11 +81,16 @@ function providerFromCookie(cookie: string): Provider | null {
     .filter(Boolean);
   if (pairs.includes("wps_sid")) return "lingxi";
   if (pairs.includes("xhx_token")) return "raccoon";
+  if (pairs.includes("authtoken")) return "miora";
   return null;
 }
 
 function providerFromObject(value: Record<string, unknown>): Provider | null {
   const has = (key: string) => Object.prototype.hasOwnProperty.call(value, key);
+  // Miora 同样用 refreshToken，必须先认 authToken，避免误入 TRAE 池。
+  if (has("authToken")) return "miora";
+  const token = value.access_token ?? value.token;
+  if (typeof token === "string" && providerFromToken(token) === "miora") return "miora";
   if (has("accessToken") || has("refreshToken")) return "trae";
   if (has("access_key_id") || has("secret_access_key")) return "codearts";
   if (has("model_app_key") || has("model_app_secret") || has("model_base_url")) {
@@ -93,6 +101,17 @@ function providerFromObject(value: Record<string, unknown>): Provider | null {
     return provider as Provider;
   }
   return null;
+}
+
+/** 只认 cURL 的目标主机，不能被其他站点头或请求体里的链接误导。 */
+function providerFromCurlTarget(text: string): Provider | null {
+  const target = /^curl\s+(?:(?:--location|-L)\s+)?(['"])(https?:\/\/[^\s]+?)\1/i.exec(text);
+  if (!target) return null;
+  try {
+    return new URL(target[2]).hostname === "miora.design" ? "miora" : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -150,6 +169,17 @@ function wrapRaw(
   recognized: boolean,
 ): ParsedCredential {
   const detected = recognized ? provider : null;
+  if (provider === "miora") {
+    return {
+      ok: true,
+      provider,
+      credential: {
+        ...(source.cookie !== null ? { cookie: source.cookie } : {}),
+        ...(source.token ? { authToken: source.token } : {}),
+      },
+      detected,
+    };
+  }
   if (source.cookie !== null) {
     if (provider === "lingxi" || provider === "raccoon") {
       return {
@@ -207,13 +237,11 @@ export function parseCredentialInput(
       };
     }
     const token = bearer?.trim() || null;
-    const detected = !detect
-      ? null
-      : cookie
-        ? providerFromCookie(cookie)
-        : token
-          ? providerFromToken(token)
-          : null;
+    const detected = detect
+      ? (cookie ? providerFromCookie(cookie) : null)
+        ?? (token ? providerFromToken(token) : null)
+        ?? providerFromCurlTarget(trimmed)
+      : null;
     return wrapRaw(detected ?? fallback, { cookie, token }, detected !== null);
   }
 

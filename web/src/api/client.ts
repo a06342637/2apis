@@ -260,7 +260,7 @@ export const api = {
     return { blob: await response.blob(), rowCount: response.headers.get("X-Export-Row-Count") };
   },
   importCredential: (provider: string, credential: unknown, nickname = "") =>
-    request<{ id: string; tos: TosRisk }>("/api/credentials", {
+    request<{ id: string; tos: TosRisk; merged?: boolean }>("/api/credentials", {
       method: "POST",
       ...json({ provider, credential, nickname }),
     }),
