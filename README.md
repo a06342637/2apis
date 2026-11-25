@@ -6,6 +6,8 @@
 
 Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，重新导入同一账号会更新原凭证。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。
 
+导入后会先按账号执行共享预刷新，再用持久化的新票据探测额度；过期 access token 搭配有效 refresh token 可以自动续期，刷新临时失败会保留账号等待重试。并发刷新取得编辑锁后会重新检查有效期，避免重复消费轮转票据。
+
 1. 管理台「添加凭证」→ Miora → 打开官网并登录。
 2. 在官网 F12 → Console 运行以下命令，将复制的 JSON 粘贴到管理台导入框。可为不同账号重复操作，也可通过「批量导入」添加多条凭证。
 
@@ -71,6 +73,10 @@ print(response.content)
 ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completion_tokens` 会作为提示中的输出预算，**不能保证硬 token 上限**；非默认 `temperature` / `top_p` / penalties 及 `stop`、`logprobs`、`seed`、`response_format`、`prediction` 等无法兑现的参数会明确返回 400。图片、音频、文件输入及音频输出在联网前返回能力不支持的 400。`reasoning_effort` 支持 `low` / `medium` / `high`，每轮显式设置，省略时使用 `medium`，不会继承上一位调用者的档位。工具响应需缓冲后校验，调用帧会在校验通过后发出。
 
 配置：`MIORA_API_ENDPOINT=https://miora.design`、`MIORA_ALLOWED_ENDPOINTS=https://miora.design`；`MIORA_CHAT_MIN_INTERVAL=0` 与 `MIORA_MAX_CONCURRENCY=1` 可在管理台热更。每账号仍受运行时串行锁保护。
+
+要展示 Miora 完整目录，可设置 `MODEL_BLOCKLIST=custom_model_*,*sub*agent*,summary,browser_use_*,file_search_agent`。继承的默认名单会隐藏部分 Miora 仍提供的型号和默认路由；上述配置只过滤内部工具与代理占位，仍可追加自定义规则。Docker Compose 对空值会回落默认名单，请使用非空配置。Hy4 Flash 标准与免费路由分别展示，原始 ID `hy4flash@miora` 和 `hy4flash-free@miora` 各自保持独立选模。
+
+首次接入没有运行时的项目时会自动创建运行时，支持上游以 JSON `httpStatus=404` 返回的缺失响应。同账号重新导入与预刷新共用编辑锁，避免旧刷新结果覆盖新登录票据。服务启动先刷新到期窗口内的登录票据，再探测额度，避免可续期账号因旧 access token 的 401 被提前停用。ACP 建连和控制请求均有超时；POST 提前结束时，只有独立 GET 流明确报告该轮成功完成才恢复回答，不重放推理。工具参数拒绝 `NaN` / `Infinity` 等非标准 JSON 数值，并区分布尔值与数值枚举。
 
 [![CI](https://github.com/a06342637/2apis/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/2apis/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/a06342637/2apis)](https://github.com/a06342637/2apis/releases)

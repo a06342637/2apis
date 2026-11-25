@@ -46,6 +46,7 @@ async def save_login_credential(
         credential_data: dict[str, Any],
         nickname: str,
         added_by: str,
+        tags: list[str] | None = None,
 ) -> tuple[str, bool]:
     """登录结果落库，返回 `(credential_id, 是否为合并更新)`。
 
@@ -66,7 +67,7 @@ async def save_login_credential(
         # 没有稳定身份 = 不能安全合并，直接新增（不加锁也没人有东西可抢）。
         credential_id = services.credentials.add(
             provider=provider_id, credential_data=credential_data,
-            nickname=nickname, added_by=added_by)
+            nickname=nickname, added_by=added_by, tags=tags)
         return credential_id, False
 
     async with _login_lock(provider_id):
@@ -79,5 +80,5 @@ async def save_login_credential(
                     return existing_id, True
         credential_id = services.credentials.add(
             provider=provider_id, credential_data=credential_data,
-            nickname=nickname, added_by=added_by)
+            nickname=nickname, added_by=added_by, tags=tags)
         return credential_id, False

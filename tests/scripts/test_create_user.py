@@ -120,17 +120,50 @@ def test_open_repos_init_path_builds_schema(tmp_path):
         database.close()
 
 
-def test_password_stdin_avoids_argv(db_path, monkeypatch):
-    """--password-stdin 从 stdin 读密码（不进 argv）。"""
-    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO("secret-pw\n"))
+@pytest.mark.parametrize("text, expected", [
+    ("secret-pw\n", "secret-pw"),
+    ("secret-pw\r\n", "secret-pw"),
+    ("secret-pw", "secret-pw"),
+    (" secret-pw \r\nignored\r\n", " secret-pw "),
+], ids=["lf", "crlf", "no-ending", "first-line-with-spaces"])
+def test_read_password_stdin_line_endings(text, expected, monkeypatch):
+    """密码文件的换行风格不能改变读出的密码；不依赖平台文件权限。"""
+    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO(text))
+    parser = SCRIPT_MODULE.argparse.ArgumentParser()
+    args = SCRIPT_MODULE.argparse.Namespace(password_stdin=True, password=None)
+    assert SCRIPT_MODULE.read_password(parser, args) == expected
+
+
+@pytest.mark.parametrize("text", ["\n", "\r\n", ""], ids=["lf", "crlf", "eof"])
+def test_read_password_stdin_empty_line_rejected(text, monkeypatch):
+    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO(text))
+    parser = SCRIPT_MODULE.argparse.ArgumentParser()
+    args = SCRIPT_MODULE.argparse.Namespace(password_stdin=True, password=None)
+    with pytest.raises(SystemExit) as caught:
+        SCRIPT_MODULE.read_password(parser, args)
+    assert caught.value.code == 2
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n", ""], ids=["lf", "crlf", "no-ending"])
+def test_password_stdin_avoids_argv(db_path, monkeypatch, ending):
+    """--password-stdin 接受跨平台行终止符和无终止符（不进 argv）。"""
+    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO("secret-pw" + ending))
     assert SCRIPT_MODULE.main(["alice", "--password-stdin",
                                "--db", str(db_path)]) == 0
     users, _audit = repos(db_path)
     assert verify_password("secret-pw", users.get("alice")["password_hash"])
 
 
-def test_password_stdin_empty_rejected(db_path, monkeypatch):
-    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO("\n"))
+def test_password_stdin_preserves_spaces_and_reads_only_first_line(db_path, monkeypatch):
+    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO(" secret-pw \r\nignored\r\n"))
+    assert SCRIPT_MODULE.main(["alice", "--password-stdin", "--db", str(db_path)]) == 0
+    users, _audit = repos(db_path)
+    assert verify_password(" secret-pw ", users.get("alice")["password_hash"])
+
+
+@pytest.mark.parametrize("text", ["\n", "\r\n", ""], ids=["lf", "crlf", "eof"])
+def test_password_stdin_empty_rejected(db_path, monkeypatch, text):
+    monkeypatch.setattr(SCRIPT_MODULE.sys, "stdin", io.StringIO(text))
     with pytest.raises(SystemExit):
         SCRIPT_MODULE.main(["alice", "--password-stdin", "--db", str(db_path)])
 

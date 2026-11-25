@@ -8,12 +8,21 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import time
 
+import httpx
 import pytest
 
 from src.config import Settings
+from src.db.conn import Database
+from src.db.crypto import CredentialCipher
+from src.db.migrate import apply_schema
+from src.db.repo import CredentialRepository
 from src.provider.base import Quota
+from src.provider.miora import MioraProvider
+from src.provider.miora.client import MioraClient
 from src.stats.collector import StatsCollector
 from src.tasks.checkin import CheckinTask
 from src.tasks.quota_probe import QuotaProbeTask
@@ -120,6 +129,106 @@ async def test_runner_start_refreshes_expiring_credentials(repo):
         assert provider.refresh_calls == 1
         assert credentials.credential_data(
             credentials.candidates()[0].credential_id)["bearer_token"] == "NEW"
+    finally:
+        await runner.stop()
+
+
+async def test_runner_start_refreshes_expired_miora_before_quota_probe(tmp_path):
+    """过期 access 仍可用 RT 续期，首轮探测必须读取已落库的新票。"""
+    moment = int(time.time())
+
+    def token(expiry):
+        payload = base64.urlsafe_b64encode(json.dumps({
+            "sub": "startup-account", "exp": expiry,
+        }).encode()).decode().rstrip("=")
+        return f"e30.{payload}.synthetic"
+
+    old_token, new_token = token(moment - 60), token(moment + 7200)
+    seen = []
+
+    def respond(request):
+        if request.url.path == "/api/auth/refresh-token":
+            assert json.loads(request.content) == {"refresh_token": "valid-refresh"}
+            seen.append("refresh")
+            return httpx.Response(200, json={
+                "access_token": new_token, "refresh_token": "rotated-refresh",
+            })
+        assert request.url.path == "/api/miora-billing/credit"
+        seen.append("probe")
+        if request.headers["authorization"] != f"Bearer {new_token}":
+            # 旧启动顺序会走此 401 分支，并在 quota task 中硬禁用账号。
+            return httpx.Response(401, json={"code": 401, "message": "expired"})
+        return httpx.Response(200, json={"code": 0, "data": {
+            "totalAmount": 100, "usedAmount": 25,
+        }})
+
+    # 这里验证任务顺序，临时库权限不是被测行为；生产 Database 仍默认严格校验。
+    db = Database(tmp_path / "startup.sqlite3", strict_permissions=False)
+    apply_schema(db.connect())
+    credentials = CredentialRepository(db, CredentialCipher(SECRET))
+    provider = MioraProvider(client=MioraClient(
+        short_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ))
+    providers = {"miora": provider}
+    credential_id = credentials.add(provider="miora", credential_data=provider.import_credential({
+        "authToken": old_token, "refreshToken": "valid-refresh",
+    }))
+    runner = TaskRunner(
+        quota_probe=QuotaProbeTask(credentials, providers),
+        checkin=CheckinTask(credentials, providers),
+        refresh=RefreshTask(credentials, providers, skew_seconds=3600, now=lambda: moment),
+        retention=RetentionTask(StatsCollector(db)),
+    )
+    try:
+        await runner.start()
+        assert seen == ["refresh", "probe"]
+        data = credentials.credential_data(credential_id)
+        assert data["access_token"] == new_token
+        assert data["refresh_token"] == "rotated-refresh"
+        assert data["expires_at"] == moment + 7200
+        candidate = credentials.candidates()[0]
+        assert not candidate.disabled and candidate.enabled
+        assert candidate.health == 75
+        assert runner.status.get("refresh").ok is True
+        assert runner.status.get("quota_probe").ok is True
+    finally:
+        await runner.stop()
+        await provider.aclose()
+        db.close()
+
+
+@pytest.mark.parametrize("failed_task", ["refresh", "quota_probe"])
+async def test_runner_start_refresh_and_quota_failures_are_independent(failed_task):
+    """调整顺序后任一首轮失败仍不阻断后续首轮或周期循环建立。"""
+    seen = []
+
+    class AsyncTask:
+        def __init__(self, key):
+            self.key = key
+
+        async def run_once(self, **kwargs):
+            seen.append(self.key)
+            if self.key == "quota_probe":
+                assert kwargs == {"apply_pacing": False}
+            if self.key == failed_task:
+                raise RuntimeError("startup task failed")
+
+    class Checkin:
+        def has_times(self):
+            return False
+
+    class Retention:
+        def run_once(self):
+            seen.append("retention")
+
+    runner = TaskRunner(quota_probe=AsyncTask("quota_probe"), checkin=Checkin(),
+                        refresh=AsyncTask("refresh"), retention=Retention())
+    try:
+        await runner.start()
+        assert seen == ["refresh", "quota_probe", "retention"]
+        assert len(runner._tasks) == 4
+        assert all(not task.done() for task in runner._tasks)
+        assert runner.status.get(failed_task).ok is False
     finally:
         await runner.stop()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import time
@@ -12,11 +13,12 @@ from fastapi.testclient import TestClient
 from src.auth.session import create_session_token
 from src.config import Settings
 from src.main import build_app
-from src.provider.base import Event, EventKind, Model, Quota, Usage
+from src.provider.base import Event, EventKind, Model, Quota, UpstreamReloginRequired, Usage
 from src.provider.miora import MioraProvider
-from src.provider.miora.client import validate_payload
+from src.provider.miora.client import MioraHTTPError, validate_payload
 from src.provider.miora.credential import MioraCredential
 from src.provider.miora.tools import parse_response, prepare_prompt
+from src.tasks import TaskReport
 from src.tasks.refresh import RefreshTask
 from tests.helpers.chat import jwt_token
 from tests.helpers.constants import SECRET
@@ -83,7 +85,7 @@ class LocalMioraClient:
 
 def token(uid: str, marker: str, *, exp: int | None = None) -> str:
     return jwt_token(
-        exp if exp is not None else int(time.time()) + 86400,
+        exp if exp is not None else int(time.time()) + 15 * 86400,
         payload_extra={"sub": uid, "jti": marker, "iss": "https://miora.design"},
     )
 
@@ -118,6 +120,13 @@ def miora_app(tmp_path):
 
 def api_headers(app):
     return {"Authorization": "Bearer " + app.state.api_keys.create("root", "Miora test")["api_key"]}
+
+
+def wait_for_probes(app, client):
+    async def wait():
+        await asyncio.wait_for(asyncio.gather(*list(app.state.pending_probes)), timeout=5)
+
+    client.portal.call(wait)
 
 
 def test_account_import_merge_batch_and_redaction(miora_app):
@@ -173,13 +182,10 @@ def test_refresh_rotates_tokens_in_encrypted_repository(miora_app):
     app, client, network = miora_app
     now = int(time.time())
     previous = token("soon", "old", exp=now + 60)
-    old = client.post(
-        "/api/credentials",
-        json={
-            "provider": "miora",
-            "credential": {"authToken": previous, "refreshToken": "old-refresh"},
-        },
-    ).json()["id"]
+    old = app.state.credentials.add(
+        provider="miora",
+        credential_data={"access_token": previous, "refresh_token": "old-refresh", "uid": "soon"},
+    )
     task = RefreshTask(
         app.state.credentials, app.state.services.registry, skew_seconds=120, now=lambda: now
     )
@@ -199,6 +205,176 @@ def test_refresh_rotates_tokens_in_encrypted_repository(miora_app):
     assert updated["access_token"].encode() not in cipher
     assert b"rotated-refresh" not in cipher
     assert client.portal.call(task.run_once).attempted == 0
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_same_account_manual_login_waits_for_refresh_and_keeps_new_tokens(
+    miora_app, batch, monkeypatch
+):
+    app, client, network = miora_app
+    now = int(time.time())
+    old_token = token("same-account", "old", exp=now + 60)
+    initial = {
+        "id": app.state.credentials.add(
+            provider="miora",
+            credential_data={
+                "access_token": old_token,
+                "refresh_token": "old-refresh",
+                "uid": "same-account",
+            },
+            tags=["original"],
+        )
+    }
+    entered, proceed = asyncio.Event(), asyncio.Event()
+
+    async def delayed_refresh(credential):
+        entered.set()
+        await proceed.wait()
+        return {
+            "access_token": token(credential.uid, "old-rotation"),
+            "refresh_token": "old-rotation-refresh",
+            "uid": credential.uid,
+        }
+
+    network.refresh_token = delayed_refresh
+    task = RefreshTask(
+        app.state.credentials, app.state.services.registry, skew_seconds=120, now=lambda: now
+    )
+    refresh = client.portal.start_task_soon(task.run_once)
+    client.portal.call(entered.wait)
+    import_entered = asyncio.Event()
+    lookup = app.state.credentials.find_login_credential
+
+    def track_lookup(*args, **kwargs):
+        import_entered.set()
+        return lookup(*args, **kwargs)
+
+    monkeypatch.setattr(app.state.credentials, "find_login_credential", track_lookup)
+    new_token = token("same-account", "manual-login")
+    item = {
+        "provider": "miora",
+        "credential": {"authToken": new_token, "refreshToken": "manual-refresh"},
+        "nickname": "latest",
+        "tags": ["new-tag"],
+    }
+
+    async def import_while_refreshing():
+        import httpx
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app),
+            base_url="http://testserver",
+            cookies={"coding2api_session": client.cookies.get("coding2api_session")},
+        ) as async_client:
+            pending = asyncio.create_task(
+                async_client.post(
+                    "/api/credentials/batch-import" if batch else "/api/credentials",
+                    json={"items": [item]} if batch else item,
+                )
+            )
+            try:
+                await asyncio.wait_for(import_entered.wait(), timeout=5)
+                assert not pending.done()
+                assert (
+                    app.state.credentials.credential_data(initial["id"])["access_token"]
+                    == old_token
+                )
+            finally:
+                proceed.set()
+                response = await pending
+            return response
+
+    try:
+        response = client.portal.call(import_while_refreshing)
+    finally:
+        # 断言失败也释放人工控制的刷新挂起点，测试结束不能遗留后台任务。
+        client.portal.call(proceed.set)
+    assert refresh.result().succeeded == 1
+    assert response.status_code == 200, response.text
+    saved = app.state.credentials.credential_data(initial["id"])
+    assert saved["access_token"] == new_token
+    assert saved["refresh_token"] == "manual-refresh"
+    assert saved["uid"] == "same-account"
+    rows = app.state.credentials.list_all()
+    assert len(rows) == 1 and rows[0]["tags"] == ["original"]
+    assert rows[0]["nickname"] == "latest"
+
+
+@pytest.mark.parametrize("outcome", ["valid", "expired-refresh", "unavailable"])
+def test_import_expired_access_refreshes_before_quota_with_shared_task(miora_app, outcome):
+    app, client, network = miora_app
+    now = int(time.time())
+    old = token("expired-account", "old", exp=now - 1)
+    new = token("expired-account", "new")
+    probes = []
+
+    async def refresh(credential):
+        network.refreshes.append(credential)
+        if outcome == "expired-refresh":
+            raise UpstreamReloginRequired("synthetic invalid refresh")
+        if outcome == "unavailable":
+            raise MioraHTTPError(503, b"temporary upstream failure")
+        return {"access_token": new, "refresh_token": "rotated", "uid": credential.uid}
+
+    async def probe(credential):
+        probes.append(credential.access_token)
+        if credential.expires_at <= now:
+            raise MioraHTTPError(401, b"expired access")
+        saved = app.state.credentials.candidates(["miora"])[0].credential_id
+        assert (
+            app.state.credentials.credential_data(saved)["access_token"] == credential.access_token
+        )
+        return Quota(remaining=250, total=250, probed_at=now)
+
+    network.refresh_token, network.probe_quota = refresh, probe
+    response = client.post(
+        "/api/credentials",
+        json={
+            "provider": "miora",
+            "credential": {"authToken": old, "refreshToken": "synthetic-refresh"},
+        },
+    )
+    assert response.status_code == 200, response.text
+    wait_for_probes(app, client)
+    assert len(network.refreshes) == 1
+    row = app.state.credentials.list_all()[0]
+    data = app.state.credentials.credential_data(response.json()["id"])
+    if outcome == "valid":
+        assert data["access_token"] == new and data["refresh_token"] == "rotated"
+        assert probes == [new] and row["disabled"] == 0 and row["quota_remaining"] == 250
+    else:
+        assert data["access_token"] == old and probes == []
+        assert row["disabled"] == (1 if outcome == "expired-refresh" else 0)
+
+
+def test_fresh_import_does_not_rotate_long_term_tokens(miora_app):
+    app, client, network = miora_app
+    import_account(client)
+    wait_for_probes(app, client)
+    assert network.refreshes == []
+    assert app.state.credentials.list_all()[0]["quota_remaining"] == 250
+
+
+def test_miora_probe_without_runner_does_not_use_expired_snapshot(miora_app, monkeypatch):
+    app, client, network = miora_app
+    monkeypatch.delattr(app.state, "task_runner")
+    import_account(client)
+    wait_for_probes(app, client)
+    assert network.refreshes == []
+    assert app.state.credentials.list_all()[0]["quota_remaining"] is None
+
+
+def test_miora_probe_skips_credential_removed_after_refresh(miora_app, monkeypatch):
+    app, client, network = miora_app
+
+    async def remove(credential_id):
+        app.state.credentials.delete(credential_id)
+        return TaskReport()
+
+    monkeypatch.setattr(app.state.task_runner, "refresh_credential", remove)
+    import_account(client)
+    wait_for_probes(app, client)
+    assert network.refreshes == [] and app.state.credentials.list_all() == []
 
 
 def test_models_selection_and_account_pool_isolation(miora_app):

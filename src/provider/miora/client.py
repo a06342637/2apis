@@ -210,7 +210,11 @@ class MioraClient(LazyClients):
         if not isinstance(data, dict):
             raise UpstreamProtocolViolation("Miora 返回了无效 REST 响应")
         if data.get("code", 0) != 0:
-            raise MioraHTTPError(400, json.dumps(data, ensure_ascii=False).encode())
+            # Miora 可用 HTTP 200 传业务错误（新项目尚无 runtime 时 httpStatus=404）。
+            status = data.get("httpStatus")
+            if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
+                status = 400
+            raise MioraHTTPError(status, json.dumps(data, ensure_ascii=False).encode())
         return data.get("data", data)
 
     @asynccontextmanager
@@ -423,6 +427,7 @@ def catalog_models(loaded: Any, tiers: Any) -> tuple[list[Model], dict[str, tupl
     by_model = {_text(item.get("modelId")): item for item in tier_items if isinstance(item, dict)}
     models: list[Model] = []
     selections: dict[str, tuple[str, str]] = {}
+    raw_ids = {_text(item.get("id")) for item in raw if isinstance(item, dict)}
     for item in raw:
         if not isinstance(item, dict):
             continue
@@ -430,7 +435,13 @@ def catalog_models(loaded: Any, tiers: Any) -> tuple[list[Model], dict[str, tupl
         if not model_id or model_id in selections:
             continue
         tier = by_model.get(model_id, {})
-        models.append(Model(id=model_id, name=_text(item.get("name")) or model_id,
+        name = _text(item.get("name")) or model_id
+        # 同渠道标准/免费路由不是可互换的原始 ID；通用命名会剥 free，须保留路由区别。
+        if f"{model_id}-free" in raw_ids:
+            name += " 标准路由"
+        elif model_id.endswith("-free") and model_id[:-5] in raw_ids:
+            name += " 免费路由"
+        models.append(Model(id=model_id, name=name,
             credit_rate=_rate(tier.get("billingFactor")),
             max_input_tokens=_positive_int(item.get("maxInputTokens")),
             max_output_tokens=_positive_int(item.get("maxOutputTokens")),

@@ -10,6 +10,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -25,6 +26,13 @@ class AcpHTTPError(UpstreamHTTPError):
     @staticmethod
     def classify_status(status: int, body: bytes) -> ErrKind:
         return ErrKind.SOFT if status == 401 else classify_status(status, body)
+
+
+@dataclass(frozen=True, slots=True)
+class _PromptPostEOF:
+    """POST prompt SSE 已结束，但该流没有给出当前请求的 RPC 终态。"""
+
+    request_id: int
 
 
 async def jsonrpc_frames(response: httpx.Response) -> AsyncIterator[dict]:
@@ -54,7 +62,7 @@ class AcpConnection:
         self.endpoint = endpoint
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout = timeout
-        self._queue: asyncio.Queue[dict | Exception] = asyncio.Queue(maxsize=256)
+        self._queue: asyncio.Queue[dict | Exception | _PromptPostEOF] = asyncio.Queue(maxsize=256)
         self._next_id = 0
         self._context: Any = None
         self._reader: asyncio.Task | None = None
@@ -62,19 +70,26 @@ class AcpConnection:
     async def __aenter__(self) -> AcpConnection:
         self._context = self.client.stream(
             "GET", self.endpoint, headers={**self.headers, "Accept": "text/event-stream"})
-        response = await self._context.__aenter__()
+        response = None
+        entered = False
         try:
-            if response.status_code >= 400:
-                raise AcpHTTPError(response.status_code, await read_body_bounded(response))
-            connection = response.headers.get("Acp-Connection-Id")
-            if not connection:
-                raise UpstreamProtocolViolation("Miora ACP 缺少连接标识")
-            self.headers["Acp-Connection-Id"] = connection
-            self._reader = asyncio.create_task(self._read(response))
+            # 流式池 read=None；建链阶段须另设截止时间，不能无限等待响应头。
+            async with asyncio.timeout(min(self.timeout, 30)):
+                response = await self._context.__aenter__()
+                if response.status_code >= 400:
+                    raise AcpHTTPError(response.status_code, await read_body_bounded(response))
+                connection = response.headers.get("Acp-Connection-Id")
+                if not connection:
+                    raise UpstreamProtocolViolation("Miora ACP 缺少连接标识")
+                self.headers["Acp-Connection-Id"] = connection
+                self._reader = asyncio.create_task(self._read(response))
+            entered = True
             return self
-        except Exception:
-            await self._context.__aexit__(None, None, None)
-            raise
+        except TimeoutError as error:
+            raise UpstreamProtocolViolation("Miora ACP 建链超时") from error
+        finally:
+            if not entered and response is not None:
+                await self._context.__aexit__(None, None, None)
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
         if self._reader is not None:
@@ -105,8 +120,20 @@ class AcpConnection:
                     raise AcpHTTPError(response.status_code, await read_body_bounded(response))
                 content_type = response.headers.get("Content-Type", "")
                 if "text/event-stream" in content_type:
-                    async for frame in jsonrpc_frames(response):
-                        await self._queue.put(frame)
+                    received_result = False
+                    try:
+                        async for frame in jsonrpc_frames(response):
+                            if (frame.get("id") == request.get("id")
+                                    and ("result" in frame or "error" in frame)):
+                                received_result = True
+                            await self._queue.put(frame)
+                    except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout):
+                        # 200 SSE 的 POST 读取中断与缺少终态的 EOF 同义；GET 决定能否恢复。
+                        # 已派发的 RPC error 不会消失；非 prompt 控制请求仍上抛原异常。
+                        if request.get("method") != "session/prompt":
+                            raise
+                    if request.get("method") == "session/prompt" and not received_result:
+                        await self._queue.put(_PromptPostEOF(request["id"]))
                 elif "application/json" in content_type:
                     raw = await read_body_bounded(response)
                     try:
@@ -128,7 +155,12 @@ class AcpConnection:
         await self._post(response)
 
     async def notify(self, method: str, params: dict) -> None:
-        await self._post({"jsonrpc": "2.0", "method": method, "params": params})
+        try:
+            # 取消是尽力通知，不能让失败请求的清理继续无限占住账号锁。
+            async with asyncio.timeout(min(self.timeout, 5)):
+                await self._post({"jsonrpc": "2.0", "method": method, "params": params})
+        except TimeoutError:
+            pass
 
     async def rpc_frames(self, method: str, params: dict) -> AsyncIterator[dict]:
         self._next_id += 1
@@ -136,31 +168,44 @@ class AcpConnection:
         request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         task = asyncio.create_task(self._post(request))
         result: dict | None = None
-        ended = False
+        end_params: dict | None = None
+        post_eof = False
         try:
             async with asyncio.timeout(self.timeout):
                 while True:
                     frame = await self._queue.get()
                     if isinstance(frame, Exception):
                         raise frame
-                    if "method" in frame and "id" in frame:
-                        await self._reject_request(frame)
-                        continue
-                    if frame.get("id") == request_id:
-                        result = frame
-                        if method != "session/prompt" or "error" in frame:
-                            yield frame
-                            return
+                    if isinstance(frame, _PromptPostEOF):
+                        if frame.request_id == request_id:
+                            post_eof = True
                     else:
-                        if frame.get("method") == "session/endTurn":
-                            end_params = frame.get("params")
-                            if (isinstance(end_params, dict)
-                                    and end_params.get("sessionId") == params.get("sessionId")):
-                                ended = True
-                        yield frame
+                        if "method" in frame and "id" in frame:
+                            await self._reject_request(frame)
+                            continue
+                        if frame.get("id") == request_id:
+                            result = frame
+                            if method != "session/prompt" or "error" in frame:
+                                yield frame
+                                return
+                        else:
+                            if frame.get("method") == "session/endTurn":
+                                candidate = frame.get("params")
+                                if (isinstance(candidate, dict)
+                                        and candidate.get("sessionId") == params.get("sessionId")):
+                                    end_params = candidate
+                            yield frame
                     # GET endTurn 是内容已全部送达的栅栏；POST result 先到也不丢尾帧。
-                    if result is not None and ended:
+                    if result is not None and end_params is not None:
                         yield result
+                        return
+                    if (post_eof and end_params is not None and self._queue.empty()):
+                        # 与网页客户端相同：POST 断尾可由完整、成功的 GET endTurn 收尾。
+                        # 先消费已有队列，确保不吞掉已抵达的 RPC error。
+                        if end_params.get("stopReason") != "end_turn":
+                            raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
+                        yield {"jsonrpc": "2.0", "id": request_id,
+                               "result": {"stopReason": "end_turn"}}
                         return
         except TimeoutError as error:
             raise UpstreamProtocolViolation("Miora ACP 请求超时") from error

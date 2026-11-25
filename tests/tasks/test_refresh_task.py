@@ -36,6 +36,61 @@ async def test_refresh_task_only_touches_due_credentials(repo):
     assert credentials.credential_data(soon)["bearer_token"] == "NEW"
     assert credentials.credential_data(later)["bearer_token"] == "old"
 
+async def test_refresh_one_credential_keeps_other_due_accounts_unchanged(repo):
+    credentials, _db = repo
+    data = {"bearer_token": "old", "refresh_token": "RT", "auth_source": "oauth", "expires_at": 1}
+    selected = credentials.add(provider="codebuddy", credential_data=data)
+    other = credentials.add(provider="codebuddy", credential_data=data)
+    provider = ProbeProvider(refresh_new="NEW")
+    task = RefreshTask(credentials, {"codebuddy": provider}, skew_seconds=100, now=lambda: 1000)
+    report = await task.run_once(credential_id=selected)
+    assert report.succeeded == 1 and provider.refresh_calls == 1
+    assert credentials.credential_data(selected)["bearer_token"] == "NEW"
+    assert credentials.credential_data(other)["bearer_token"] == "old"
+    assert (await task.run_once(credential_id="missing")).attempted == 0
+
+
+async def test_concurrent_refresh_rechecks_new_expiry_after_edit_lock(repo):
+    credentials, _db = repo
+    credential_id = credentials.add(provider="codebuddy", credential_data={
+        "bearer_token": "old", "refresh_token": "RT", "auth_source": "oauth", "expires_at": 1})
+    entered, finish, waiting = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    calls = []
+
+    class Provider(ProbeProvider):
+        async def refresh(self, data):
+            calls.append(data)
+            entered.set()
+            await finish.wait()
+            return {"bearer_token": "new", "refresh_token": "rotated", "auth_source": "oauth",
+                    "expires_at": 10000}
+
+    lock = credentials.edit_lock(credential_id)
+
+    class ObservedLock:
+        async def __aenter__(self):
+            if lock.locked():
+                waiting.set()
+            await lock.acquire()
+
+        async def __aexit__(self, *args):
+            lock.release()
+
+    credentials.edit_lock = lambda _id: ObservedLock()
+    task = RefreshTask(credentials, {"codebuddy": Provider()}, skew_seconds=100, now=lambda: 1000)
+    first = asyncio.create_task(task.run_once(credential_id=credential_id))
+    await entered.wait()
+    second = asyncio.create_task(task.run_once(credential_id=credential_id))
+    try:
+        await asyncio.wait_for(waiting.wait(), timeout=5)
+    finally:
+        finish.set()
+    first_result, second_result = await asyncio.gather(first, second)
+    assert len(calls) == 1
+    assert first_result.succeeded == 1 and second_result.skipped == 1
+    assert credentials.credential_data(credential_id)["refresh_token"] == "rotated"
+
+
 async def test_refresh_task_skips_paused_credential(repo):
     """回归 #15：用户软暂停（enabled=0）的凭证不该被预刷新。
 

@@ -788,7 +788,19 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
 
         async def probe() -> None:
             try:
-                quota = await provider.probe_quota(data)
+                probe_data = data
+                if provider_id == "miora":
+                    runner = getattr(app.state, "task_runner", None)
+                    if runner is None:
+                        return
+                    report = await runner.refresh_credential(credential_id)
+                    if report.failed:
+                        return
+                    # 续期结果已经持久化，探测必须重新读取新票而非闭包里的旧快照。
+                    probe_data = credentials.credential_data(credential_id)
+                    if probe_data is None:
+                        return
+                quota = await provider.probe_quota(probe_data)
             except Exception as error:  # noqa: BLE001 - 探测失败标记为未探测
                 logger.warning("即时额度探测失败 %s: %s", credential_id, error)
                 reason = relogin_reason(provider_id or "", error)
