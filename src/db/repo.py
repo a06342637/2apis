@@ -1218,31 +1218,56 @@ class CredentialRepository:
 
 
 class ApiKeyRepository:
-    def __init__(self, db) -> None:
+    def __init__(self, db, cipher: CredentialCipher | None = None) -> None:
         self._db = db
+        self._cipher = cipher
 
     def create(self, username: str, name: str = "", now: int | None = None,
                *, provider_binding: str = "", allowed_ips: str = "",
                allowed_models: str = "", expires_at: int | None = None,
-               quota: str = "", credential_ids: Iterable[str] = ()) -> dict[str, Any]:
+               quota: str = "", credential_ids: Iterable[str] = (),
+               group_ids: Iterable[str] = ()) -> dict[str, Any]:
         account_ids = normalize_credential_ids(list(credential_ids))
+        selected_groups = normalize_credential_ids(list(group_ids))
+        if account_ids and selected_groups:
+            raise ValueError("credential_ids and group_ids cannot both be non-empty")
         plaintext = generate_api_key()
+        encrypted = self._cipher.encrypt(plaintext.encode()) if self._cipher is not None else None
         key_id = _new_id("key")
         created_at = _now(now)
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT INTO api_keys (id, username, name, key_digest, preview, created_at, "
-                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids, "
+                "key_enc, group_ids) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (key_id, username, name, digest_api_key(plaintext), preview_api_key(plaintext),
                  created_at, provider_binding, allowed_ips, allowed_models, expires_at, quota,
-                 json.dumps(account_ids)),
+                 json.dumps(account_ids), encrypted, json.dumps(selected_groups)),
             )
         return {"id": key_id, "username": username, "name": name, "api_key": plaintext,
                 "preview": preview_api_key(plaintext), "created_at": created_at,
                 "provider_binding": provider_binding, "allowed_ips": allowed_ips,
                 "allowed_models": allowed_models, "expires_at": expires_at,
-                "quota": quota, "credential_ids": account_ids}
+                "quota": quota, "credential_ids": account_ids, "group_ids": selected_groups}
+
+    def reveal(self, key_id: str, username: str) -> str | None:
+        """仅所属用户可解密；无旧明文/无配置密钥时不伪造恢复结果。"""
+        row = self._db.connect().execute(
+            "SELECT key_enc, key_digest FROM api_keys WHERE id = ? AND username = ?",
+            (key_id, username)).fetchone()
+        if row is None or row["key_enc"] is None or self._cipher is None:
+            return None
+        plaintext = self._cipher.decrypt(row["key_enc"]).decode("utf-8")
+        if digest_api_key(plaintext) != row["key_digest"]:
+            raise CredentialDecryptError("API key ciphertext does not match its digest")
+        return plaintext
+
+    def reveal_info(self, key_id: str, username: str) -> dict | None:
+        row = self._db.connect().execute(
+            "SELECT id, key_enc IS NOT NULL AS can_reveal FROM api_keys "
+            "WHERE id = ? AND username = ?", (key_id, username)).fetchone()
+        return ({"id": row["id"], "can_reveal": bool(row["can_reveal"])
+                 and self._cipher is not None} if row is not None else None)
 
     def set_quota(self, key_id: str, username: str, quota: str) -> bool:
         """整体替换一把 Key 的配额配置（空串 = 清除配额）。
@@ -1269,12 +1294,16 @@ class ApiKeyRepository:
         digest = digest_api_key(api_key)
         row = self._db.connect().execute(
             "SELECT id, username, provider_binding, allowed_ips, allowed_models, "
-            "expires_at, last_used_at, quota, credential_ids FROM api_keys WHERE key_digest = ?",
+            "expires_at, last_used_at, quota, credential_ids, group_ids "
+            "FROM api_keys WHERE key_digest = ?",
             (digest,)).fetchone()
         if row is None:
             return None
         try:
             account_ids = credential_ids_from_text(row["credential_ids"])
+            selected_groups = credential_ids_from_text(row["group_ids"])
+            if account_ids and selected_groups:
+                return None
         except ValueError:
             # 损坏的绑定策略必须拒绝鉴权，绝不能回落为全池。
             return None
@@ -1287,7 +1316,8 @@ class ApiKeyRepository:
         # 返回值形状与旧实现一致：last_used_at 只用于上面的节流判定
         return {**{key: row[key] for key in
                 ("id", "username", "provider_binding", "allowed_ips",
-                 "allowed_models", "expires_at", "quota")}, "credential_ids": account_ids}
+                 "allowed_models", "expires_at", "quota")}, "credential_ids": account_ids,
+                "group_ids": selected_groups}
 
     def verify(self, api_key: str) -> str | None:
         row = self.authenticate(api_key)
@@ -1305,17 +1335,21 @@ class ApiKeyRepository:
         if limit is None:
             rows = self._db.connect().execute(
                 "SELECT id, username, name, preview, created_at, last_used_at, "
-                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids "
+                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids, "
+                "group_ids, key_enc IS NOT NULL AS can_reveal "
                 "FROM api_keys "
                 f"WHERE username = ? ORDER BY {clause}", (username,)).fetchall()
         else:
             rows = self._db.connect().execute(
                 "SELECT id, username, name, preview, created_at, last_used_at, "
-                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids "
+                "provider_binding, allowed_ips, allowed_models, expires_at, quota, credential_ids, "
+                "group_ids, key_enc IS NOT NULL AS can_reveal "
                 "FROM api_keys "
                 f"WHERE username = ? ORDER BY {clause} LIMIT ? OFFSET ?",
                 (username, max(1, min(500, limit)), max(0, offset))).fetchall()
-        return [{**dict(row), "credential_ids": credential_ids_from_text(row["credential_ids"])}
+        return [{**dict(row), "credential_ids": credential_ids_from_text(row["credential_ids"]),
+                 "group_ids": credential_ids_from_text(row["group_ids"]),
+                 "can_reveal": bool(row["can_reveal"]) and self._cipher is not None}
                 for row in rows]
 
     def count_for(self, username: str) -> int:

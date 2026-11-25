@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -21,6 +22,16 @@ CODE_ROOTS = ("src", "scripts", "web", "tests", "docs", ".github", "Dockerfile",
               "pyproject.toml", "uv.lock", "README.md", "PROPOSAL.md", "AGENTS.md",
               ".dockerignore", ".gitignore")
 IGNORED = {".venv", "node_modules", "__pycache__", ".pytest_cache", "dist", ".ruff_cache"}
+BUILDKIT_IMAGE = (
+    "moby/buildkit:buildx-stable-1@sha256:"
+    "baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c"
+)
+BUILDER_LIMITS = {
+    "Memory": 256 * 1024 * 1024, "MemorySwap": 512 * 1024 * 1024,
+    "CpuQuota": 25000, "CpuPeriod": 100000,
+}
+logger = logging.getLogger(__name__)
+LOGIN_COLUMNS = ("data_enc", "token_issued_at", "token_expires_at", "login_secret")
 
 
 @dataclass(frozen=True)
@@ -223,8 +234,55 @@ class Deployment:
         code_manifest(stage)
         readable_code(stage)
         image = f"2apis-update:{commit}"
-        self.run(["docker", "build", "--tag", image, str(stage)], timeout=3600)
+        builder = f"apis-update-{self.config.project}"
+        failed = True
+        try:
+            self._prepare_builder(builder)
+            self.run(["docker", "buildx", "build", "--builder", builder, "--load",
+                      "--tag", image, str(stage)], timeout=3600)
+            failed = False
+        finally:
+            self._stop_builder(builder, failed=failed)
         return image
+
+    def _stop_builder(self, builder: str, *, failed: bool) -> None:
+        try:
+            # stop 保留构建缓存；不能让独立BuildKit在1GB主机上常驻吃内存。
+            self.run(["docker", "buildx", "stop", builder], timeout=60)
+        except Exception:  # noqa: BLE001 - 清理失败不能掩盖已有构建失败
+            if failed:
+                return
+            raise RuntimeError("构建完成但无法停止受限构建器，请主机管理员检查") from None
+
+    def _prepare_builder(self, builder: str) -> None:
+        try:
+            description = self.run(["docker", "buildx", "inspect", builder], timeout=60)
+        except RuntimeError:
+            # 缺少buildx/不可创建也会明确失败；绝不回退不受资源限制的docker build。
+            self.run(["docker", "buildx", "create", "--name", builder,
+                      "--driver", "docker-container", "--driver-opt", f"image={BUILDKIT_IMAGE}",
+                      "--driver-opt", "memory=256m", "--driver-opt", "memory-swap=512m",
+                      "--driver-opt", "cpu-quota=25000", "--driver-opt", "cpu-period=100000"],
+                     timeout=60)
+        else:
+            # 已有builder须在启动前校验，避免同名无约束容器先占用主机资源。
+            self._verify_builder(builder, description)
+        description = self.run(["docker", "buildx", "inspect", builder, "--bootstrap"], timeout=300)
+        self._verify_builder(builder, description)
+
+    def _verify_builder(self, builder: str, description: str) -> None:
+        # buildx 0.13.1支持inspect的Driver文本；不依赖新版inspect --format。
+        if not re.search(r"^Driver:\s+docker-container\s*$", description, re.MULTILINE):
+            raise ValueError("更新构建器必须使用独立docker-container驱动")
+        raw = self.run(["docker", "inspect", "--format", "{{json .HostConfig}}",
+                        f"buildx_buildkit_{builder}0"], timeout=60)
+        try:
+            limits = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise ValueError("无法验证更新构建器的主机资源限制") from error
+        if not isinstance(limits, dict) or any(
+                limits.get(key) != value for key, value in BUILDER_LIMITS.items()):
+            raise ValueError("更新构建器必须限制内存256MiB、交换总量512MiB与CPU25%")
 
     def stop(self) -> None:
         self.compose("stop", "--timeout", str(self.config.drain_timeout), self.config.service)
@@ -287,6 +345,7 @@ class Deployment:
 
     def restore(self, backup: Path) -> None:
         verify_backup(backup)
+        rotated = self._rotated_logins(backup / "data" / "coding2api.sqlite3")
         self.replace_code(backup / "code")
         cfg = self.config
         for name, target in (("data", cfg.data_dir), ("secrets", cfg.secrets_dir)):
@@ -297,3 +356,92 @@ class Deployment:
         copy_path(backup / "env", cfg.env_file)
         for index, target in enumerate(cfg.compose_files):
             copy_path(backup / "config" / str(index), target)
+        self._preserve_rotated_logins(rotated)
+
+    def _rotated_logins(self, backup_database: Path) -> list[tuple]:
+        """旧/新程序均已停机后，只取相同账号中能证明较新的登录字段。"""
+        current_database = self.config.data_dir / "coding2api.sqlite3"
+        if not current_database.is_file():
+            logger.warning("回滚时当前凭证库缺失，恢复原备份；无法保留新续期票据")
+            return []
+        current_secret = self._app_secret(self.config.env_file)
+        old_secret = self._app_secret(backup_database.parent.parent / "env")
+        if not current_secret or current_secret != old_secret:
+            logger.warning("回滚密钥缺失或不一致，恢复原备份；无法保留新续期票据")
+            return []
+        try:
+            with (closing(sqlite3.connect(
+                      f"{current_database.as_uri()}?mode=ro", uri=True)) as current,
+                  closing(sqlite3.connect(
+                      f"{backup_database.as_uri()}?mode=ro&immutable=1", uri=True)) as old):
+                required = {"id", "provider", *LOGIN_COLUMNS}
+                for conn in (current, old):
+                    columns = {row[1] for row in conn.execute("PRAGMA table_info(credentials)")}
+                    if not required <= columns:
+                        logger.warning("回滚凭证字段不兼容，恢复原备份；无法保留新续期票据")
+                        return []
+                if current.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                    raise sqlite3.DatabaseError("current database failed integrity check")
+                rotated = []
+                for row in current.execute(
+                        "SELECT id,provider,data_enc,token_issued_at,token_expires_at,login_secret "
+                        "FROM credentials"):
+                    before = old.execute(
+                        "SELECT data_enc,token_issued_at,token_expires_at FROM credentials "
+                        "WHERE id=? AND provider=?", row[:2]).fetchone()
+                    if before is None or not row[2] or row[2] == before[0]:
+                        continue
+                    times = (row[3], row[4], before[1], before[2])
+                    # 0/NULL表示未知，无法据此证明比备份中的票据更新。
+                    if not all(isinstance(value, int) and value > 0 for value in times):
+                        continue
+                    issued, expires, old_issued, old_expires = times
+                    if (expires > issued > 0 and issued >= old_issued and expires >= old_expires
+                            and (issued > old_issued or expires > old_expires)):
+                        rotated.append((*row, before[0]))
+                return rotated
+        except sqlite3.Error:
+            logger.warning("回滚时当前凭证库无法安全读取，恢复原备份；可能需要重新登录")
+            return []
+
+    @staticmethod
+    def _app_secret(path: Path) -> str | None:
+        """只比较明确的单条字面量APP_SECRET，歧义/读取失败时不继承新密文。"""
+        try:
+            values = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if not separator or key.strip().removeprefix("export ").strip() != "APP_SECRET":
+                    continue
+                value = value.strip()
+                if value.startswith(("'", '"')):
+                    if len(value) < 2 or value[-1] != value[0] or "\\" in value:
+                        return None
+                    value = value[1:-1]
+                else:
+                    value = re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+                # Compose/dotenv插值或转义可能使同一文本在两次启动解出不同密钥。
+                if "$" in value or "\\" in value:
+                    return None
+                values.append(value)
+        except (OSError, UnicodeError):
+            return None
+        return values[0] if len(values) == 1 and values[0] else None
+
+    def _preserve_rotated_logins(self, rotated: list[tuple]) -> None:
+        if not rotated:
+            return
+        try:
+            primary = self.config.data_dir / "coding2api.sqlite3"
+            with closing(sqlite3.connect(primary)) as conn, conn:
+                for account_id, provider, data, issued, expires, secret, old_data in rotated:
+                    conn.execute(
+                        "UPDATE credentials SET data_enc=?,token_issued_at=?,token_expires_at=?,"
+                        "login_secret=? WHERE id=? AND provider=? AND data_enc=?",
+                        (data, issued, expires, secret, account_id, provider, old_data))
+                preserved = conn.total_changes
+        except sqlite3.Error:
+            # 窄UPDATE是一个事务；失败时保留完整原备份数据库，不改其schema或密钥。
+            logger.warning("回滚保留新续期票据失败，已保留原备份数据库；可能需要重新登录")
+            return
+        logger.warning("回滚已保留 %s 个账号的新续期票据；其余数据和schema仍来自原备份", preserved)

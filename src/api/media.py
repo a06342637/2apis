@@ -7,9 +7,10 @@ from ..compat.openai.request import ChatRequest, InvalidRequest
 from ..key_quota import QuotaExceeded
 from ..media.request import parse_media_request
 from ..media.service import MediaRateLimited
+from ..media.streaming import encode_media_json
 from .deps import ApiKeyPrincipal, Services, _ensure_not_paused, api_key_user, read_json_body
 from .endpoints import _admit_quota, quota_exceeded_response
-from .streaming import respond_with_keepalive
+from .streaming import respond_with_encoded_json, respond_with_keepalive
 
 
 def create_router(services: Services) -> APIRouter:
@@ -60,9 +61,25 @@ def create_router(services: Services) -> APIRouter:
         if kind == "image":
             try:
                 grace = services.settings.nonstream_keepalive_seconds
+                encoder = encode_media_json if body["response_format"] == "b64_json" else None
                 if grace > 0:
                     return await respond_with_keepalive(
-                        work, grace=grace, release=lease.release if lease is not None else None
+                        work,
+                        grace=grace,
+                        release=lease.release if lease is not None else None,
+                        encode=encoder,
+                    )
+                if encoder is not None:
+                    try:
+                        payload = await work()
+                    except BaseException:
+                        if lease is not None:
+                            lease.release()
+                        raise
+                    return respond_with_encoded_json(
+                        payload,
+                        encode=encoder,
+                        release=lease.release if lease is not None else None,
                     )
                 try:
                     return JSONResponse(await work())

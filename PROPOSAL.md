@@ -20,6 +20,12 @@
 - 标准 `/v1/images/generations` 与异步 `/v1/videos` 使用现有 Key/用户准入和账号护栏。任务与文件私有持久化，视频后续查询仅恢复同一任务；下载固定官方 HTTPS CDN、禁止重定向、限制总字节，不携带上游令牌。HMAC 短期资源地址绑定任务，获取时复核 Key/用户权限。
 - Miora 对话自动媒体在现有账号节流租约内执行，复核日限额、动态账号目录和实时权限，保留客户端函数。Responses `image_generation` 声明只提供工具，显式 tool_choice 才强制生成；返回文本资源链接。生成提交不重试，未获真实 token/credit 用量时保留未知值。
 - 程序不再种入 Zen/Kilo 默认账号；手工添加和删除重启保持用户选择。添加凭证流程整合登录链接补丁的复制、刷新、回调确认与串行轮询；请求明细排在压缩收益前。
+- schema 41 增加 `api_keys.key_enc`：新 Key 加密保存，重新查看要求本人有效会话、CSRF、当前密码、并发验证限制与会话 epoch 复核；响应 no-store，审计无秘密。旧摘要不可逆，不自动轮换现有 Key。
+- schema 42 增加正式渠道分组/成员表和 `api_keys.group_ids` 幂等列；组身份稳定、同渠道成员、版本冲突 409。按组与按账号互斥，动态 union 在每个 Key 请求解析，空集合/缺组拒绝不扩池。辅助 search/fetch 同样收窄；轮换记录按鉴权 Key/CID 分开且 LRU 有界，健康/冷却/在途共享。
+- 小内存部署：全响应生命周期的活跃和输入预算、读体前 FIFO 队列、有界等待；媒体按块 Base64、共享 IO 名额、拒绝 CDN 压缩流；ASGI 头部/正文取消均保证释放工作和额度。大 ACP 缓冲收紧，热账号目录128、闲置限流缓存清理；日志200待投递、一次唤醒、线性敏感标识符扫描，保持完整脱敏和持久写入。
+- 主机更新构建改为固定 digest 的专属 docker-container BuildKit，核实256MiB/512MiB总量/CPU25%，禁止退回不受限构建。构建器结束停止保留缓存，主机Docker配置放在受保护state目录，避免ProtectHome下初始化失败。
+- `/v1/user/balance` 仅汇总 Principal 的当前渠道和账号范围，分组动态解析同样生效，不泄露其他账号额度。
+- 更新回滚先校验旧备份；仅在字面量 APP_SECRET 一致、同 CID/provider、票据密文变化且已知有效时间单调更新时事务保留四项登录列。坏库、缺列、密钥不符或回填失败记录受控警告并恢复旧库，不保留新 Key/分组/schema，不修改原备份。
 
 > 结论：九个上游厂商、十个渠道（CodeBuddy 国内 / 国际、TRAE SOLO、OpenCode Zen、Kilo、Qoder、CodeArts、OfficeAce、小浣熊、灵犀）统一为一条 OpenAI 兼容出口，公共凭证池 + 统一模型名 + 自动调度 + 按人用量统计；实现见 [TECHNICAL.md](TECHNICAL.md)，使用与部署见 [README.md](README.md)。
 

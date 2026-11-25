@@ -14,6 +14,12 @@ helper 不接受 shell、命令、路径或任意分支参数。所有进程调�
 helper 的 Python 代码在独立目录安装，需要 Python 3.11 或更高版本，仅依赖标准库，
 不执行下载的运维文档或脚本。
 
+主机须安装 Docker Buildx（兼容 0.13+）。专属 `apis-update-{project}` 构建器使用固定
+官方 BuildKit 镜像 digest，限制256 MiB内存、512 MiB内存与交换总量和25%CPU；构建前后
+核实限制，不能回退到不受限 `docker build`。结束后停止构建器并保留缓存。
+systemd 的 DOCKER_CONFIG 位于 `/var/lib/2apis-update/docker-config`，须 root 创建mode0700；
+调整 state_dir 时同时调整 unit 的环境与 ReadWritePaths。前端构建阶段限制V8堆192MiB。
+
 主机管理员安装独立副本到 `/opt/2apis-update-helper`（含 `src/updater/`、
 `src/instance_lock.py`、`scripts/update_host.py`），安装 systemd unit
 [`system-update-helper.service`](system-update-helper.service)，并依据实际部署调整目录。

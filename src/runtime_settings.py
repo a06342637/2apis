@@ -70,6 +70,7 @@ GATEWAY_GROUPS: tuple[tuple[str, str], ...] = (
     ("compress", "上下文压缩"),
     ("stream_thinking", "流式与思考"),
     ("gateway_control", "网关与计费"),
+    ("resources", "系统占用"),
     ("affinity", "选号与会话"),
     ("privacy", "出站隐私"),
     ("chat_throttle", "聊天节流"),
@@ -82,6 +83,23 @@ GATEWAY_GROUPS: tuple[tuple[str, str], ...] = (
 
 # 首批可热更清单。刻意不含上游端点、端口、密钥这类启动期项（见模块 docstring）。
 HOT_SETTINGS: tuple[HotSetting, ...] = (
+    HotSetting("resource_max_active_requests", int, "同时处理的生成请求数",
+               "限制推理和媒体请求的并发，整个响应发送结束才归还名额。"
+               "1 核 1GB 建议 4；0 关闭此限制，输入缓冲预算仍独立生效。",
+               minimum=0, maximum=64, group="resources"),
+    HotSetting("resource_max_queued_requests", int, "等待中的生成请求上限",
+               "达到并发或输入缓冲预算时在本地排队，排队期间不读取请求体。"
+               "默认 32；0 表示不排队。超出上限返回服务繁忙。",
+               minimum=0, maximum=256, group="resources"),
+    HotSetting("resource_queue_timeout_seconds", float, "排队等待上限（秒）",
+               "默认 60 秒，超时返回 503 和 Retry-After，避免无限积压。"
+               "0 立即返回繁忙；调整限制会在一秒内让排队请求重新判断。",
+               minimum=0, maximum=300, group="resources"),
+    HotSetting("resource_input_budget_mb", int, "生成请求输入缓冲预算（MiB）",
+               "按请求体长度预留预算，长度未知时按 16 MiB 保守预留。"
+               "1 核 1GB 建议 16；超过预算的单个请求返回 413。"
+               "0 关闭此预算，并发限制仍生效。",
+               minimum=0, maximum=512, group="resources"),
     HotSetting("default_model", str, "默认模型",
                "请求未指定 model（或为 auto/空）时使用的模型名。",
                group="model_routing"),
@@ -996,6 +1014,22 @@ class RuntimeSettings:
     @property
     def miora_auto_media_enabled(self) -> bool:
         return bool(self.get("miora_auto_media_enabled"))
+
+    @property
+    def resource_max_active_requests(self) -> int:
+        return int(self.get("resource_max_active_requests"))
+
+    @property
+    def resource_max_queued_requests(self) -> int:
+        return int(self.get("resource_max_queued_requests"))
+
+    @property
+    def resource_queue_timeout_seconds(self) -> float:
+        return float(self.get("resource_queue_timeout_seconds"))
+
+    @property
+    def resource_input_budget_mb(self) -> int:
+        return int(self.get("resource_input_budget_mb"))
 
     @property
     def miora_chat_min_interval(self) -> float:

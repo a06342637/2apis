@@ -29,13 +29,21 @@ def _credential_usable(row: dict[str, Any]) -> bool:
     return bool(row["enabled"]) and not bool(row["disabled"])
 
 
-def _balance_rows(services: Services) -> Iterator[dict[str, Any]]:
+def _balance_rows(services: Services, credential_ids: tuple[str, ...],
+                  provider_binding: str) -> Iterator[dict[str, Any]]:
+    selected = set(credential_ids)
     for row in services.credentials.list_all():
+        if selected and row["id"] not in selected:
+            continue
+        if provider_binding and row["provider"] != provider_binding:
+            continue
         if _credential_usable(row) and row["quota_total"] is not None:
             yield row
 
 
-def balance_payload(services: Services, *, include_providers: bool) -> dict[str, Any]:
+def balance_payload(services: Services, *, include_providers: bool,
+                    credential_ids: tuple[str, ...] = (),
+                    provider_binding: str = "") -> dict[str, Any]:
     """把凭证池探测缓存聚合成余额响应。
 
     `providers` 是池级明细（每渠道剩余额度、总额、凭证条数），属于运维信息：
@@ -44,7 +52,7 @@ def balance_payload(services: Services, *, include_providers: bool) -> dict[str,
     客户端契约不变。
     """
     per_provider: dict[str, dict[str, float]] = {}
-    for row in _balance_rows(services):
+    for row in _balance_rows(services, credential_ids, provider_binding):
         provider = row["provider"]
         bucket = per_provider.setdefault(
             provider, {"remaining": 0.0, "total": 0.0, "probed": 0})
@@ -84,6 +92,8 @@ def create_router(services: Services) -> APIRouter:
         # 降级后下一次请求立刻只看到聚合值。
         role = services.users.role_of(principal.username)
         return balance_payload(
-            services, include_providers=role in (ROLE_ADMIN, ROLE_OPERATOR))
+            services, include_providers=role in (ROLE_ADMIN, ROLE_OPERATOR),
+            credential_ids=principal.credential_ids,
+            provider_binding=principal.provider_binding)
 
     return router

@@ -25,7 +25,10 @@ services:
     # 内存上限是**保守默认**：实测正常运行时 RSS 约 150–400MB（取决于模型目录与
     # 在途长流）。库很大 / 并发很高时按需上调（如 2g），否则 OOM kill 表现为
     # 容器反复重启、health 永远不通。
-    mem_limit: 1g
+    mem_limit: 512m
+    mem_reservation: 192m
+    memswap_limit: 768m
+    cpus: 0.75
     # read_only：只读根文件系统。可写点已逐一确认（均不是根文件系统）：
     #   /app/data   —— bind mount，SQLite/WAL、备份、模型快照都写这里；
     #   /app/secrets—— bind mount，只读挂载，应用只读不写；
@@ -53,6 +56,11 @@ services:
       MEDIA_TIMEOUT_SECONDS: ${MEDIA_TIMEOUT_SECONDS:-300}
       MEDIA_SIGNED_URL_SECONDS: ${MEDIA_SIGNED_URL_SECONDS:-3600}
       MEDIA_POLL_SECONDS: ${MEDIA_POLL_SECONDS:-2}
+      MEDIA_IO_CONCURRENCY: ${MEDIA_IO_CONCURRENCY:-2}
+      RESOURCE_MAX_ACTIVE_REQUESTS: ${RESOURCE_MAX_ACTIVE_REQUESTS:-4}
+      RESOURCE_MAX_QUEUED_REQUESTS: ${RESOURCE_MAX_QUEUED_REQUESTS:-32}
+      RESOURCE_QUEUE_TIMEOUT_SECONDS: ${RESOURCE_QUEUE_TIMEOUT_SECONDS:-60}
+      RESOURCE_INPUT_BUDGET_MB: ${RESOURCE_INPUT_BUDGET_MB:-16}
       # 必填：凭证列加密密钥。丢失后已存凭证全部不可解，只能重录。
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
       # 管理台管理员用户名（逗号分隔）；留空则所有用户只读

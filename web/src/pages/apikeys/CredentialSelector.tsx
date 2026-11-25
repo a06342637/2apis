@@ -29,6 +29,11 @@ export function CredentialSelector({
   testidPrefix,
   loading = false,
   onRetry,
+  onClearAll,
+  legend = "账号范围（可选）",
+  emptySummary = "当前渠道全部账号（含以后添加的账号）",
+  selectionHint = "不勾选 = 当前渠道全部账号；勾选多个后只在这些账号中负载均衡，均不可用时返回错误。",
+  clearText = "清空选择，允许当前渠道全部账号",
 }: {
   credentials: Credential[] | undefined;
   selected: string[];
@@ -37,6 +42,11 @@ export function CredentialSelector({
   testidPrefix: string;
   loading?: boolean;
   onRetry?: () => void;
+  onClearAll?: () => void;
+  legend?: string;
+  emptySummary?: string;
+  selectionHint?: string;
+  clearText?: string;
 }) {
   const indexed = new Map((credentials ?? []).map((item) => [item.id, item]));
   const compatible = (credentials ?? []).filter((item) => !binding || item.provider === binding);
@@ -71,12 +81,12 @@ export function CredentialSelector({
 
   return (
     <fieldset className="space-y-2" data-testid={`${testidPrefix}-credentials`}>
-      <legend className="text-sm font-medium">账号范围（可选）</legend>
+      <legend className="text-sm font-medium">{legend}</legend>
       <p className="text-xs text-muted-foreground">
-        不勾选 = 当前渠道全部账号；勾选多个后只在这些账号中负载均衡，均不可用时返回错误。
+        {selectionHint}
       </p>
       <p className="text-xs" data-testid={`${testidPrefix}-credential-summary`}>
-        {selected.length ? `已指定 ${selected.length} 个账号` : "当前渠道全部账号（含以后添加的账号）"}
+        {selected.length ? `已指定 ${selected.length} 个账号` : emptySummary}
       </p>
       {credentials ? (
         <div className="max-h-48 overflow-y-auto rounded-md border border-border p-1">
@@ -96,8 +106,8 @@ export function CredentialSelector({
       {issue && <Notice tone="warn">{issue}</Notice>}
       {selected.length > 0 && (
         <button type="button" className="text-xs underline" data-testid={`${testidPrefix}-clear-credentials`}
-                onClick={() => onChange([])}>
-          清空选择，允许当前渠道全部账号
+                onClick={() => onClearAll ? onClearAll() : onChange([])}>
+          {clearText}
         </button>
       )}
       <p className="text-xs text-muted-foreground">暂停、禁用或过期账号仍可勾选，恢复可用后参与调度。</p>

@@ -12,6 +12,7 @@ ExecStart=/usr/bin/python3 -m scripts.update_host --config /etc/2apis-update/con
 Restart=on-failure
 RestartSec=5
 UMask=0027
+Environment=DOCKER_CONFIG=/var/lib/2apis-update/docker-config
 RuntimeDirectory=2apis-update
 RuntimeDirectoryMode=0750
 NoNewPrivileges=true

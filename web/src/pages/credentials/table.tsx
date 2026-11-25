@@ -1,4 +1,5 @@
 import { Fragment } from "react";
+import type { ReactNode } from "react";
 import type { ProviderGroup } from "../../lib/credentialList";
 import { rateSummary } from "../../components/ModelPicker";
 import type { ProviderModel } from "../../components/ModelPicker";
@@ -38,6 +39,7 @@ export function CredentialTable({
   sort,
   order,
   toggle,
+  groupAction,
 }: {
   groups: ProviderGroup[];
   expanded: Set<string>;
@@ -61,6 +63,7 @@ export function CredentialTable({
   sort: string;
   order: "asc" | "desc";
   toggle: (columnKey: string) => void;
+  groupAction?: (group: ProviderGroup) => ReactNode;
 }) {
   return (
     // 长列表限高 + 吸顶列头：列头随每个展开的渠道组渲染（见 ColumnHeaderRow），
@@ -117,6 +120,7 @@ export function CredentialTable({
                 expirySecondaryWindow={expirySecondaryWindow}
                 onToggleGroup={toggleGroup}
                 onToggleGroupSelected={toggleGroupSelected}
+                groupAction={groupAction?.(group)}
               />
                         {!isCollapsed && (
                           <>

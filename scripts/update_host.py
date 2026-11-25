@@ -78,7 +78,8 @@ def main(argv=None):
         config.socket_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
         config.socket_path.unlink(missing_ok=True)
         with UnixHTTPServer(str(config.socket_path), handler_for(service, secret)) as server:
-            os.chmod(config.socket_path, 0o660)
+            # Unix socket 的 connect 需要写权限；仅专用应用组可连接，父目录 0750。
+            os.chmod(config.socket_path, 0o660)  # nosec B103 - IPC 专用组，其他用户无权限
             server.serve_forever()
 
 

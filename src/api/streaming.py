@@ -8,6 +8,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
+from anyio import CancelScope
 from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from ..compat.openai.errors import error_payload
@@ -182,10 +183,11 @@ def _dumps(payload: Any) -> bytes:
 
 
 async def respond_with_keepalive(
-        work: Callable[[], Awaitable[dict[str, Any]]],
+        work: Callable[[], Awaitable[Any]],
         *, grace: float,
         convert: Callable[[dict[str, Any]], Any] | None = None,
-        release: Callable[[], None] | None = None) -> Response:
+        release: Callable[[], None] | None = None,
+        encode: Callable[[Any], AsyncIterator[bytes]] | None = None) -> Response:
     """非流式出口的保活（`nonstream_keepalive_seconds`，默认 0 关闭）。
 
     **宽限期设计**：先等 `grace` 秒。
@@ -208,27 +210,39 @@ async def respond_with_keepalive(
     except BaseException:
         # 客户端断开 / 上层取消：必须把工作协程一起收掉，否则它继续跑完整个
         # 上游调用（真实计费）却没人接收结果。
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        if release is not None:
-            release()
+        try:
+            task.cancel()
+            with CancelScope(shield=True):
+                await asyncio.gather(task, return_exceptions=True)
+        finally:
+            if release is not None:
+                release()
         raise
     if task in done:
+        if encode is not None:
+            try:
+                completion = task.result()
+                payload = convert(completion) if convert else completion
+            except BaseException:
+                if release is not None:
+                    release()
+                raise
+            return respond_with_encoded_json(payload, encode=encode, release=release)
         try:
             completion = task.result()
         finally:
             if release is not None:
                 release()
         return JSONResponse(convert(completion) if convert else completion)
-    return StreamingResponse(
-        _json_frames(task, grace, convert, release),
-        media_type="application/json",
-        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"})
+    return _ManagedJSONResponse(
+        lambda finish: _json_frames(task, grace, convert, finish, encode), release, task)
 
 
 async def _json_frames(task: asyncio.Task[dict[str, Any]], interval: float,
                        convert: Callable[[dict[str, Any]], Any] | None,
-                       release: Callable[[], None] | None) -> AsyncIterator[bytes]:
+                       release: Callable[[], None] | None,
+                       encode: Callable[[Any], AsyncIterator[bytes]] | None = None
+                       ) -> AsyncIterator[bytes]:
     """慢请求的正文生成器：空闲 `interval` 秒就吐一个空白字节。"""
     try:
         while not task.done():
@@ -244,10 +258,82 @@ async def _json_frames(task: asyncio.Task[dict[str, Any]], interval: float,
                            exc_info=True)
             yield _dumps(LATE_FAILURE_PAYLOAD)
             return
-        yield _dumps(convert(completion) if convert else completion)
+        payload = convert(completion) if convert else completion
+        if encode is None:
+            yield _dumps(payload)
+        else:
+            frames = _encoded_frames(payload, encode, None)
+            try:
+                async for frame in frames:
+                    yield frame
+            finally:
+                with CancelScope(shield=True):
+                    await aclose_stream(frames)
     finally:
-        if not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        if release is not None:
-            release()
+        try:
+            if not task.done():
+                task.cancel()
+                # ASGI disconnect 会取消整个 anyio scope，清理须免于其重复取消。
+                with CancelScope(shield=True):
+                    await asyncio.gather(task, return_exceptions=True)
+        finally:
+            if release is not None:
+                release()
+
+
+def respond_with_encoded_json(
+    payload: Any, *, encode: Callable[[Any], AsyncIterator[bytes]],
+    release: Callable[[], None] | None = None,
+) -> StreamingResponse:
+    """按块输出 JSON，避免大文件 base64 与完整响应在内存里同时展开。"""
+    return _ManagedJSONResponse(lambda finish: _encoded_frames(payload, encode, finish), release)
+
+
+class _ManagedJSONResponse(StreamingResponse):
+    """响应头阶段断开也释放准入名额，即使 body 尚未开始迭代。"""
+
+    def __init__(self, frames_for, release, task=None):
+        self._release_callback = release
+        self._released = False
+        self._work = task
+        super().__init__(frames_for(self._release_once),
+                         media_type="application/json",
+                         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"})
+
+    def _release_once(self):
+        if not self._released:
+            self._released = True
+            if self._release_callback is not None:
+                self._release_callback()
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            try:
+                with CancelScope(shield=True):
+                    await aclose_stream(self.body_iterator)
+            finally:
+                try:
+                    if self._work is not None and not self._work.done():
+                        self._work.cancel()
+                        with CancelScope(shield=True):
+                            await asyncio.gather(self._work, return_exceptions=True)
+                finally:
+                    self._release_once()
+
+
+async def _encoded_frames(payload, encode, release) -> AsyncIterator[bytes]:
+    frames = None
+    try:
+        frames = encode(payload)
+        async for frame in frames:
+            yield frame
+    finally:
+        try:
+            if frames is not None:
+                with CancelScope(shield=True):
+                    await aclose_stream(frames)
+        finally:
+            if release is not None:
+                release()

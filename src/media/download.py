@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
+from anyio import CancelScope
 
 from ..provider.base import UpstreamProtocolViolation, ensure_public_host
 from ..security.private_files import secure_file
@@ -54,12 +55,20 @@ class MediaDownloader:
                 if response.is_redirect:
                     raise UpstreamProtocolViolation("Miora 媒体下载不允许重定向")
                 response.raise_for_status()
+                if (
+                    response.headers.get("content-encoding", "identity").lower().strip()
+                    != "identity"
+                ):
+                    raise UpstreamProtocolViolation(
+                        "Miora media download requires identity encoding"
+                    )
                 mime = response.headers.get("content-type", "").split(";", 1)[0].lower().strip()
                 if mime not in MEDIA_TYPES or not mime.startswith(kind + "/"):
                     raise UpstreamProtocolViolation("Miora 媒体响应类型不符合请求")
                 fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                 handle = os.fdopen(fd, "wb")
                 size = 0
+                # 编码已限定 identity，HTTPX 不会膨胀解压；兼容已缓存的测试响应。
                 async for chunk in response.aiter_bytes(chunk_size=65536):
                     size += len(chunk)
                     limit = self.max_bytes if max_bytes is None else min(self.max_bytes, max_bytes)
@@ -76,8 +85,9 @@ class MediaDownloader:
                 os.replace(temp, target)
                 return {"mime_type": mime, "bytes": size}
         finally:
-            if handle is not None:
-                await asyncio.to_thread(handle.close)
-            temp.unlink(missing_ok=True)
-            if self.client is None:
-                await client.aclose()
+            with CancelScope(shield=True):
+                if handle is not None:
+                    await asyncio.to_thread(handle.close)
+                temp.unlink(missing_ok=True)
+                if self.client is None:
+                    await client.aclose()

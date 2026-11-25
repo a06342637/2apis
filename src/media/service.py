@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import json
 import logging
@@ -20,6 +19,7 @@ from ..api.deps import ApiKeyPrincipal
 from ..api.model_merge import _blocked, _build_aliases, _merge_provider
 from ..auth.access import model_allowed
 from ..auth.api_key import key_expired
+from ..auth.group_binding import resolve_credential_scope
 from ..auth.rbac import UnauthorizedError
 from ..compat.openai.request import InvalidRequest
 from ..engine.scheduler import Scheduler
@@ -31,6 +31,7 @@ from ..request_context import credential_scope
 from ..tasks.pacer import paced
 from .download import MediaDownloader
 from .storage import MediaStore
+from .streaming import MediaJSONStream
 
 logger = logging.getLogger(__name__)
 ENDPOINTS = {"image": "/v1/images/generations", "video": "/v1/videos"}
@@ -61,6 +62,7 @@ class MediaService:
         self.scheduler = Scheduler()
         self.locks: dict[str, dict] = {}
         self.slots = asyncio.Semaphore(128)
+        self.io_slots = asyncio.Semaphore(getattr(self.settings, "media_io_concurrency", 2))
 
     @asynccontextmanager
     async def job_lock(self, job_id: str):
@@ -97,7 +99,9 @@ class MediaService:
             provider_binding=row.get("provider_binding") or "",
             allowed_models=row.get("allowed_models") or "",
             user_allowed_models=str(policy.get("allowed_models") or ""),
-            credential_ids=tuple(row.get("credential_ids") or ()),
+            credential_ids=resolve_credential_scope(
+                row, getattr(self.services, "credential_groups", None)),
+            group_ids=tuple(row.get("group_ids") or ()),
             quota=load_key_quota(row.get("quota")),
             user_quota=load_key_quota(policy.get("quota")),
         )
@@ -229,7 +233,8 @@ class MediaService:
             )
             request.setdefault("account_models", {})[account_id] = (entry.id, canonical[entry.id])
         selected = self.scheduler.select(
-            candidates, set(), int(time.time()), round_robin=bool(principal.credential_ids)
+            candidates, set(), int(time.time()), round_robin=bool(principal.credential_ids),
+            round_robin_key=principal.key_id,
         )
         if selected is None:
             raise InvalidRequest("no selected Miora account offers this allowed media model")
@@ -438,9 +443,13 @@ class MediaService:
                         url = await self.client.file_url(
                             self.provider.credential_from(data), asset["file_key"]
                         )
-                    info = await self.downloader.download(
-                        url, target, job["kind"], max_bytes=maximum - total
-                    )
+                    await self.io_slots.acquire()
+                    try:
+                        info = await self.downloader.download(
+                            url, target, job["kind"], max_bytes=maximum - total
+                        )
+                    finally:
+                        self.io_slots.release()
                     total += info["bytes"]
                     job["files"][index] = {**asset, **info}
                 job = self.store.save(job)
@@ -470,17 +479,23 @@ class MediaService:
             "seconds": str(job["options"]["duration"]) if "duration" in job["options"] else None,
         }
 
-    async def image_response(self, job: dict, response_format: str) -> dict:
+    async def image_response(self, job: dict, response_format: str):
         if sum(asset["bytes"] for asset in job["files"]) > getattr(
             self.settings, "media_max_bytes", 64 * 1024 * 1024
         ):
             raise InvalidRequest("media response exceeds aggregate size limit")
+        if response_format == "b64_json":
+            return MediaJSONStream(
+                created=job["created_at"],
+                paths=[
+                    self.store.asset(job["id"], index) for index, _asset in enumerate(job["files"])
+                ],
+                maximum=getattr(self.settings, "media_max_bytes", 64 * 1024 * 1024),
+                slots=self.io_slots,
+                keepalive=getattr(self.settings, "nonstream_keepalive_seconds", 0),
+            )
         data = []
         for index, _asset in enumerate(job["files"]):
-            if response_format == "b64_json":
-                content = await asyncio.to_thread(self.store.asset(job["id"], index).read_bytes)
-                item = {"b64_json": base64.b64encode(content).decode()}
-            else:
-                item = {"url": self.store.signed_url(job, self.settings.public_base_url, index)}
+            item = {"url": self.store.signed_url(job, self.settings.public_base_url, index)}
             data.append(item)
         return {"created": job["created_at"], "data": data}

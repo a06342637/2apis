@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..request_context import get_request_id
-from ..stats.live import LiveEventHub
+from ..stats.live import MAX_BUFFERED, LiveEventHub
 
 # 单行上限：异常 traceback / 上游响应片段可能很长，缓冲里 500 行 × 无上限
 # 等于把内存交给日志内容。截断只影响页面可读性，不影响 stdout 的完整输出。
@@ -47,9 +47,11 @@ MAX_LINE_CHARS = 4000
 # 订阅者上限（与统计实时流同一考虑）：每个订阅者占一条长连接 + 一个 deque，
 # 日志页是低频入口，4 个足够，超出直接 429 而不是静默拖垮服务。
 MAX_LOG_SUBSCRIBERS = 4
+# 与订阅缓冲一致：循环繁忙时只保留最新 200 行，满了丢最旧的待投递行。
+MAX_PENDING_LOGS = MAX_BUFFERED
 
 # 敏感词：独立单词形态。`\b` 在 `access_token` 内部不成立（下划线是词字符），
-# 标识符形态由 `_SENSITIVE_IDENTIFIER` 兜住。
+# 标识符形态由完整赋值标识符扫描兜住。
 _SENSITIVE_WORD = re.compile(
     r"\b(?:tokens?|secrets?|authorization|cookies?|passwords?|passwd|api[_-]?key)\b",
     re.IGNORECASE,
@@ -57,9 +59,15 @@ _SENSITIVE_WORD = re.compile(
 # 标识符形态：`access_token=` / `X-Api-Key:` / `set-cookie:` / `client_secret =`
 # / JSON 里的 `"access_token": "…"`（键名带引号也必须命中——上游原始 JSON 落进
 # 日志时才不会把凭证整段带出去）。
-_SENSITIVE_IDENTIFIER = re.compile(
-    r"[A-Za-z0-9_.\-]*(?:token|secret|passwd|password|cookie|authorization|api[_-]?key)"
-    r"[A-Za-z0-9_.\-]*[\"']?\s*[:=]",
+# 先从左边界匹配完整标识符，再搜索固定敏感词；不能在每个字符重试两个
+# 贪婪通配段，长的正常标识符会导致平方级回溯。IGNORECASE 的 Unicode
+# 字母口径与旧规则一致，且仍检查完整日志，敏感后缀不会被截断藏掉。
+_ASSIGNED_IDENTIFIER = re.compile(
+    r"(?<![A-Za-z0-9_.\-])[A-Za-z0-9_.\-]+[\"']?\s*[:=]",
+    re.IGNORECASE,
+)
+_SENSITIVE_PART = re.compile(
+    r"(?:token|secret|passwd|password|cookie|authorization|api[_-]?key)",
     re.IGNORECASE,
 )
 # 凭证形状：OpenAI 风格 `sk-…`（要求前面不是词字符，避免误伤 `task-run`）。
@@ -77,7 +85,8 @@ def redact_or_drop(line: str) -> str | None:
     if not line or not line.strip():
         return None
     if (_SENSITIVE_WORD.search(line) is not None
-            or _SENSITIVE_IDENTIFIER.search(line) is not None
+            or any(_SENSITIVE_PART.search(line, match.start(), match.end()) is not None
+                   for match in _ASSIGNED_IDENTIFIER.finditer(line))
             or _SECRET_SK.search(line) is not None
             or _BEARER.search(line) is not None):
         return None
@@ -129,6 +138,8 @@ class LogBuffer:
         self.hub = hub or LiveEventHub(max_subscribers=MAX_LOG_SUBSCRIBERS)
         # 事件循环在 SSE 端点里绑定（build_app 时应用还没跑起来）。
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._pending: deque[dict[str, Any]] = deque(maxlen=MAX_PENDING_LOGS)
+        self._dispatch_scheduled = False
 
     # ------------------------------------------------------------- 容量/开关
 
@@ -143,7 +154,12 @@ class LogBuffer:
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         """绑定事件循环（SSE 端点每次建连时调用，幂等）。"""
-        self._loop = loop
+        with self._lock:
+            if self._loop is loop:
+                return
+            self._loop = loop
+            self._pending.clear()
+            self._dispatch_scheduled = False
 
     # ---------------------------------------------------------------- 写入
 
@@ -155,6 +171,7 @@ class LogBuffer:
         if capacity <= 0:
             with self._lock:
                 self._lines.clear()
+                self._pending.clear()
             return None
         with self._lock:
             self._seq += 1
@@ -185,6 +202,7 @@ class LogBuffer:
             capacity = self.capacity()
             if capacity <= 0:
                 self._lines.clear()
+                self._pending.clear()
                 return []
             while len(self._lines) > capacity:
                 self._lines.popleft()
@@ -201,10 +219,38 @@ class LogBuffer:
         没有订阅者时不排队：首个订阅者的快照已包含此刻之前的全部行，
         逐行 `call_soon_threadsafe` 只是白占事件循环。
         """
-        loop = self._loop
-        if loop is None or loop.is_closed() or self.hub.subscriber_count == 0:
+        with self._lock:
+            loop = self._loop
+            if loop is None or loop.is_closed() or self.hub.subscriber_count == 0:
+                self._pending.clear()
+                return
+            self._pending.append(payload)
+            if self._dispatch_scheduled:
+                return
+            self._dispatch_scheduled = True
+        # 只调度一次 drain，回调不携带正文；2000 条日志也最多排一个唤醒。
+        # 在锁外调度，真实 loop 和同步测试 loop 都不会重入死锁。
+        try:
+            loop.call_soon_threadsafe(self._drain_pending, loop)
+        except RuntimeError:
+            # 循环可能恰在 is_closed 检查后关闭；日志不得影响业务或留下假唤醒。
+            with self._lock:
+                if self._loop is loop:
+                    self._pending.clear()
+                    self._dispatch_scheduled = False
+
+    def _drain_pending(self, loop: asyncio.AbstractEventLoop) -> None:
+        """在绑定循环上批量投递，单次最多 200 行，让出循环后处理下一批。"""
+        with self._lock:
+            if self._loop is not loop:
+                return  # 旧循环的回调不能动新循环的待投递队列。
+            batch = list(self._pending)
+            self._pending.clear()
+            self._dispatch_scheduled = False
+        if not self.enabled or self.hub.subscriber_count == 0:
             return
-        loop.call_soon_threadsafe(self.hub.publish, payload)
+        for payload in batch:
+            self.hub.publish(payload)
 
 
 def _record_request_id(record: logging.LogRecord) -> str | None:

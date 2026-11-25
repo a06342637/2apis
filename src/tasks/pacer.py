@@ -57,6 +57,7 @@ from ..config import live
 # 向下抖会击穿频率风控的护栏。`low < max` 的区间本身已均匀随机（文档承诺的
 # `[min, max]`），不再叠加，否则会越出该区间。
 JITTER_RATIO = 0.25
+IDLE_SWEEP_SECONDS = 60.0
 
 
 def stable_key(provider: str, identity: str | None) -> str:
@@ -139,6 +140,9 @@ class Pacer:
         self._starts: dict[str, list[float]] = {}
         # 并发模式 + 上限：名额让出时置位，挂起的请求醒来重查是否有空位
         self._wake = asyncio.Event()
+        self._waiters: dict[str, int] = {}
+        self._last_sweep: float | None = None
+        self._idle_retention = 0.0
 
     def _validate(self) -> tuple[float, float]:
         low, high = self.min_seconds, self.max_seconds
@@ -218,6 +222,25 @@ class Pacer:
         if not starts:
             del self._starts[bucket]
 
+    def _sweep_idle(self, now: float) -> None:
+        """持锁摊销清理旧桶；窗口暂关/缩短不提前抹掉仍可能使用的历史配额。"""
+        self._idle_retention = max(self._idle_retention, self.window_seconds,
+                                   self.max_seconds * (1 + JITTER_RATIO), IDLE_SWEEP_SECONDS)
+        if self._last_sweep is not None and 0 <= now - self._last_sweep < IDLE_SWEEP_SECONDS:
+            return
+        self._last_sweep = now
+        cutoff = now - self._idle_retention
+        for bucket in self._bucket_started.keys() | self._starts.keys():
+            if self._inflight.get(bucket, 0) or self._waiters.get(bucket, 0):
+                continue
+            latest = self._bucket_started.get(bucket, float("-inf"))
+            starts = self._starts.get(bucket)
+            if starts:
+                latest = max(latest, starts[-1])
+            if latest <= cutoff:
+                self._bucket_started.pop(bucket, None)
+                self._starts.pop(bucket, None)
+
     def _reserve(self, bucket: str) -> float:
         """**调用方须持 `_lock`**：登记一次在途并返回本次需补足的间隔秒数。
 
@@ -249,6 +272,9 @@ class Pacer:
         滑动窗口计数，窗口内启动次数满则挂起到最早一次启动滑出窗口（在途
         仍受 `max_concurrency` 上限约束，长流超过窗口时靠它兜底）。
         """
+        if self._allow_concurrent:
+            async with self._lock:
+                self._sweep_idle(self._now())
         if self.disabled and not (self._capped() or self._windowed()):
             return
         if not self._allow_concurrent:
@@ -265,6 +291,7 @@ class Pacer:
         remaining = 0.0
         reserved = False
         windowed_start: float | None = None
+        self._waiters[bucket] = self._waiters.get(bucket, 0) + 1
         try:
             while True:
                 window_wait = 0.0
@@ -313,6 +340,12 @@ class Pacer:
                 if starts and windowed_start in starts:
                     starts.remove(windowed_start)
             raise
+        finally:
+            waiting = self._waiters[bucket] - 1
+            if waiting:
+                self._waiters[bucket] = waiting
+            else:
+                del self._waiters[bucket]
 
     def release(self, key: str | None = None) -> None:
         """并发模式归还一个在途名额；严格模式与多余的 release 都是空操作。

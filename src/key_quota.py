@@ -40,6 +40,7 @@ QUOTA_FIELDS = INT_FIELDS + FLOAT_FIELDS
 # 滑动窗口长度：RPM/TPM 都是「每分钟」，固定 60 秒（不做可配置——配置项越多
 # 越容易与文档漂移，而这一项没有业务上的第二种合理取值）。
 WINDOW_SECONDS = 60.0
+IDLE_SWEEP_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -193,12 +194,15 @@ class KeyQuotaGuard:
         self._events: dict[str, deque[tuple[float, int]]] = {}
         # key_id → 在途请求数（并发上限用）。
         self._inflight: dict[str, int] = {}
+        self._last_sweep: float | None = None
 
     # ------------------------------------------------------------ 只读快照
 
     def window_usage(self, key_id: str) -> tuple[int, int]:
         """最近一个窗口内的 (请求数, token 估算和)；顺带清理过期事件。"""
-        events = self._prune(key_id, self._now())
+        moment = self._now()
+        self._sweep_idle(moment)
+        events = self._prune(key_id, moment)
         return len(events), sum(tokens for _, tokens in events)
 
     def inflight(self, key_id: str) -> int:
@@ -232,6 +236,7 @@ class KeyQuotaGuard:
     def _admit(self, key_id: str, quota: KeyQuota, *, tokens: int,
                subject: str) -> Lease:
         moment = self._now()
+        self._sweep_idle(moment)
         if quota.is_empty():
             return Lease(self, key_id, counted=False)
         self._check_daily(key_id, quota, moment, subject)
@@ -262,6 +267,15 @@ class KeyQuotaGuard:
             self._inflight[key_id] = count - 1
 
     # ------------------------------------------------------------ 内部
+
+    def _sweep_idle(self, moment: float) -> None:
+        """每分钟摊销扫描闲置Key；保留在途与窗口内记录，策略暂关不重置历史。"""
+        if self._last_sweep is not None and 0 <= moment - self._last_sweep < IDLE_SWEEP_SECONDS:
+            return
+        self._last_sweep = moment
+        for key_id in tuple(self._events):
+            if not self._inflight.get(key_id, 0):
+                self._prune(key_id, moment)
 
     def _check_daily(self, key_id: str, quota: KeyQuota, moment: float,
                      subject: str) -> None:

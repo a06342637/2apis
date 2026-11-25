@@ -13,6 +13,7 @@ import {
   ToggleLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 import {
   formatDuration,
   formatNumber,
@@ -73,6 +74,7 @@ export function CredentialGroupHeader({
   expirySecondaryWindow,
   onToggleGroup,
   onToggleGroupSelected,
+  groupAction,
 }: {
   group: ProviderGroup;
   isCollapsed: boolean;
@@ -86,6 +88,7 @@ export function CredentialGroupHeader({
   expirySecondaryWindow: number;
   onToggleGroup: (key: string) => void;
   onToggleGroupSelected: (ids: string[], checked: boolean) => void;
+  groupAction?: ReactNode;
 }) {
   // 到期积分：以「窗口 + 数字」两个图块呈现，比一行长句更像仪表盘。
   // 主/次窗口措辞区分开（主窗口 36h 是次窗口 7 天的子集）。
@@ -155,10 +158,10 @@ export function CredentialGroupHeader({
                                 data-testid={`group-toggle-${group.key}`}
                                 aria-expanded={!isCollapsed}
                                 onClick={() => onToggleGroup(group.key)}
-                                className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                                className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                               >
                               {/* 身份：折叠箭头 + 品牌图标 + 渠道名 + 账号数 */}
-                              <span className="flex w-48 shrink-0 items-center gap-2">
+                              <span className="flex w-40 shrink-0 items-center gap-2">
                                 <ChevronRight
                                   className={cn(
                                     "size-4 shrink-0 text-muted-foreground transition-transform",
@@ -184,9 +187,9 @@ export function CredentialGroupHeader({
                                   各组的「状态 / 额度 / 到期」起点会各错各的、读起来不成列。
                                   窄屏放不下时按整块换行，块内仍保持同一套对齐。
                                   （今日签到在右簇，与模型一起贴右，见折叠按钮之后。） */}
-                              <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                              <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
                                 {/* 状态分布：只列出现过的态，图标语义与行内状态徽章同源 */}
-                                <span className="flex w-40 shrink-0 items-center gap-2">
+                                <span className="flex w-36 shrink-0 items-center gap-2">
                                   <span className="grid size-7 shrink-0 place-items-center rounded-md bg-background text-muted-foreground ring-1 ring-border/70">
                                     <Activity className="size-3.5" aria-hidden />
                                   </span>
@@ -224,7 +227,7 @@ export function CredentialGroupHeader({
                                 {/* 额度合计：占比环 + 剩余 / 总量（标签行带精确百分比）。
                                     免费层（zen / kilo）无额度接口，null 显示 — 且不出环，
                                     退回一个中性图标位保持各块对齐。 */}
-                                <span className="flex w-48 shrink-0 items-center gap-2">
+                                <span className="flex w-40 shrink-0 items-center gap-2">
                                   {quotaPct !== null ? (
                                     <span data-testid={`group-${group.key}-quota-pct`}>
                                       <QuotaRing pct={quotaPct} />
@@ -314,7 +317,7 @@ export function CredentialGroupHeader({
                             <span className="flex shrink-0 items-center">
                               {showCheckin && (
                                 <span
-                                  className="flex w-40 shrink-0 items-center gap-2 pr-3"
+                                  className="flex w-32 shrink-0 items-center gap-2 pr-3"
                                   data-testid={`group-${group.key}-checkin`}
                                   title={checkinTitle}
                                 >
@@ -466,6 +469,7 @@ export function CredentialGroupHeader({
                                   </button>
                                 </LongTextTip>
                               )}
+                              {groupAction && <span className="shrink-0 pr-3">{groupAction}</span>}
                             </span>
                             </div>
                           </TableCell>

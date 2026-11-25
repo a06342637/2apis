@@ -720,7 +720,8 @@ class Executor:
         return _later(self._account_deadline(candidate, penalty),
                       self._model_deadline(candidate, penalty, target))
 
-    def pick_aux(self, providers: tuple[str, ...]) -> list[tuple[str, dict[str, Any]]]:
+    def pick_aux(self, providers: tuple[str, ...], *,
+                 credential_ids: tuple[str, ...] = ()) -> list[tuple[str, dict[str, Any]]]:
         """为「没有模型概念」的辅助端点（search / fetch）按健康度排出候选凭证。
 
         与聊天选号的区别：这些端点不针对某个模型，所以**不做模型级冷却过滤**
@@ -739,7 +740,7 @@ class Executor:
         模型白名单无从判定，按「不限制」处理——白名单只约束对话/推理选号，
         不该顺手把工具调用整条链路锁死。
         """
-        with self._request_scope():
+        with self._request_scope(credential_ids=credential_ids):
             candidates = self._scope().all_rows(providers, selectable_only=True)
             if not candidates:
                 return []

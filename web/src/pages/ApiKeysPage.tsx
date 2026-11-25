@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { type ApiKeyWindow, updateApiKey, USAGE_WINDOWS, USAGE_WINDOW_LABELS } from "../api/apiKeys";
 import { api } from "../api/client";
-import { useApiKeys, useCredentials, useQueryClient } from "../api/hooks";
+import { useApiKeys, useCredentialGroups, useCredentials, useQueryClient } from "../api/hooks";
 import { EMPTY_QUOTA, type KeyQuota, quotaInput, quotaOf, setApiKeyQuota } from "../api/keyQuota";
 import type { ApiKey, ApiKeyCreated } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
@@ -34,7 +34,7 @@ import {
 import { AnthropicEntry, OpenAIEntry } from "./apikeys/clientEntry";
 import { CcSwitchImportButtons } from "./apikeys/ccSwitch";
 import { KeyRow } from "./apikeys/KeyRow";
-import { CredentialSelector, credentialSelectionIssue } from "./apikeys/CredentialSelector";
+import { AccountScopeSelector, accountScopeIssue, accountScopeMode, type AccountScopeMode } from "./apikeys/AccountScopeSelector";
 import { expiresAtInput, PROVIDER_BINDING_OPTIONS, parseExpiresAt } from "./apikeys/meta";
 import { QuotaFields, QuotaSection } from "./apikeys/quota";
 import { CopyButton } from "./apikeys/shared";
@@ -83,6 +83,8 @@ export function ApiKeysPage() {
   const [name, setName] = useState("");
   const [binding, setBinding] = useState("");
   const [credentialIds, setCredentialIds] = useState<string[]>([]);
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [scopeMode, setScopeMode] = useState<AccountScopeMode>("all");
   const [allowedIps, setAllowedIps] = useState("");
   const [allowedModels, setAllowedModels] = useState("");
   const [expiresAt, setExpiresAt] = useState("");
@@ -95,6 +97,8 @@ export function ApiKeysPage() {
   const [editName, setEditName] = useState("");
   const [editBinding, setEditBinding] = useState("");
   const [editCredentialIds, setEditCredentialIds] = useState<string[]>([]);
+  const [editGroupIds, setEditGroupIds] = useState<string[]>([]);
+  const [editScopeMode, setEditScopeMode] = useState<AccountScopeMode>("all");
   const [editIps, setEditIps] = useState("");
   const [editModels, setEditModels] = useState("");
   const [editExpiresAt, setEditExpiresAt] = useState("");
@@ -120,8 +124,18 @@ export function ApiKeysPage() {
   const [importKey, setImportKey] = useState("");
 
   const keys = data?.api_keys ?? [];
-  const createScopeIssue = credentialSelectionIssue(credentialIds, accounts, binding);
-  const editScopeIssue = credentialSelectionIssue(editCredentialIds, accounts, editBinding);
+  const groupsQuery = useCredentialGroups(session.username,
+    (createOpen && scopeMode === "groups") || (editingKey !== null && editScopeMode === "groups")
+    || keys.some((key) => Boolean(key.group_ids?.length)));
+  const accountGroups = groupsQuery.isError ? undefined : groupsQuery.data?.groups;
+  const createScopeIssue = accountScopeIssue(scopeMode, credentialIds, groupIds, accounts, accountGroups, binding);
+  const editScopeIssue = accountScopeIssue(editScopeMode, editCredentialIds, editGroupIds, accounts, accountGroups, editBinding);
+  const changeScope = (mode: AccountScopeMode, ids: string[], groups: string[]) => {
+    setScopeMode(mode); setCredentialIds(ids); setGroupIds(groups);
+  };
+  const changeEditScope = (mode: AccountScopeMode, ids: string[], groups: string[]) => {
+    setEditScopeMode(mode); setEditCredentialIds(ids); setEditGroupIds(groups);
+  };
 
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -142,6 +156,7 @@ export function ApiKeysPage() {
         name,
         provider_binding: binding,
         credential_ids: credentialIds,
+        ...(groupIds.length ? { group_ids: groupIds } : {}),
         allowed_ips: allowedIps.trim(),
         allowed_models: allowedModels.trim(),
         expires_at: parseExpiresAt(expiresAt),
@@ -153,6 +168,8 @@ export function ApiKeysPage() {
       setName("");
       setBinding("");
       setCredentialIds([]);
+      setGroupIds([]);
+      setScopeMode("all");
       setAllowedIps("");
       setAllowedModels("");
       setExpiresAt("");
@@ -194,6 +211,8 @@ export function ApiKeysPage() {
     setEditName(key.name);
     setEditBinding(key.provider_binding);
     setEditCredentialIds([...(key.credential_ids ?? [])]);
+    setEditGroupIds([...(key.group_ids ?? [])]);
+    setEditScopeMode(accountScopeMode(key.credential_ids ?? [], key.group_ids ?? []));
     setEditIps(key.allowed_ips);
     setEditModels(key.allowed_models);
     setEditExpiresAt(expiresAtInput(key.expires_at));
@@ -221,6 +240,8 @@ export function ApiKeysPage() {
         name: editName,
         provider_binding: editBinding,
         credential_ids: editCredentialIds,
+        // 原本按组时也必须传 []，明确清除旧组绑定。
+        ...(editGroupIds.length || editingKey.group_ids?.length ? { group_ids: editGroupIds } : {}),
         allowed_ips: editIps.trim(),
         allowed_models: editModels.trim(),
         expires_at: parseExpiresAt(editExpiresAt),
@@ -284,7 +305,7 @@ export function ApiKeysPage() {
       <PageHeader
         eyebrow="控制台"
         title="API Key 管理"
-        description="创建外部客户端（ChatGPT Next Web、LobeChat、Cursor 等）接入用的 Key，协议与 OpenAI 兼容。Key 仅在创建时完整显示一次，请立即保存；用量按 Key 归属用户统计。"
+        description="创建外部客户端（ChatGPT Next Web、LobeChat、Cursor 等）接入用的 Key。新 Key 可验证当前登录密码后再次查看；用量按 Key 归属用户统计。"
         icon={<KeyRound className="size-5" />}
       />
       <OpenAIEntry apiKey={created?.api_key ?? ""} />
@@ -378,6 +399,7 @@ export function ApiKeysPage() {
                 <KeyRow
                   key={key.id}
                   item={key}
+                  accountGroups={accountGroups}
                   window={usageWindow}
                   confirming={confirming === key.id}
                   onRemove={remove}
@@ -436,7 +458,7 @@ export function ApiKeysPage() {
 
             {created ? (
               <div aria-live="polite">
-                <Notice tone="warn">此 Key 只会显示这一次，请立即复制保存；关闭后无法再次查看。</Notice>
+                <Notice tone="warn">请复制保存此 Key；关闭后可在列表验证当前登录密码再次查看。旧 Key 未保存可恢复的明文时需要创建新 Key。</Notice>
                 <div className="mt-3 flex items-center gap-3">
                   <code
                     data-testid="new-key-plaintext"
@@ -487,9 +509,10 @@ export function ApiKeysPage() {
                     ))}
                   </Select>
                 </Field>
-                <CredentialSelector credentials={accounts} selected={credentialIds} binding={binding}
-                                    onChange={setCredentialIds} testidPrefix="key"
-                                    loading={accountsQuery.isLoading} onRetry={() => void accountsQuery.refetch()} />
+                <AccountScopeSelector credentials={accounts} credentialIds={credentialIds} groupIds={groupIds}
+                  groups={accountGroups} mode={scopeMode} binding={binding} onChange={changeScope} testidPrefix="key"
+                  accountsLoading={accountsQuery.isLoading} retryAccounts={() => void accountsQuery.refetch()}
+                  groupsLoading={groupsQuery.isLoading} retryGroups={() => void groupsQuery.refetch()} />
                 <Field label="来源 IP 白名单（逗号分隔 IP/CIDR，留空不限制）" htmlFor="key-allowed-ips-input">
                   <Input
                     id="key-allowed-ips-input"
@@ -659,9 +682,10 @@ export function ApiKeysPage() {
                   ))}
                 </Select>
               </Field>
-              <CredentialSelector credentials={accounts} selected={editCredentialIds} binding={editBinding}
-                                  onChange={setEditCredentialIds} testidPrefix="edit-key"
-                                  loading={accountsQuery.isLoading} onRetry={() => void accountsQuery.refetch()} />
+              <AccountScopeSelector credentials={accounts} credentialIds={editCredentialIds} groupIds={editGroupIds}
+                groups={accountGroups} mode={editScopeMode} binding={editBinding} onChange={changeEditScope} testidPrefix="edit-key"
+                accountsLoading={accountsQuery.isLoading} retryAccounts={() => void accountsQuery.refetch()}
+                groupsLoading={groupsQuery.isLoading} retryGroups={() => void groupsQuery.refetch()} />
               <Field label="来源 IP 白名单（逗号分隔 IP/CIDR，留空不限制）"
                      htmlFor="edit-key-allowed-ips-input">
                 <Input
@@ -747,8 +771,8 @@ export function ApiKeysPage() {
             </div>
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">
-                本列表只保留脱敏预览（{importing.preview}），服务端不再存明文，故需
-                粘贴创建时保存的完整 Key 才能生成导入深链（CC Switch v4.0.10+）。
+                本列表显示脱敏预览（{importing.preview}）。可先验证当前登录密码查看并复制新 Key，
+                再粘贴到此处生成导入深链（CC Switch v4.0.10+）；旧 Key 需使用已保存的完整值。
               </p>
               <Field label="API Key" htmlFor="ccswitch-row-key-input" hint="仅本次导入的内存中使用，关闭即清除，不落库、不上传。">
                 <Input

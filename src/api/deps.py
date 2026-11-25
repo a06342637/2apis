@@ -20,6 +20,7 @@ from fastapi import Request
 from ..auth.access import client_ip, ip_allowed
 from ..auth.api_key import key_expired
 from ..auth.csrf import check_csrf, check_origin
+from ..auth.group_binding import resolve_credential_scope
 from ..auth.rbac import (
     ROLE_ADMIN,
     ForbiddenError,
@@ -171,6 +172,7 @@ class Services:
     log_repo: Any = None
     # 标准媒体接口与 Miora 对话中的媒体工具使用同一个服务。
     media: Any = None
+    credential_groups: Any = None
 
 
 def get_services(request: Request) -> Services:
@@ -253,6 +255,7 @@ class ApiKeyPrincipal:
     key_id: str = ""                # api_keys.id（Key 级配额与自助用量的归属）
     credential_ids: tuple[str, ...] = ()  # 空 = 全池；非空集合在任何重试中都不放宽
     quota: KeyQuota = field(default_factory=KeyQuota)  # 该 Key 的配额（全关=不受限）
+    group_ids: tuple[str, ...] = ()  # 组身份保留；credential_ids是本请求解析的成员快照
 
 
 class ServicePaused(Exception):
@@ -304,7 +307,9 @@ def _api_key_principal(services: Services, request: Request,
                                     policy.get("allowed_models") or ""),
                                 user_quota=load_key_quota(policy.get("quota")),
                                 key_id=record["id"],
-                                credential_ids=tuple(record.get("credential_ids") or ()),
+                                credential_ids=resolve_credential_scope(
+                                    record, getattr(services, "credential_groups", None)),
+                                group_ids=tuple(record.get("group_ids") or ()),
                                 quota=load_key_quota(record.get("quota")))
     # 归属权只认鉴权结果（绝不读入站头）：统计写入经 contextvar 现读，
     # 请求结束由 RequestIdMiddleware 复原（流式响应体也在中间件作用域内）。

@@ -18,18 +18,22 @@ export async function copyText(text: string): Promise<boolean> {
 }
 
 function legacyCopy(text: string): boolean {
+  let area: HTMLTextAreaElement | undefined;
   try {
-    const area = document.createElement("textarea");
+    area = document.createElement("textarea");
     area.value = text;
     // 移出视口但保留可选中状态，避免页面滚动抖动
     area.style.position = "fixed";
     area.style.opacity = "0";
     document.body.appendChild(area);
     area.select();
-    const ok = document.execCommand("copy");
-    area.remove();
-    return ok;
+    return document.execCommand("copy");
   } catch {
     return false;
+  } finally {
+    if (area) {
+      area.value = "";
+      area.remove();
+    }
   }
 }

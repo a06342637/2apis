@@ -115,7 +115,13 @@ class Settings(BaseSettings):
     media_timeout_seconds: float = Field(default=300, ge=1, le=1800)
     media_signed_url_seconds: int = Field(default=3600, ge=1, le=86400)
     media_poll_seconds: float = Field(default=2, ge=1, le=60)
+    media_io_concurrency: int = Field(default=2, ge=1, le=8)
     miora_auto_media_enabled: bool = True
+    # 库默认保持原并发；Docker/小内存部署使用 4 活跃、16 MiB 输入缓冲配置。
+    resource_max_active_requests: int = Field(default=0, ge=0, le=64)
+    resource_max_queued_requests: int = Field(default=32, ge=0, le=256)
+    resource_queue_timeout_seconds: float = Field(default=60, ge=0, le=300)
+    resource_input_budget_mb: int = Field(default=0, ge=0, le=512)
     # 是否采信 X-Forwarded-For 判定来源 IP（API Key 的 allowed_ips 白名单用）。
     # 默认 false：XFF 由客户端可写，直连部署下信它等于白名单形同虚设。
     # 仅在「本服务前面恰好一层受信反代」时开启，届时取 XFF 最后一个条目。

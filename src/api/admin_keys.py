@@ -1,4 +1,4 @@
-"""API Key 管理：列出 / 创建 / 编辑策略 / 改配额 / 删除（明文只在创建时返回一次）。"""
+"""API Key 管理：策略、配额及经过当前登录密码复核的密钥查看。"""
 
 from __future__ import annotations
 
@@ -6,16 +6,20 @@ import time
 from collections.abc import Callable
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from ..audit.actions import (
     ACTION_API_KEY_CREATE,
     ACTION_API_KEY_DELETE,
     ACTION_API_KEY_QUOTA,
+    ACTION_API_KEY_REVEAL,
     ACTION_API_KEY_UPDATE,
 )
 from ..auth.access import normalize_allowed_ips, normalize_allowed_models
 from ..auth.account_binding import normalize_credential_ids
+from ..auth.throttle import ThrottledError
 from ..compat.openai.request import InvalidRequest
+from ..db.crypto import CredentialDecryptError
 from ..db.key_update import EDITABLE_COLUMNS, update_api_key_fields
 from ..engine.limits import day_start
 from ..engine.model_resolver import KNOWN_PROVIDERS
@@ -83,6 +87,24 @@ def _validate_accounts(services: Services, account_ids: list[str], binding: str)
             raise InvalidRequest(f"credential {account_id} does not belong to provider {binding}")
 
 
+def _validate_groups(services: Services, group_ids: list[str], binding: str) -> None:
+    for group_id in group_ids:
+        row = services.credential_groups.get(group_id)
+        if row is None:
+            raise InvalidRequest(f"credential group not found: {group_id}")
+        if binding and row["provider"] != binding:
+            raise InvalidRequest(f"credential group does not belong to provider {binding}")
+
+
+def _validate_scope(
+    services: Services, accounts: list[str], groups: list[str], binding: str
+) -> None:
+    if accounts and groups:
+        raise InvalidRequest("credential_ids and group_ids cannot both be non-empty")
+    _validate_accounts(services, accounts, binding)
+    _validate_groups(services, groups, binding)
+
+
 def _parse_quota(raw: object) -> KeyQuota:
     """校验 Key 配额（dict 或 JSON 文本；空 = 不限制），错误归一为 400。"""
     try:
@@ -130,6 +152,7 @@ _KEY_FIELD_PARSERS: dict[str, Callable[[object], object]] = {
     "allowed_models": _parse_allowed_models,
     "expires_at": _parse_expires_at,
     "credential_ids": _parse_credential_ids,
+    "group_ids": _parse_credential_ids,
 }
 
 # 审计 detail 里的字段名与「空值」文案：`''` 直接打印读不出含义
@@ -141,6 +164,7 @@ _FIELD_LABELS: dict[str, str] = {
     "allowed_models": "模型白名单",
     "expires_at": "到期",
     "credential_ids": "绑定账号",
+    "group_ids": "绑定分组",
 }
 _FIELD_EMPTY_TEXT: dict[str, str] = {
     "name": "(未命名)",
@@ -149,6 +173,7 @@ _FIELD_EMPTY_TEXT: dict[str, str] = {
     "allowed_models": "不限制",
     "expires_at": "永不过期",
     "credential_ids": "不限制",
+    "group_ids": "不限制",
 }
 
 
@@ -227,12 +252,13 @@ def create_router(services: Services) -> APIRouter:
         expires_at = _parse_expires_at(payload.get("expires_at"))
         quota = _parse_quota(payload.get("quota"))
         account_ids = _parse_credential_ids(payload.get("credential_ids", []))
-        _validate_accounts(services, account_ids, binding)
+        group_ids = _parse_credential_ids(payload.get("group_ids", []))
+        _validate_scope(services, account_ids, group_ids, binding)
         created = api_keys.create(
             principal.username, str(payload.get("name") or ""),
             provider_binding=binding, allowed_ips=allowed_ips,
             allowed_models=allowed_models, expires_at=expires_at,
-            quota=quota_text(quota), credential_ids=account_ids)
+            quota=quota_text(quota), credential_ids=account_ids, group_ids=group_ids)
         # 发 Key 是「造了一把进网关的凭据」，必须留痕：明文只返回这一次，
         # 事后只能靠审计行回答「这把能刷全模型的 Key 是谁建的、什么时候」。
         services.audit.record(
@@ -240,9 +266,54 @@ def create_router(services: Services) -> APIRouter:
             target=created["id"],
             detail=_policy_detail(str(payload.get("name") or ""), binding,
                                   allowed_ips, allowed_models, expires_at, quota)
-                   + (f"；绑定账号 {', '.join(account_ids)}" if account_ids else ""),
+                   + (f"；绑定账号 {', '.join(account_ids)}" if account_ids else "")
+                   + (f"；绑定分组 {', '.join(group_ids)}" if group_ids else ""),
             ip=request_ip(request, services.settings))
         return created          # 明文只在此返回一次
+
+    @router.post("/api/api-keys/{key_id}/reveal")
+    async def reveal_key(key_id: str, payload: dict, request: Request,
+                         _csrf: None = Depends(csrf_protected),
+                         principal=Depends(principal_from_request)):
+        def error(status: int, code: str, message: str):
+            return JSONResponse(status_code=status,
+                content={"error": {"code": code, "message": message}},
+                headers={"Cache-Control": "no-store"})
+
+        if api_keys.reveal_info(key_id, principal.username) is None:
+            return error(404, "not_found", "API Key 不存在或不属于当前用户")
+        password = payload.get("password")
+        if not isinstance(password, str) or not password or len(password) > 8192:
+            return error(400, "invalid_request", "请提供当前登录密码")
+        ip = request_ip(request, services.settings)
+        forwarded = bool(request.headers.get("x-forwarded-for"))
+        throttle = services.login_throttle
+        try:
+            throttle.check_transport_windows(ip=ip, forwarded=forwarded)
+            verified = await throttle.verify(services.users.verify, principal.username, password)
+            if not verified:
+                throttle.check(ip=ip, username=principal.username, forwarded=forwarded)
+                throttle.record_failure(ip=ip, username=principal.username)
+                services.audit.record(actor=principal.username, action=ACTION_API_KEY_REVEAL,
+                    target=key_id, ok=False, detail="登录密码复核失败", ip=ip)
+                return error(401, "invalid_password", "当前登录密码错误")
+        except ThrottledError:
+            response = error(429, "rate_limited", "密码尝试过于频繁，请稍后重试")
+            response.headers["Retry-After"] = "60"
+            return response
+        # verify 在线程池中执行；改密/停用/退出若同时发生，旧会话不能趁间隙取 Key。
+        await principal_from_request(request)
+        throttle.record_success(username=principal.username)
+        try:
+            plaintext = api_keys.reveal(key_id, principal.username)
+        except (CredentialDecryptError, UnicodeDecodeError, TypeError, ValueError):
+            return error(409, "key_not_recoverable", "API Key 无法解密，请创建新 Key")
+        if plaintext is None:
+            return error(409, "key_not_recoverable", "旧版 API Key 只保存摘要，无法恢复明文")
+        services.audit.record(actor=principal.username, action=ACTION_API_KEY_REVEAL,
+                             target=key_id, ip=ip)
+        return JSONResponse({"api_key": plaintext}, headers={
+            "Cache-Control": "no-store", "Pragma": "no-cache"})
 
     @router.put("/api/api-keys/{key_id}")
     async def update_key(key_id: str, payload: dict, request: Request,
@@ -277,9 +348,10 @@ def create_router(services: Services) -> APIRouter:
                 "配额请用 PUT /api/api-keys/{key_id}/quota）")
         changes = {field: _KEY_FIELD_PARSERS[field](payload[field])
                    for field in EDITABLE_COLUMNS if field in payload}
-        if "credential_ids" in changes or "provider_binding" in changes:
-            _validate_accounts(services, changes.get("credential_ids", row["credential_ids"]),
-                               changes.get("provider_binding", row["provider_binding"]))
+        if {"credential_ids", "group_ids", "provider_binding"} & changes.keys():
+            _validate_scope(services, changes.get("credential_ids", row["credential_ids"]),
+                            changes.get("group_ids", row["group_ids"]),
+                            changes.get("provider_binding", row["provider_binding"]))
         diffs = _change_detail(row, changes)
         if not diffs:
             # 没提供字段 / 提供了但值没变：不写库、不留审计（空改动记录只会

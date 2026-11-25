@@ -27,6 +27,7 @@ from .api import (
     admin_backups,
     admin_badges,
     admin_billing,
+    admin_credential_groups,
     admin_credentials,
     admin_keys,
     admin_model_availability,
@@ -85,6 +86,7 @@ from .config import (
 from .db.backup import apply_pending_restore
 from .db.conn import Database
 from .db.crypto import CredentialCipher, CredentialDecryptError
+from .db.groups import CredentialGroupRepository
 from .db.key_usage import KeyUsageRepository
 from .db.limits import LimitsRepository, day_usage
 from .db.log_repo import LogRepository
@@ -169,6 +171,7 @@ from .webapp.handlers import register_exception_handlers
 from .webapp.limits import BodySizeLimitMiddleware
 from .webapp.log_buffer import LogBuffer, detach_root_handler, sync_root_handler
 from .webapp.logging import configure_logging
+from .webapp.request_budget import RequestBudgetMiddleware
 from .webapp.request_id import RequestIdMiddleware
 from .webapp.security import host_allowed, security_middleware
 from .webapp.upstream_headers import UpstreamHeadersMiddleware
@@ -454,7 +457,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     credit_events = CreditEventRepository(db)
     checkin_events = CheckinEventRepository(db)
     credential_events = CredentialEventRepository(db)
-    api_keys = ApiKeyRepository(db)
+    api_keys = ApiKeyRepository(db, cipher)
+    credential_groups = CredentialGroupRepository(db)
     user_repo = UserRepository(db)
     audit = AuditRepository(db)
     access_freezes = AccessFreezeRepository(db)
@@ -1033,6 +1037,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
         checkin_events=checkin_events,
         credential_events=credential_events,
         api_keys=api_keys,
+        credential_groups=credential_groups,
         executor=executor,
         registry=registry,
         users=store,
@@ -1108,6 +1113,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     # 路由挂载（src/api 各模块；静态资源最后注册，catch-all 会匹配所有路径）
     app.include_router(admin_auth.create_router(services))
     app.include_router(admin_credentials.create_router(services))
+    app.include_router(admin_credential_groups.create_router(services))
     app.include_router(admin_keys.create_router(services))
     app.include_router(admin_settings.create_router(services))
     app.include_router(admin_backups.create_router(services))
@@ -1144,6 +1150,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     # ------------------------------------------------------- 前端静态资源
     _static.register_spa_routes(app)
 
+    # 在读体上限内侧排队，避免多条大上下文先被完整读入/解析后才等待上游。
+    app.add_middleware(RequestBudgetMiddleware, settings=runtime)
     app.add_middleware(BodySizeLimitMiddleware)
     # 请求级结构化日志：在 RequestId 内侧（要用它生成的 ID）、在 BodySizeLimit
     # 外侧（413 也是请求结果，要记下来）。热更开关走取值器，改完下一请求生效。

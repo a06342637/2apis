@@ -201,11 +201,16 @@ def video_body(**values):
 
 
 def released(app):
-    assert all(
-        lease.released == 1
+    counts = [
+        lease.released
         for guard in (app.services.key_quota, app.services.user_quota)
         for lease in guard.leases
-    )
+    ]
+    assert counts == [1] * len(counts)
+
+
+def update_settings(app, **values):
+    app.services.settings = app.services.settings.model_copy(update=values)
 
 
 @pytest.mark.parametrize("response_format", ["url", "b64_json"])
@@ -435,11 +440,11 @@ async def test_expired_bad_or_missing_signature_is_not_allowed(app):
 async def test_signed_content_rechecks_gateway_pause_and_revoked_key(app):
     job = app.manager.add("image", completed=True)
     url = signed(app.manager, job)
-    app.services.settings.gateway_paused = True
+    update_settings(app, gateway_paused=True)
     paused = await app.client.get(url)
     assert paused.status_code == 503 and paused.json()["error"]["code"] == "service_paused"
     assert app.manager.fresh_calls == []
-    app.services.settings.gateway_paused = False
+    update_settings(app, gateway_paused=False)
     app.manager.revoked = True
     revoked = await app.client.get(url)
     assert revoked.status_code == 401
@@ -453,7 +458,7 @@ async def test_authentication_expiry_and_global_pause_also_gate_new_generation(a
     expired = await app.client.post(path, json=image_body())
     assert expired.status_code == 401
     app.records["sk-media-test"]["expires_at"] = None
-    app.services.settings.gateway_paused = True
+    update_settings(app, gateway_paused=True)
     paused = await app.client.post(path, json=image_body())
     assert paused.status_code == 503 and app.manager.submitted == []
 
@@ -504,7 +509,7 @@ def asgi_request(app):
 
 @pytest.mark.parametrize("cancel", [False, True])
 async def test_slow_images_keep_valid_json_and_cancel_work_and_release_on_disconnect(app, cancel):
-    app.services.settings.nonstream_keepalive_seconds = 0.01
+    update_settings(app, nonstream_keepalive_seconds=0.01)
     app.manager.wait_gate = asyncio.Event()
     messages, disconnected, whitespace, task = asgi_request(app)
     async with asyncio.timeout(2):
@@ -531,7 +536,7 @@ async def test_slow_images_keep_valid_json_and_cancel_work_and_release_on_discon
 
 
 async def test_zero_keepalive_configuration_does_not_stream_or_spin_while_work_is_pending(app):
-    app.services.settings.nonstream_keepalive_seconds = 0
+    update_settings(app, nonstream_keepalive_seconds=0)
     app.manager.wait_gate = asyncio.Event()
     messages, _disconnected, _whitespace, task = asgi_request(app)
     async with asyncio.timeout(2):
@@ -545,4 +550,57 @@ async def test_zero_keepalive_configuration_does_not_stream_or_spin_while_work_i
         message for message in messages if message["type"] == "http.response.start"
     )
     assert b"content-length" in dict(response_start["headers"])
+    released(app)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        TimeoutError("private timeout details"),
+        MediaRateLimited(42),
+        httpx.ReadTimeout("private upstream details"),
+    ],
+)
+async def test_failure_after_first_keepalive_is_valid_sanitized_json_without_replaying(
+    app,
+    monkeypatch,
+    failure,
+):
+    update_settings(app, nonstream_keepalive_seconds=0.01)
+    gate = asyncio.Event()
+
+    async def late(job, principal):
+        app.manager.wait_started.set()
+        await gate.wait()
+        raise failure
+
+    monkeypatch.setattr(app.manager, "wait", late)
+    messages, _disconnected, whitespace, task = asgi_request(app)
+    async with asyncio.timeout(2):
+        await whitespace.wait()
+        gate.set()
+        await task
+    payload = json.loads(b"".join(message.get("body", b"") for message in messages))
+    assert payload["error"]["code"] == "upstream_error"
+    assert "private" not in payload["error"]["message"]
+    response_start = next(
+        message for message in messages if message["type"] == "http.response.start"
+    )
+    assert response_start["status"] == 200
+    assert b"retry-after" not in dict(response_start["headers"])
+    assert len(app.manager.submitted) == 1
+    released(app)
+
+
+async def test_cancellation_before_headers_cancels_wait_and_releases_quota(app):
+    update_settings(app, nonstream_keepalive_seconds=1)
+    app.manager.wait_gate = asyncio.Event()
+    messages, _disconnected, _whitespace, task = asgi_request(app)
+    async with asyncio.timeout(2):
+        await app.manager.wait_started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert messages == [] and app.manager.cancelled
+    assert len(app.manager.submitted) == 1
     released(app)

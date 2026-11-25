@@ -44,5 +44,13 @@ describe("copyText", () => {
     });
 
     await expect(copyText("x")).resolves.toBe(false);
+    expect(document.querySelectorAll("textarea")).toHaveLength(0);
+  });
+
+  it("创建复制节点失败时返回 false", async () => {
+    vi.stubGlobal("navigator", {});
+    vi.spyOn(document, "createElement").mockImplementation(() => { throw new Error("blocked"); });
+    await expect(copyText("private-key")).resolves.toBe(false);
+    expect(document.querySelectorAll("textarea")).toHaveLength(0);
   });
 });

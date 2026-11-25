@@ -11,6 +11,7 @@ from tests.helpers.auth import settings_with
     ("MEDIA_TIMEOUT_SECONDS", 0), ("MEDIA_TIMEOUT_SECONDS", 1801),
     ("MEDIA_SIGNED_URL_SECONDS", 0), ("MEDIA_SIGNED_URL_SECONDS", 86401),
     ("MEDIA_POLL_SECONDS", 0), ("MEDIA_POLL_SECONDS", 61),
+    ("MEDIA_IO_CONCURRENCY", 0), ("MEDIA_IO_CONCURRENCY", 9),
 ])
 def test_media_resource_limits(name, value):
     with pytest.raises(ValidationError):

@@ -2,6 +2,8 @@
 # 基础镜像按 digest 固定：浮动 tag 会在上游重建时静默换掉运行时，构建不可复现。
 FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS web
 WORKDIR /web
+# 小内存主机更新构建避免 V8 按宿主 RAM 自行扩张堆；限制仅作用于前端构建阶段。
+ENV NODE_OPTIONS=--max-old-space-size=192
 # pnpm-workspace.yaml 必须一起 COPY：pnpm 从这里读 allowBuilds（放行 esbuild
 # 的 postinstall），缺失会以 ERR_PNPM_IGNORED_BUILDS 退出。
 # .npmrc 同理必须带上：里面有 auto-install-peers=false，与 lockfile 的

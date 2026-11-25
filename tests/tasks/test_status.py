@@ -317,8 +317,9 @@ def test_tasks_requires_admin(admin_client):
 
 def test_tasks_returns_runtime_snapshot(admin_client):
     """端点返回已装配任务的运行态 + server_time；启动首轮探测已入账。"""
-    _app, client = admin_client
+    app, client = admin_client
     body = client.get("/api/tasks").json()
+    assert app.state.credentials.list_all() == []
     assert isinstance(body["server_time"], int) and body["server_time"] > 0
     assert body["groups"] == [
         {"value": "account", "label": "账号维护"},
@@ -331,9 +332,9 @@ def test_tasks_returns_runtime_snapshot(admin_client):
     assert probe["name"] == "额度探测"
     assert probe["group"] == "account"
     assert probe["interval_seconds"] == 3600.0
-    assert probe["last_ok"] is True            # 启动首轮探测（zen/kilo 虚拟凭证）也是真实执行
+    assert probe["last_ok"] is True            # 新库空账号池仍记录首轮任务成功完成
     assert probe["last_report"] == {
-        "attempted": 2, "succeeded": 2, "failed": 0, "skipped": 0}
+        "attempted": 0, "succeeded": 0, "failed": 0, "skipped": 0}
     assert probe["runs"] == 1
     assert "description" in probe
 

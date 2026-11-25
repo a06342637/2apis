@@ -23,9 +23,9 @@ defaults:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    # 挂死保险丝：覆盖率全量跑 ≈ 4 分钟，给 15 分钟足够；无此限一个死循环
-    # 测试会烧 6 小时（GitHub 默认 360 分钟）。
-    timeout-minutes: 15
+    # 完整覆盖率目前接近 7000 用例实测约 12.5 分钟，给新增媒体/资源回归留余量。
+    # 仍保留挂死保险丝，避免无限等待烧完默认 6 小时。
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0

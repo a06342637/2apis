@@ -120,14 +120,17 @@ def create_router(services: Services) -> APIRouter:
                 found.append((provider_id, provider))
         return found
 
-    async def _call(call: Any) -> dict[str, Any]:
+    async def _call(call: Any, principal: ApiKeyPrincipal) -> dict[str, Any]:
         """按健康度顺序尝试凭证：401/403 视为「这个号不可用」→ 换下一个。"""
         providers = _providers()
         if not providers:
             raise InvalidRequest("no provider supports built-in search/fetch")
         last_error: ToolRejected | None = None
         for provider_id, provider in providers:
-            for _credential_id, credential_data in executor.pick_aux((provider_id,)):
+            if principal.provider_binding and provider_id != principal.provider_binding:
+                continue
+            for _credential_id, credential_data in executor.pick_aux(
+                    (provider_id,), credential_ids=principal.credential_ids):
                 try:
                     return await call(provider, credential_data)
                 except ToolRejected as error:
@@ -163,7 +166,7 @@ def create_router(services: Services) -> APIRouter:
                 data, query=query, max_results=max_results,
                 allowed_domains=_optional_domains(body, "allowed_domains"),
                 blocked_domains=_optional_domains(body, "blocked_domains"),
-                freshness=freshness))
+                freshness=freshness), principal)
         except ToolRejected as error:
             return _rejection(error)
         finally:
@@ -197,7 +200,7 @@ def create_router(services: Services) -> APIRouter:
             return quota_exceeded_response(error)
         try:
             return await _call(lambda provider, data: provider.fetch_url(
-                data, url=url, prompt=prompt, max_length=max_length))
+                data, url=url, prompt=prompt, max_length=max_length), principal)
         except ToolRejected as error:
             return _rejection(error)
         finally:

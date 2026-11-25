@@ -109,7 +109,9 @@ SCHEMA_NAME = "schema.sql"
 #   同语法）。请求模型不匹配时该凭证不参与**选号**（不硬禁用、不写冷却），
 #   后台任务（签到/刷新/探活）看不到这层过滤，故老库补 '' 后行为完全不变。
 # 40：api_keys 新增 credential_ids；默认 [] 沿用全池，非空是严格账号范围。
-SCHEMA_VERSION = 40
+# 41：api_keys 新增 key_enc，明文仅密码复核后回显，旧摘要行保持 NULL。
+# 42：正式账号分组+成员表；api_keys新增group_ids，默认 [] 保持原作用域。
+SCHEMA_VERSION = 42
 
 # (表, 列定义)：历史库升级时逐条补列
 _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -173,6 +175,8 @@ _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     # Key 级配额（JSON 文本）：老库补 '' ＝「不限制」，出口行为不变。
     ("api_keys", "quota TEXT NOT NULL DEFAULT ''"),
     ("api_keys", "credential_ids TEXT NOT NULL DEFAULT '[]'"),
+    ("api_keys", "group_ids TEXT NOT NULL DEFAULT '[]'"),
+    ("api_keys", "key_enc TEXT"),
     # 用户级策略（仅约束 Playground 会话直连）：老库补 '' ＝「不限制」，
     # Playground 行为与补列前一致（原先不校验任何按人策略）。
     ("users", "allowed_models TEXT NOT NULL DEFAULT ''"),

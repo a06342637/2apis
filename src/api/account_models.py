@@ -19,6 +19,22 @@ from .model_merge import _build_aliases, _merge_provider, _model_label, _sort_ke
 
 logger = logging.getLogger(__name__)
 ACCOUNT_MODEL_TTL_SECONDS = 300
+MAX_ACCOUNT_MODEL_CACHES = 128
+
+
+def _forget(services: Services, account_id: str) -> None:
+    services.credential_model_cache.pop(account_id, None)
+    services.credential_model_versions.pop(account_id, None)
+
+
+def _remember(services: Services, account_id: str, entry: tuple[float, dict[str, Model]],
+               version: str) -> None:
+    """按最近访问保留热目录，淘汰仅丢缓存，不改变 Key 的绑定集合。"""
+    services.credential_model_cache.pop(account_id, None)
+    services.credential_model_cache[account_id] = entry
+    services.credential_model_versions[account_id] = version
+    while len(services.credential_model_cache) > MAX_ACCOUNT_MODEL_CACHES:
+        _forget(services, next(iter(services.credential_model_cache)))
 
 
 async def account_model_tables(
@@ -26,21 +42,31 @@ async def account_model_tables(
 ) -> dict[str, dict[str, Model]]:
     """只拉选中且启用的账号；同账号并发拉取共用编辑锁和 5 分钟缓存。"""
     selected = set(credential_ids)
-    candidates = [candidate for candidate in services.credentials.candidates(selectable_only=True)
+    current = services.credentials.candidates()
+    live = {candidate.credential_id for candidate in current}
+    remembered = set(services.credential_model_cache) | set(services.credential_model_versions)
+    for removed in remembered - live:
+        _forget(services, removed)
+    # 当前请求保留已有128份引用，批量超过缓存上限时不让逐个淘汰引起全量重拉。
+    cached = dict(services.credential_model_cache)
+    versions = dict(services.credential_model_versions)
+    candidates = [candidate for candidate in current
                   if candidate.credential_id in selected
+                  and candidate.enabled and not candidate.disabled
                   and (not provider_binding or candidate.provider == provider_binding)
                   and candidate.provider in services.registry]
     tables: dict[str, dict[str, Model]] = {}
     for candidate in candidates:
         account_id = candidate.credential_id
         async with services.credentials.edit_lock(account_id):
-            previous = services.credential_model_cache.get(account_id)
+            previous = services.credential_model_cache.get(account_id, cached.get(account_id))
+            previous_version = services.credential_model_versions.get(
+                account_id, versions.get(account_id))
             now = time.monotonic()
             try:
                 data = services.credentials.credential_data(account_id)
                 if data is None:
-                    services.credential_model_cache.pop(account_id, None)
-                    services.credential_model_versions.pop(account_id, None)
+                    _forget(services, account_id)
                     continue
                 version = hashlib.sha256(json.dumps(data, sort_keys=True,
                     separators=(",", ":")).encode()).hexdigest()
@@ -48,12 +74,12 @@ async def account_model_tables(
                 reason = ("凭证解密失败" if isinstance(error, CredentialDecryptError)
                           else type(error).__name__)
                 logger.warning("绑定账号目录凭证读取失败 %s: %s", account_id, reason)
-                services.credential_model_cache.pop(account_id, None)
-                services.credential_model_versions.pop(account_id, None)
+                _forget(services, account_id)
                 tables[account_id] = {}
                 continue
-            same = services.credential_model_versions.get(account_id) == version
+            same = previous_version == version
             if previous is not None and same and now - previous[0] < ACCOUNT_MODEL_TTL_SECONDS:
+                _remember(services, account_id, previous, version)
                 tables[account_id] = previous[1]
                 continue
             try:
@@ -63,8 +89,7 @@ async def account_model_tables(
             except Exception as error:  # noqa: BLE001 - 单账号失败不能扩大账号范围
                 logger.warning("绑定账号目录拉取失败 %s: %s", account_id, type(error).__name__)
                 table = previous[1] if previous is not None and same else {}
-            services.credential_model_cache[account_id] = (now, table)
-            services.credential_model_versions[account_id] = version
+            _remember(services, account_id, (now, table), version)
             tables[account_id] = table
     return tables
 

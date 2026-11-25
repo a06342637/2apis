@@ -37,7 +37,7 @@ describe("ApiKeysPage", () => {
     expect(screen.getByText("从未使用")).toBeInTheDocument();
   });
 
-  it("创建后展示一次性明文并提示只显示一次", async () => {
+  it("创建后展示明文并说明可密码验证再次查看", async () => {
     mockFetch({
       "/api/api-keys": (() => {
         let called = false;
@@ -69,7 +69,7 @@ describe("ApiKeysPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "创建" }));
 
     expect(await screen.findByTestId("new-key-plaintext")).toHaveTextContent("sk-plaintext-value");
-    expect(screen.getByText(/只会显示这一次/)).toBeInTheDocument();
+    expect(screen.getByText(/关闭后可在列表验证当前登录密码再次查看/)).toBeInTheDocument();
   });
 
   it("复制后给出反馈", async () => {

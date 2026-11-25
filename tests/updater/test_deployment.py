@@ -201,6 +201,11 @@ def test_compose_current_image_and_build_fixed_commit(host, tmp_path):
         calls.append((argv, kwargs))
         if "rev-parse" in argv:
             return SHA
+        if argv[:3] == ["docker", "buildx", "inspect"]:
+            return "Name: apis-update-2apis\nDriver: docker-container\nNodes:\n"
+        if "{{json .HostConfig}}" in argv:
+            return json.dumps({"Memory": 268435456, "MemorySwap": 536870912,
+                               "CpuQuota": 25000, "CpuPeriod": 100000})
         if "inspect" in argv:
             return IMAGE
         if "ps" in argv:
@@ -213,8 +218,9 @@ def test_compose_current_image_and_build_fixed_commit(host, tmp_path):
     deployment = Deployment(host, run=run)
     assert deployment.current_image() == IMAGE
     assert deployment.build("a/b", SHA, tmp_path / "stage") == f"2apis-update:{SHA}"
-    assert calls[-1][0] == ["docker", "build", "--tag", f"2apis-update:{SHA}",
-                           str(tmp_path / "stage")]
+    assert calls[-2][0] == ["docker", "buildx", "build", "--builder", "apis-update-2apis",
+                            "--load", "--tag", f"2apis-update:{SHA}", str(tmp_path / "stage")]
+    assert calls[-1][0] == ["docker", "buildx", "stop", "apis-update-2apis"]
     deployment.stop()
     assert calls[-1][0][-4:] == ["stop", "--timeout", "180", "coding2api"]
     host.env_file.unlink()

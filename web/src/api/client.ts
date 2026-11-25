@@ -430,6 +430,7 @@ export const api = {
     name: string;
     provider_binding?: string;
     credential_ids?: string[];
+    group_ids?: string[];
     allowed_ips?: string;
     allowed_models?: string;
     expires_at?: number | null;
