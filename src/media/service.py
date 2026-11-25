@@ -26,6 +26,7 @@ from ..engine.scheduler import Scheduler
 from ..key_quota import load_key_quota
 from ..model_alias import parse_model_aliases
 from ..provider.base import ErrKind, UpstreamHTTPError, UpstreamProtocolViolation
+from ..provider.miora.media import MioraMediaRequestError
 from ..provider.naming import normalize_model_key
 from ..request_context import credential_scope
 from ..tasks.pacer import paced
@@ -361,6 +362,11 @@ class MediaService:
                             request["prompt"],
                             **request["options"],
                         )
+                    except MioraMediaRequestError as error:
+                        # 此异常只来自生成 POST 前的模型/参数校验，可以安全移除未提交意图。
+                        # 已发出 POST 的 HTTP/网络/协议错误仍保留原意图，禁止自动重放。
+                        self.store.path(job_id).unlink(missing_ok=True)
+                        raise InvalidRequest(str(error)) from error
                     except UpstreamHTTPError as error:
                         self.record(principal, job, ok=False)
                         self.store.save(

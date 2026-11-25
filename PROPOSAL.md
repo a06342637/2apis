@@ -25,6 +25,7 @@
 - 小内存部署：全响应生命周期的活跃和输入预算、读体前 FIFO 队列、有界等待；媒体按块 Base64、共享 IO 名额、拒绝 CDN 压缩流；ASGI 头部/正文取消均保证释放工作和额度。大 ACP 缓冲收紧，热账号目录128、闲置限流缓存清理；日志200待投递、一次唤醒、线性敏感标识符扫描，保持完整脱敏和持久写入。
 - 主机更新构建改为固定 digest 的专属 docker-container BuildKit，核实256MiB/512MiB总量/CPU25%，禁止退回不受限构建。构建器结束停止保留缓存，主机Docker配置放在受保护state目录，避免ProtectHome下初始化失败。
 - `/v1/user/balance` 仅汇总 Principal 的当前渠道和账号范围，分组动态解析同样生效，不泄露其他账号额度。
+- 媒体模型的目录参数校验错误在生成 POST 前返回 400 并清除未提交意图；已发送 POST 的失败仍持久保留，不自动重放。
 - 更新回滚先校验旧备份；仅在字面量 APP_SECRET 一致、同 CID/provider、票据密文变化且已知有效时间单调更新时事务保留四项登录列。坏库、缺列、密钥不符或回填失败记录受控警告并恢复旧库，不保留新 Key/分组/schema，不修改原备份。
 
 > 结论：九个上游厂商、十个渠道（CodeBuddy 国内 / 国际、TRAE SOLO、OpenCode Zen、Kilo、Qoder、CodeArts、OfficeAce、小浣熊、灵犀）统一为一条 OpenAI 兼容出口，公共凭证池 + 统一模型名 + 自动调度 + 按人用量统计；实现见 [TECHNICAL.md](TECHNICAL.md)，使用与部署见 [README.md](README.md)。
