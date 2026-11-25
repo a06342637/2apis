@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS api_keys (
     username      TEXT NOT NULL,
     name          TEXT NOT NULL DEFAULT '',
     key_digest    TEXT NOT NULL UNIQUE,
+    -- APP_SECRET 加密的可恢复 Key；旧版本只保存摘要，NULL 不可恢复。
+    key_enc       TEXT,
     preview       TEXT NOT NULL,
     created_at    INTEGER NOT NULL,
     last_used_at  INTEGER,
@@ -32,6 +34,10 @@ CREATE TABLE IF NOT EXISTS api_keys (
     -- 与到期时间（epoch 秒，NULL=永不过期）。
     allowed_models TEXT NOT NULL DEFAULT '',
     expires_at    INTEGER,
+    -- 指定账号 ID 集合（JSON string[]）；[] 不限制，删除账号不清空此策略。
+    credential_ids TEXT NOT NULL DEFAULT '[]',
+    -- 正式分组稳定ID（JSON string[]）；与非空credential_ids互斥。
+    group_ids     TEXT NOT NULL DEFAULT '[]',
     -- Key 级配额（JSON 文本，''=不限制）。结构见 src/auth/access.py
     -- 的 parse_key_quota：daily_requests / daily_tokens / daily_cost_usd /
     -- rpm / tpm / max_concurrency，0 或缺失的键 = 该项关闭。
@@ -469,3 +475,21 @@ CREATE TABLE IF NOT EXISTS access_freezes (
 -- 判定是否冻结按 (subject, provider) 计数；列出/解冻也按这两个键过滤。
 CREATE INDEX IF NOT EXISTS idx_access_freezes_subject_provider
     ON access_freezes(subject, provider, frozen_at);
+
+-- 正式账号分组：名称可变，Key绑定稳定ID，成员每次鉴权现读。
+CREATE TABLE IF NOT EXISTS credential_groups (
+    id         TEXT PRIMARY KEY,
+    provider   TEXT NOT NULL,
+    name       TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE (provider, name)
+);
+
+CREATE TABLE IF NOT EXISTS credential_group_members (
+    group_id      TEXT NOT NULL REFERENCES credential_groups(id) ON DELETE CASCADE,
+    credential_id TEXT NOT NULL REFERENCES credentials(id) ON DELETE CASCADE,
+    PRIMARY KEY (group_id, credential_id)
+);
+CREATE INDEX IF NOT EXISTS idx_credential_group_members_credential
+    ON credential_group_members(credential_id);

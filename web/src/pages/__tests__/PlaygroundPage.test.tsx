@@ -55,6 +55,45 @@ describe("PlaygroundPage（会话鉴权，无需 API Key）", () => {
     expect(screen.queryByTestId("playground-key")).not.toBeInTheDocument();
   });
 
+  it("Miora 对话入口说明生成端点，强制选渠道不继承其他渠道图片输入能力", async () => {
+    mockFetch({ "/api/playground/models": { data: [{
+      id: "gpt-6-astra", object: "model", owned_by: "2apis",
+      providers: ["codearts", "miora"], supports_images: true, supports_tool_call: true,
+    }] } });
+    renderPage(<PlaygroundPage />, { username: "root", is_admin: true });
+    await waitForModelLoaded();
+    expect(screen.queryByTestId("playground-miora-usage")).not.toBeInTheDocument();
+    await userEvent.click(within(screen.getByTestId("provider-pin"))
+      .getByRole("button", { name: /Miora/ }));
+    const usage = screen.getByTestId("playground-miora-usage");
+    expect(usage).toHaveTextContent("文本问答、代码生成/分析");
+    expect(usage).toHaveTextContent("生图接口：/v1/images/generations");
+    expect(usage).toHaveTextContent("视频接口：/v1/videos");
+    expect(usage).toHaveTextContent("3D、音频：官网独立创作入口");
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByTestId("model-meta")).toHaveTextContent("图像理解（输入）");
+    expect(screen.getByTestId("model-meta")).toHaveTextContent("客户端工具（JSON模拟）");
+    const image = within(screen.getByTestId("model-meta")).getByText("图像理解（输入）");
+    expect(image.querySelector(".lucide-x")).not.toBeNull();
+  });
+
+  it("目录可同时包含媒体模型，但 Playground 只选择文本模型", async () => {
+    mockFetch({ "/api/playground/models": { data: [
+      { id: "gem-3.1", object: "model", owned_by: "2apis", providers: ["miora"], credit_rate: 0,
+        gateway_endpoints: ["/v1/images/generations"], output_modalities: ["image"] },
+      { id: "vidu-q2-pro-video", object: "model", owned_by: "2apis", providers: ["miora"],
+        gateway_endpoints: ["/v1/videos"], output_modalities: ["video"] },
+      { id: "hy4flash", object: "model", owned_by: "2apis", providers: ["miora"],
+        gateway_endpoints: ["/v1/chat/completions"], output_modalities: ["text"] },
+    ] } });
+    renderPage(<PlaygroundPage />, { username: "root", is_admin: true });
+    await waitForModelLoaded();
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByTestId("model-option-hy4flash@miora")).toBeInTheDocument();
+    expect(screen.queryByTestId("model-option-gem-3.1@miora")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("model-option-vidu-q2-pro-video@miora")).not.toBeInTheDocument();
+  });
+
   it("自定义别名条目在选择器里带「自定义别名」徽章（当前选择条同样标）", async () => {
     mockFetch({ "/api/playground/models": {
       object: "list",
@@ -116,7 +155,7 @@ describe("PlaygroundPage（会话鉴权，无需 API Key）", () => {
     expect(current2).toHaveTextContent("自动路由");
     const meta2 = screen.getByTestId("model-meta");
     expect(meta2).toHaveTextContent("200,000");
-    expect(meta2).toHaveTextContent("图片");
+    expect(meta2).toHaveTextContent("图像理解（输入）");
     expect(meta2.querySelector("svg.lucide-check")).toBeInTheDocument();
     expect(meta2.querySelector("svg.lucide-x")).toBeInTheDocument();
     expect(meta2).not.toHaveTextContent("✓");

@@ -27,12 +27,14 @@ from .api import (
     admin_backups,
     admin_badges,
     admin_billing,
+    admin_credential_groups,
     admin_credentials,
     admin_keys,
     admin_model_availability,
     admin_model_catalog,
     admin_settings,
     admin_stats,
+    admin_updates,
     admin_upstream,
     admin_users,
     authorize,
@@ -40,6 +42,7 @@ from .api import (
     chat,
     gemini,
     logs,
+    media,
     messages,
     metrics,
     models,
@@ -83,6 +86,7 @@ from .config import (
 from .db.backup import apply_pending_restore
 from .db.conn import Database
 from .db.crypto import CredentialCipher, CredentialDecryptError
+from .db.groups import CredentialGroupRepository
 from .db.key_usage import KeyUsageRepository
 from .db.limits import LimitsRepository, day_usage
 from .db.log_repo import LogRepository
@@ -111,6 +115,8 @@ from .engine.model_resolver import KNOWN_PROVIDERS, parse_fallback_groups
 from .engine.scheduler import Scheduler
 from .instance_lock import AlreadyRunning, hold_instance_lock
 from .key_quota import KeyQuotaGuard
+from .media.auto import MediaAuto
+from .media.service import MediaService
 from .observability.otlp import OtlpExporter, metrics_snapshot
 from .persistence.compress_buckets import snapshot_path as compress_buckets_path
 from .platform_support import require_supported_platform
@@ -165,6 +171,7 @@ from .webapp.handlers import register_exception_handlers
 from .webapp.limits import BodySizeLimitMiddleware
 from .webapp.log_buffer import LogBuffer, detach_root_handler, sync_root_handler
 from .webapp.logging import configure_logging
+from .webapp.request_budget import RequestBudgetMiddleware
 from .webapp.request_id import RequestIdMiddleware
 from .webapp.security import host_allowed, security_middleware
 from .webapp.upstream_headers import UpstreamHeadersMiddleware
@@ -347,31 +354,6 @@ def _officeace_endpoint(config: Settings) -> str:
                              strip_slash=True)
 
 
-def _seed_free_credential(credentials: CredentialRepository, *, provider: str,
-                          nickname: str) -> None:
-    """确保池里有一条无凭证渠道的虚拟凭证（幂等）。
-
-    无凭证渠道（Zen / Kilo）没有凭证概念，但调度/冷却/统计全部按
-    credentials 行工作；没有这条占位行，该渠道永远不会被选为候选。启动时
-    若发现没有会补上；用户在凭证页删除后，也可点「添加 …」立即补回（走通用
-    导入端点）。要永久停用请用「暂停」而不是删除。
-    """
-    if credentials.candidates([provider]):
-        return
-    credentials.add(provider=provider, credential_data={}, nickname=nickname,
-                    added_by="system")
-
-
-def _seed_zen_credential(credentials: CredentialRepository) -> None:
-    """确保池里有一条 zen 虚拟凭证（幂等）。"""
-    _seed_free_credential(credentials, provider="zen", nickname="OpenCode Zen")
-
-
-def _seed_kilo_credential(credentials: CredentialRepository) -> None:
-    """确保池里有一条 kilo 虚拟凭证（幂等）。"""
-    _seed_free_credential(credentials, provider="kilo", nickname="Kilo")
-
-
 def _similar_models(name: str, aliases: dict[str, dict[str, str]],
                     limit: int = 4) -> list[str]:
     """从全部上游的已知模型里找与 name 相近的（400 报错时给用户指路）。"""
@@ -475,7 +457,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     credit_events = CreditEventRepository(db)
     checkin_events = CheckinEventRepository(db)
     credential_events = CredentialEventRepository(db)
-    api_keys = ApiKeyRepository(db)
+    api_keys = ApiKeyRepository(db, cipher)
+    credential_groups = CredentialGroupRepository(db)
     user_repo = UserRepository(db)
     audit = AuditRepository(db)
     access_freezes = AccessFreezeRepository(db)
@@ -521,7 +504,9 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     miora_pacer = Pacer(lambda: runtime.miora_chat_min_interval,
                         lambda: runtime.miora_chat_min_interval,
                         allow_concurrent=True,
-                        max_concurrency=lambda: runtime.miora_max_concurrency)
+                        max_concurrency=lambda: runtime.miora_max_concurrency,
+                        window_seconds=lambda: runtime.miora_request_window_seconds,
+                        max_requests_per_window=lambda: runtime.miora_max_requests_per_window)
     # Qoder / CodeArts 是真实账号渠道，上游按账号频控；各自独立 pacer，
     # 与其余渠道互不排队（同渠道同凭证共桶、桶内允许并发）。
     qoder_pacer = Pacer(lambda: runtime.qoder_chat_min_interval,
@@ -626,11 +611,6 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
             if generic_endpoint else {}
         ),
     }
-    # 默认装配路径（生产）才种子无凭证渠道的虚拟凭证：测试注入自定义 registry
-    # 时不应凭空多出一条无对应 provider 的凭证行。
-    if providers is None:
-        _seed_zen_credential(credentials)
-        _seed_kilo_credential(credentials)
     # provider → {小写模型名: 上游原始 id}；api/models.list_models 拉取后就地更新，
     # executor 发请求前把归一名映射回各上游的原始大小写
     model_aliases: dict[str, dict[str, str]] = {}
@@ -876,6 +856,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
             enabled=lambda: runtime.upstream_status_enabled)
         model_probe_task = ModelProbeTask(
             credentials, registry, model_probes,
+            model_list_cache=model_cache,
             upstream_model=lambda provider_id, name: (
                 model_aliases.get(provider_id, {}).get(name.lower(), name)))
         app_.state.model_probe_task = model_probe_task
@@ -970,8 +951,11 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
                     await task
             services_.model_refresh_tasks.clear()
             services_.pending_model_refreshes.clear()
-            for task in app_.state.pending_probes:
+            pending_probes = list(app_.state.pending_probes)
+            for task in pending_probes:
                 task.cancel()
+            # 票据刷新可能已在上游完成轮转，须等编辑锁中的新票据落库后关资源。
+            await asyncio.gather(*pending_probes, return_exceptions=True)
             app_.state.pending_probes.clear()
             for provider in registry.values():
                 closer = getattr(provider, "aclose", None)
@@ -1053,6 +1037,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
         checkin_events=checkin_events,
         credential_events=credential_events,
         api_keys=api_keys,
+        credential_groups=credential_groups,
         executor=executor,
         registry=registry,
         users=store,
@@ -1080,6 +1065,10 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
         inflight=inflight_guard,
     )
     app.state.services = services
+    if isinstance(registry.get("miora"), MioraProvider):
+        services.media = MediaService(services, stats=stats_collector)
+        registry["miora"].media_auto = MediaAuto(services.media)
+        registry["miora"].media_client = services.media.client
 
     # --------------------------------------------- 安全中间件（PROPOSAL §6）
     # Host 白名单（防 DNS rebinding）+ 安全响应头；请求体上限由 ASGI 中间件处理
@@ -1124,6 +1113,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     # 路由挂载（src/api 各模块；静态资源最后注册，catch-all 会匹配所有路径）
     app.include_router(admin_auth.create_router(services))
     app.include_router(admin_credentials.create_router(services))
+    app.include_router(admin_credential_groups.create_router(services))
     app.include_router(admin_keys.create_router(services))
     app.include_router(admin_settings.create_router(services))
     app.include_router(admin_backups.create_router(services))
@@ -1132,6 +1122,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     app.include_router(admin_alerts.create_router(services))
     app.include_router(admin_badges.create_router(services))
     app.include_router(admin_upstream.create_router(services))
+    app.include_router(admin_updates.create_router(services))
     app.include_router(admin_access_freezes.create_router(services))
     app.include_router(admin_stats.create_router(services))
     app.include_router(admin_billing.create_router(services))
@@ -1146,6 +1137,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     app.include_router(gemini.create_router(services))
     app.include_router(tools.create_router(services))
     app.include_router(models.create_router(services))
+    if services.media is not None:
+        app.include_router(media.create_router(services))
     app.include_router(balance.create_router(services))
     app.include_router(playground.create_router(services))
     app.include_router(authorize.create_router(services))
@@ -1157,6 +1150,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     # ------------------------------------------------------- 前端静态资源
     _static.register_spa_routes(app)
 
+    # 在读体上限内侧排队，避免多条大上下文先被完整读入/解析后才等待上游。
+    app.add_middleware(RequestBudgetMiddleware, settings=runtime)
     app.add_middleware(BodySizeLimitMiddleware)
     # 请求级结构化日志：在 RequestId 内侧（要用它生成的 ID）、在 BodySizeLimit
     # 外侧（413 也是请求结果，要记下来）。热更开关走取值器，改完下一请求生效。

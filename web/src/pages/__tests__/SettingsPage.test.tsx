@@ -324,8 +324,10 @@ describe("SettingsPage", () => {
     await settle();
 
     expect(screen.getByTestId("no-tasks")).toBeInTheDocument();
-    // 只有配置一边有内容：不渲染一级 tab，直接落在网关配置
-    expect(screen.queryByTestId("settings-sections")).not.toBeInTheDocument();
+    // 没有任务的一边不出 tab；网关与独立更新入口仍可使用。
+    expect(screen.queryByTestId("settings-sections-tasks")).not.toBeInTheDocument();
+    expect(screen.getByTestId("settings-sections-gateway")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("settings-sections-updates")).toBeInTheDocument();
     // 有内容的网关 tab 仍在
     expect(screen.getByTestId("setting-pacer_max_seconds")).toBeInTheDocument();
     // 任务归属项因任务清单不可用落到「其他」，不会被吞掉

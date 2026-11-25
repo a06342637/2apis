@@ -7,12 +7,26 @@
 - 控制面 `/api/ai/workflow/create` → `/api/ai/cloud-agent/runtimes` → `/api/ai/cloud-agent/sessions`，推理通过上游签发的 CloudStudio ACP 链接。每账号复用专用项目、每请求新建独立会话；同账号整轮串行防止运行时 `tierKey` / `effort` 配置交叉覆盖，不同账号并行。ACP 先 GET 领取连接 ID，再 POST JSON-RPC；内容与控制结果可能分别在 GET / POST 流中，终态栅栏必须等两边完成。
 - 模型清单从 ACP `session/load` 动态读取，网页 `/api/ai/public/cloud-agent/tiers` 补充计费倍率及三档模式。2026-11-25 实测 32 个真实目录条目 + 3 个模式。真实 `session/set_model` 负责选模，未知 ID 明确拒绝，不回落自动模型。
 - token 预热分两层：模型目录启动/导入预热领取短运行时票，连接前重新获取短票；长登录票进入既有刷新窗口后由共享任务续期。仅尚未发推理的短票 401 可重建一次；流中断不自动重放已计费对话，并发送 `session/cancel`。
-- 代码/客户端工具专用通路。当前 ACP 没有可验证的 OpenAI 函数注册入口，采用严格 JSON 工具模拟；函数白名单及常见参数 schema 校验后输出中立 `TOOL_CALLS`，由客户端执行并回传结果，云端实际执行工具事件不能冒充客户端工具。媒体生成不接入。工具响应需要缓冲校验，异常响应按协议违规处理。
+- 当前 ACP 没有可验证的 OpenAI 函数注册入口，采用严格 JSON 工具模拟；函数白名单及常见参数 schema 校验后输出中立 `TOOL_CALLS`，客户端函数由客户端执行并回传结果。Film Studio 图片/视频工具由网关独立执行，返回真实资源链接，云端文件执行事件不能冒充客户端工具。工具响应需要缓冲校验，异常响应按协议违规处理。
 - ACP `max_tokens` 仅提示预算，不是硬上限；不支持的采样/结构化输出参数返回 400，非文本输入/输出在联网前拒绝。每轮推理档位明确设置，省略时使用本服务默认 `medium`；同账号跨项目别名共享锁。工具定义的常见 schema 格式在请求阶段校验，坏定义不会先产生上游推理费用。额度查询使用 `POST /api/miora-billing/credit` 的 `totalAmount - usedAmount`，未知/失败不伪造零余额。
 - 本地抓包、真实会话票据和验证环境位于 `.local/`，该目录被 Git 忽略。公开代码与测试只使用合成凭证和注入网络边界。
 - 部署验证补强：控制面 JSON 逻辑 HTTP 状态保留缺失运行时的 404 创建路径；Hy4 Flash 标准/免费路由使用独立目录键，原始 ID 不被合并重写；手工导入与刷新持相同编辑锁，服务启动先刷新再探测额度。ACP 建链纳入超时，POST 无结果断流可在 GET 已明确报告成功终态后恢复，错误终态及 RPC 错误仍失败，不重放推理。工具 JSON 禁止非有限数值，枚举按 JSON 类型比较。
 - 流式拉取与关闭共享固定 Context，保留首帧预取、心跳和空闲超时的逐帧反压行为；正常结束与客户端取消均在原上下文关闭上游，避免跨 Task 恢复 ContextVar token 失败并妨碍租约回收。
 - Miora 导入后的即时探测先通过 TaskRunner 调用共享 RefreshTask 按账号续期，等待完成并重读持久化票据后再探测；临时刷新失败不拿旧 401 判死账号。刷新获得编辑锁后重查是否仍需续期，防止并发导入/周期任务重复轮转同一账号。
+- 软暂停仅停止 API 调度与推理探活；token 预刷新、额度探测、签到和成长维护继续。停机时先排空上游票据轮转与同锁落库，再关闭 provider/DB，防止一次性刷新票被消费但新票丢失。
+- Miora 独立账号限速默认起点间隔 5 秒、在途 1、60 秒窗口 3 次，均可热更。窗口次数与并发独立，上游 429 使用账号 SOFT 冷却并保留 Retry-After，不重放已提交媒体或推理。
+- API Key `credential_ids` 空数组表示全池，非空限定账号集合；schema 40 幂等迁移 JSON 列。目录、直连、回退和媒体均重新校验集合、渠道、Key/用户模型白名单；集合内在途优先与轮询，绑定坏数据拒绝鉴权，删除账号不会扩大权限。
+- Film Studio 动态账号媒体目录与 ACP 文本目录合并，新增 `gateway_endpoints` 和 `output_modalities` 元数据。仅生图/视频 ID 不进入对话选择或推理探活；图像理解、3D 等官网能力说明与可调用端点分开标示。
+- 标准 `/v1/images/generations` 与异步 `/v1/videos` 使用现有 Key/用户准入和账号护栏。任务与文件私有持久化，视频后续查询仅恢复同一任务；下载固定官方 HTTPS CDN、禁止重定向、限制总字节，不携带上游令牌。HMAC 短期资源地址绑定任务，获取时复核 Key/用户权限。
+- Miora 对话自动媒体在现有账号节流租约内执行，复核日限额、动态账号目录和实时权限，保留客户端函数。Responses `image_generation` 声明只提供工具，显式 tool_choice 才强制生成；返回文本资源链接。生成提交不重试，未获真实 token/credit 用量时保留未知值。
+- 程序不再种入 Zen/Kilo 默认账号；手工添加和删除重启保持用户选择。添加凭证流程整合登录链接补丁的复制、刷新、回调确认与串行轮询；请求明细排在压缩收益前。
+- schema 41 增加 `api_keys.key_enc`：新 Key 加密保存，重新查看要求本人有效会话、CSRF、当前密码、并发验证限制与会话 epoch 复核；响应 no-store，审计无秘密。旧摘要不可逆，不自动轮换现有 Key。
+- schema 42 增加正式渠道分组/成员表和 `api_keys.group_ids` 幂等列；组身份稳定、同渠道成员、版本冲突 409。按组与按账号互斥，动态 union 在每个 Key 请求解析，空集合/缺组拒绝不扩池。辅助 search/fetch 同样收窄；轮换记录按鉴权 Key/CID 分开且 LRU 有界，健康/冷却/在途共享。
+- 小内存部署：全响应生命周期的活跃和输入预算、读体前 FIFO 队列、有界等待；媒体按块 Base64、共享 IO 名额、拒绝 CDN 压缩流；ASGI 头部/正文取消均保证释放工作和额度。大 ACP 缓冲收紧，热账号目录128、闲置限流缓存清理；日志200待投递、一次唤醒、线性敏感标识符扫描，保持完整脱敏和持久写入。
+- 主机更新构建改为固定 digest 的专属 docker-container BuildKit，核实256MiB/512MiB总量/CPU25%，禁止退回不受限构建。构建器结束停止保留缓存，主机Docker配置放在受保护state目录，避免ProtectHome下初始化失败。
+- `/v1/user/balance` 仅汇总 Principal 的当前渠道和账号范围，分组动态解析同样生效，不泄露其他账号额度。
+- 媒体模型的目录参数校验错误在生成 POST 前返回 400 并清除未提交意图；已发送 POST 的失败仍持久保留，不自动重放。
+- 更新回滚先校验旧备份；仅在字面量 APP_SECRET 一致、同 CID/provider、票据密文变化且已知有效时间单调更新时事务保留四项登录列。坏库、缺列、密钥不符或回填失败记录受控警告并恢复旧库，不保留新 Key/分组/schema，不修改原备份。
 
 > 结论：九个上游厂商、十个渠道（CodeBuddy 国内 / 国际、TRAE SOLO、OpenCode Zen、Kilo、Qoder、CodeArts、OfficeAce、小浣熊、灵犀）统一为一条 OpenAI 兼容出口，公共凭证池 + 统一模型名 + 自动调度 + 按人用量统计；实现见 [TECHNICAL.md](TECHNICAL.md)，使用与部署见 [README.md](README.md)。
 
@@ -162,3 +176,14 @@ Provider 只管上游私有部分（发请求、解析事件、分类错误、�
 - **告警「多 IP 同 Key」**：不存 IP，故该规则未实现。
 - **CodeArts 签到之外的活动操作**：未接入。
 - **上游状态聚合**：只做解释不做决策，不进选号 / 熔断（不是缺陷，是边界）。
+
+## 系统更新事务
+
+管理台「更新系统」经管理员/CSRF 端点调用独立 root 主机助手的固定动作。
+合法 GitHub owner/repo 的 main 完整提交 SHA 为更新目标；版本与 commit 共同显示，
+同版本不同提交可检测。ci.yml 最新运行全部成功且 backend/frontend/compose/security/platform
+均成功才允许构建与切换，force 只允许覆盖已备份的本地源码，不绕 CI。
+旧服务在构建期间运行，切换前排空并备份校验源码、完整 data、SQLite、密钥和部署配置。
+切换失败恢复旧镜像、代码、数据库、权限与配置并验证 healthy；主机持久化进度、锁与重启恢复。
+APP_SECRET、账号、API Key 与 Tunnel 配置保留，应用不持有 Docker socket。
+接口与安装细节见 [scripts/SYSTEM_UPDATE.md](scripts/SYSTEM_UPDATE.md)。

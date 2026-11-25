@@ -50,6 +50,7 @@ PROBE_TIMEOUT_SECONDS = 60.0
 
 # 判定为「模型本身不可用」的错误分类：其余一律 inconclusive。
 _FAILURE_KINDS = frozenset({ErrKind.BLOCKED, ErrKind.INVALID})
+NO_CHAT_PROBE = "该模型未提供聊天接口，无法进行文本探活"
 
 
 def probe_payload() -> dict[str, Any]:
@@ -66,7 +67,7 @@ class ModelProbeTask:
 
     def __init__(self, credentials, providers: dict, probes, *,
                  pacer=None, timeout: float = PROBE_TIMEOUT_SECONDS,
-                 upstream_model=None) -> None:
+                 upstream_model=None, model_list_cache: dict | None = None) -> None:
         self._credentials = credentials
         self._providers = providers
         self._probes = probes
@@ -75,6 +76,7 @@ class ModelProbeTask:
         # (渠道, 归一名) → 上游原始名。负缓存里存的通常已是上游名，映射交给
         # 调用方（None = 原样传），避免 tasks 层硬编码命名规则。
         self._upstream_model = upstream_model
+        self._model_list_cache = model_list_cache
 
     async def run_once(self) -> TaskReport:
         report = TaskReport()
@@ -87,6 +89,10 @@ class ModelProbeTask:
                 # 是模型级的，清的时候也按渠道整片清。
                 continue
             seen.add(key)
+            if not self._chat_probe_allowed(*key):
+                # 不能把 ping 发到生成接口：周期探活不消耗媒体额度，也不误判 failed。
+                report.skipped += 1
+                continue
             provider = self._providers.get(row["provider"])
             data = self._probe_data(row["provider"])
             if provider is None or data is None:
@@ -134,6 +140,10 @@ class ModelProbeTask:
         与周期探活同一套判定，唯一差别是不看人工接管标记——按钮就是人来点的，
         再拦一次只会让按钮点了没反应。成功同样清负缓存。
         """
+        if not self._chat_probe_allowed(provider_id, model):
+            self._probes.record(provider=provider_id, model=model,
+                                state="inconclusive", error=NO_CHAT_PROBE)
+            return "inconclusive", NO_CHAT_PROBE
         provider = self._providers.get(provider_id)
         data = self._probe_data(provider_id)
         if provider is None or data is None:
@@ -150,16 +160,27 @@ class ModelProbeTask:
             return model
         return self._upstream_model(provider, model)
 
+    def _chat_probe_allowed(self, provider: str, model: str) -> bool:
+        if self._model_list_cache is None:
+            return True
+        table = self._model_list_cache.get(provider, {})
+        entry = table.get(model.lower()) or table.get(self._model_name(provider, model).lower())
+        return (entry is None or entry.gateway_endpoints is None
+                or "/v1/chat/completions" in entry.gateway_endpoints)
+
     def _probe_data(self, provider: str) -> dict[str, Any] | None:
-        """取一个凭证的明文：优先 selectable，全部不可选时退回任意一条。
+        """取启用且未硬禁用的凭证；冷却期间仍可确认模型是否恢复。
 
         退回是必要的：负缓存常在凭证冷却期间产生，此时所有号都不可选，而探活
-        恰恰应该趁「服务空窗」先确认模型回来了没有。凭证本身失效只会得到
-        inconclusive，不会误判模型。
+        恰恰应该趁「服务空窗」先确认模型回来了没有。用户暂停或已知登录失效
+        的账号不参与真实推理，不能借兜底路径绕过启停状态。
         """
         for candidates in (self._credentials.candidates([provider], selectable_only=True),
                            self._credentials.candidates([provider])):
             for candidate in candidates:
+                # 探活是真实推理；冷却可重试，用户软暂停和登录硬禁用仍须尊重。
+                if candidate.disabled or not candidate.enabled:
+                    continue
                 # 解不开（APP_SECRET 换过 / 密文损坏）→ 跳过这条凭证：
                 # 一条坏凭证不该让整个探活任务失败。
                 try:

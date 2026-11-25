@@ -134,10 +134,16 @@ export interface ApiKey {
   name: string;
   /** 脱敏预览，形如 sk-…Ab3d */
   preview: string;
+  /** 是否保存了可解密的 Key；旧部署缺省此字段，允许尝试验证后查看。 */
+  can_reveal?: boolean;
   created_at: number;
   last_used_at: number | null;
   /** 绑定的渠道（见 KNOWN_PROVIDERS 七渠道）；空串 = 自动 */
   provider_binding: string;
+  /** 指定参与调度的账号；空数组 = 当前渠道全部账号。旧响应缺省同空数组。 */
+  credential_ids?: string[];
+  /** 稳定分组 ID，成员在每次请求时动态解析；与 credential_ids 非空互斥。 */
+  group_ids?: string[];
   /** 来源 IP 白名单（规范化后的 IP/CIDR 逗号分隔）；空串 = 不限制 */
   allowed_ips: string;
   /** 模型白名单（fnmatch glob，逗号分隔）；空串 = 不限制 */
@@ -146,9 +152,25 @@ export interface ApiKey {
   expires_at: number | null;
 }
 
-/** 创建成功时才有明文（只返回一次） */
+/** 创建响应包含明文；之后查看需单独验证当前登录密码。 */
 export interface ApiKeyCreated extends ApiKey {
   api_key: string;
+}
+
+export interface CredentialGroup {
+  id: string;
+  provider: Provider;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  member_count: number;
+  /** 仅 operator/admin 响应提供成员 ID。 */
+  credential_ids?: string[];
+}
+
+export interface CredentialGroupsResponse {
+  groups: CredentialGroup[];
+  is_operator: boolean;
 }
 
 export interface StatsOverview {
@@ -731,10 +753,15 @@ export interface ModelInfo {
   supports_images?: boolean;
   supports_tool_call?: boolean;
   supports_reasoning?: boolean;
+  /** 此模型已接出的调用端点；缺省沿用旧文本目录语义。 */
+  gateway_endpoints?: string[];
+  /** 实际生成模态，如 text/image/video，与图像输入能力分开。 */
+  output_modalities?: string[];
   /** 上游为该模型配置的默认推理档位（字符串，如 `high` / `medium`；无则为空串/缺失） */
   default_effort?: string;
   /** 多渠道模型才有：按渠道给出倍率与**该渠道实际请求的 key**（raw key 永不改动） */
-  by_provider?: Record<string, { credit_rate?: number; raw_id?: string }>;
+  by_provider?: Record<string, { credit_rate?: number; raw_id?: string;
+    gateway_endpoints?: string[]; output_modalities?: string[] }>;
   /** 能力分（Artificial Analysis 指数）：匹配不到该模型的第三方成绩时整个字段缺失 */
   benchmarks?: ModelBenchmarks;
 }

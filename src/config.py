@@ -10,7 +10,7 @@ from functools import cached_property
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 只借用受信反代的**解析口径**（见 trusted_proxies_problem 的复用说明）。
@@ -107,6 +107,21 @@ class Settings(BaseSettings):
     # 是否暴露 /docs 与 /openapi.json：默认关闭（匿名可拉全量 API 结构）。
     # 本地调试需要 Swagger 时置 true
     enable_docs: bool = False
+    # 受保护的主机更新助手；默认未安装，应用不获得 Docker socket 权限。
+    update_socket_path: str = ""
+    update_secret_file: str = ""
+    media_enabled: bool = True
+    media_max_bytes: int = Field(default=64 * 1024 * 1024, ge=1024, le=64 * 1024 * 1024)
+    media_timeout_seconds: float = Field(default=300, ge=1, le=1800)
+    media_signed_url_seconds: int = Field(default=3600, ge=1, le=86400)
+    media_poll_seconds: float = Field(default=2, ge=1, le=60)
+    media_io_concurrency: int = Field(default=2, ge=1, le=8)
+    miora_auto_media_enabled: bool = True
+    # 库默认保持原并发；Docker/小内存部署使用 4 活跃、16 MiB 输入缓冲配置。
+    resource_max_active_requests: int = Field(default=0, ge=0, le=64)
+    resource_max_queued_requests: int = Field(default=32, ge=0, le=256)
+    resource_queue_timeout_seconds: float = Field(default=60, ge=0, le=300)
+    resource_input_budget_mb: int = Field(default=0, ge=0, le=512)
     # 是否采信 X-Forwarded-For 判定来源 IP（API Key 的 allowed_ips 白名单用）。
     # 默认 false：XFF 由客户端可写，直连部署下信它等于白名单形同虚设。
     # 仅在「本服务前面恰好一层受信反代」时开启，届时取 XFF 最后一个条目。
@@ -397,9 +412,11 @@ class Settings(BaseSettings):
     # WPS 灵犀聊天最小间隔：真实账号渠道，上游按 run 计费且并发未取证，默认 0；
     # 需要给同一账号限速时调大（run 缓存与单飞已把重复计费压在客户端）。
     lingxi_chat_min_interval: float = 0
-    # Miora 每账号独立节流；免费账号默认单并发，多个账号之间可以并行。
-    miora_chat_min_interval: float = 0
+    # Miora 保守的本地限速默认值；不代表上游公开的硬门槛。各账号互不排队。
+    miora_chat_min_interval: float = 5
     miora_max_concurrency: int = 1
+    miora_request_window_seconds: float = 60
+    miora_max_requests_per_window: int = 3
     # 小浣熊每账号并发上限：实测 5 并发放行、第 6 个 429。取 2 留余量，避免
     # 与用户其它客户端抢同一账号的并发额度。0 关闭上限。
     raccoon_max_concurrency: int = 2

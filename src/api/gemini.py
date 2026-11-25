@@ -72,7 +72,9 @@ def create_router(services: Services) -> APIRouter:
         from .models import serve_models
 
         payload = await serve_models(services, principal.allowed_models, request,
-                                     user_allowed_models=principal.user_allowed_models)
+                                     user_allowed_models=principal.user_allowed_models,
+                                     credential_ids=principal.credential_ids,
+                                     provider_binding=principal.provider_binding)
         return {
             "models": [
                 {
@@ -83,6 +85,8 @@ def create_router(services: Services) -> APIRouter:
                         "generateContent", "streamGenerateContent", "countTokens"],
                 }
                 for item in payload.get("data", [])
+                if item.get("gateway_endpoints") is None
+                or "/v1/chat/completions" in item["gateway_endpoints"]
             ]
         }
 

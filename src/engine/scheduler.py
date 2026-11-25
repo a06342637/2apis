@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import OrderedDict
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -15,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from ..config import live
 from ..provider.base import MODEL_SCOPED_KINDS, NO_PENALTY_KINDS, ErrKind
+from ..request_context import get_api_key_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,7 @@ RESTRICTED_COOLDOWN_SECONDS = 2 * 3600
 RESTRICTED_COOLDOWN_MAX_SECONDS = 7 * 86400
 ERR_THRESHOLD = 3
 MAX_ROTATE = 3
+MAX_ROUND_ROBIN_RECORDS = 4096
 
 # 冷却来源属于「上游点名恢复时刻」的分类：人工 `revive` **保留**这些冷却
 # （清掉只会立刻再撞一次上游），要强制清除须显式 `force=True`。
@@ -322,6 +325,8 @@ class Scheduler:
         # (provider, model) → (首中时刻, 已命中的凭证集合)。只在 CONCURRENCY
         # 命中时写，见 `_concurrency_burst`。
         self._concurrency_bursts: dict[tuple[str, str], tuple[int, set[str]]] = {}
+        self._round_robin_tick = 0
+        self._round_robin_last: OrderedDict[tuple[str, str], int] = OrderedDict()
 
     @property
     def expiry_window(self) -> int:
@@ -336,7 +341,8 @@ class Scheduler:
     # ---------------------------------------------------------------- 选号
 
     def select(self, candidates: Iterable[Candidate], tried: set[str],
-               now: int) -> str | None:
+               now: int, *, round_robin: bool = False,
+               round_robin_key: str | None = None) -> str | None:
         """返回应使用的 credential_id；无可用的返回 None。
 
         排序规则：**免费优先**（候选中存在 x0 免费渠道时，免费渠道整体排前；
@@ -378,6 +384,23 @@ class Scheduler:
         ]
         if not pool:
             return None
+        if round_robin:
+            # 可信鉴权Key身份隔离轮换位置；跨Key仍共用候选的健康/冷却/在途。
+            key_id = (get_api_key_id() or "") if round_robin_key is None else round_robin_key
+            # 指定账号集合保留健康分档，再按在途数和最久未选轮询，顺序请求也分担。
+            selected = min(pool, key=lambda candidate: (
+                (2 if (candidate.health is not None and candidate.health <= 0)
+                 or (candidate.quota_remaining is not None and candidate.quota_remaining <= 0)
+                 else _rank(candidate.health)), candidate.inflight,
+                self._round_robin_last.get((key_id, candidate.credential_id), 0),
+                candidate.credential_id))
+            self._round_robin_tick += 1
+            record = (key_id, selected.credential_id)
+            self._round_robin_last.pop(record, None)
+            self._round_robin_last[record] = self._round_robin_tick
+            while len(self._round_robin_last) > MAX_ROUND_ROBIN_RECORDS:
+                self._round_robin_last.popitem(last=False)
+            return selected.credential_id
         pinned = [c for c in pool if c.pinned]
         free_present = any(c.credit_rate == 0 for c in pool)
         primary, secondary = expiry_windows(

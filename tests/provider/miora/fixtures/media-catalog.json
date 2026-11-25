@@ -1,0 +1,2983 @@
+{
+  "data": [
+    {
+      "modelId": "seedream-image-v5.5",
+      "label": "Seedream 5.5",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "3:4",
+          "4:3",
+          "2:3",
+          "3:2",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "2K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "1.5K",
+          "2K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsBackground": true,
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 10,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "requireSizeForAspectRatio": true,
+        "convertExtraParametersToSize": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "minimax-image-h3",
+      "label": "MiniMax H3 Image",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "16:9",
+          "9:16",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "2K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "watermarkFootnoteValues": {
+          "disable": "no"
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "minimax-image-h3-highspeed",
+      "label": "MiniMax H3 Image Highspeed",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "16:9",
+          "9:16",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "2K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "watermarkFootnoteValues": {
+          "disable": "no"
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gem-3.1",
+      "label": "Nano Banana 2",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "1:4",
+          "1:8",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:1",
+          "4:3",
+          "8:1",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "1K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "512",
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 14,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 60,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "nano-banana-2.1",
+      "label": "Nano Banana 2.1",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "1:4",
+          "4:1",
+          "1:8",
+          "8:1",
+          "3:2",
+          "2:3",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "16:9",
+          "9:16",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "1K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 14,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 65,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gem-3.0",
+      "label": "Nano Banana Pro",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "9:16",
+          "16:9",
+          "21:9",
+          "5:4",
+          "4:5"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "1K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 14,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 65,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "hy-image-3.5-f",
+      "label": "Hy Image3.5 preview",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "9:16",
+          "16:9",
+          "21:9",
+          "8:1",
+          "5:4",
+          "4:5",
+          "4:1",
+          "1:8",
+          "1:4"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "1.5K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "1.5K",
+          "2K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 20,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "watermarkFootnoteValues": {
+          "enable": "",
+          "disable": "0"
+        },
+        "requireSizeForAspectRatio": true,
+        "convertExtraParametersToSize": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "seedream-5.0-pro",
+      "label": "Seedream 5.0 Pro",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "3:2",
+          "2:3",
+          "3:4",
+          "4:3",
+          "16:9",
+          "9:16",
+          "21:9"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "2K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "1.5K",
+          "2K"
+        ],
+        "defaultAspectRatio": "16:9",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 10,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "watermarkFootnoteValues": {
+          "disable": "no"
+        },
+        "requireSizeForAspectRatio": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gpt-image-2.6-flare",
+      "label": "GPT Image 2.6 Flare",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "variants": [
+          {
+            "tags": [
+              "低成本",
+              "快速",
+              "草稿迭代"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Flare Low",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "低成本",
+                  "快速",
+                  "草稿迭代"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Flare Low",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "低",
+                "description": "最快低成本档，适合提示词迭代和草稿生成"
+              }
+            },
+            "modelId": "gpt-image-2.6-flare-low",
+            "priceTier": "expensive",
+            "shortLabel": "Low",
+            "variantKey": "low",
+            "description": "最快低成本档，适合提示词迭代和草稿生成",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "速度均衡",
+              "日常创作"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Flare Medium",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "性价比最佳",
+                  "速度均衡",
+                  "日常创作"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Flare Medium",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "中",
+                "description": "快速与质量平衡，适合高频日常创作"
+              }
+            },
+            "modelId": "gpt-image-2.6-flare-medium",
+            "priceTier": "expensive",
+            "shortLabel": "Medium",
+            "variantKey": "medium",
+            "description": "快速与质量平衡，适合高频日常创作",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "高质量",
+              "日常成稿"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Flare High",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "性价比最佳",
+                  "高质量",
+                  "日常成稿"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Flare High",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "高",
+                "description": "在较快速度下提升细节，适合日常成稿"
+              }
+            },
+            "modelId": "gpt-image-2.6-flare-high",
+            "isDefault": true,
+            "priceTier": "expensive",
+            "shortLabel": "High",
+            "variantKey": "high",
+            "description": "在较快速度下提升细节，适合日常成稿",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "细节增强",
+              "专业成稿"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Flare XHigh",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "最高质量",
+                  "细节增强",
+                  "专业成稿"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Flare XHigh",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "超高",
+                "description": "兼顾速度与高精细度，适合专业视觉输出"
+              }
+            },
+            "modelId": "gpt-image-2.6-flare-xhigh",
+            "priceTier": "expensive",
+            "shortLabel": "XHigh",
+            "variantKey": "xhigh",
+            "description": "兼顾速度与高精细度，适合专业视觉输出",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "高成本",
+              "最终成稿"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Flare Max",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "最高质量",
+                  "高成本",
+                  "最终成稿"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Flare Max",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "极高",
+                "description": "Flare 最高质量档，适合关键最终输出"
+              }
+            },
+            "modelId": "gpt-image-2.6-flare-max",
+            "priceTier": "expensive",
+            "shortLabel": "Max",
+            "variantKey": "max",
+            "description": "Flare 最高质量档，适合关键最终输出",
+            "available": true
+          }
+        ],
+        "aspectRatios": [
+          "1:1",
+          "1:2",
+          "2:1",
+          "1:3",
+          "3:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "gifDefaultSize": "auto",
+        "gifSizePresets": [
+          {
+            "size": "auto",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "288x288",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "384x384",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "512x288",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "288x512",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "512x512",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "768x768",
+            "maxFrames": 9,
+            "minFrames": 2
+          },
+          {
+            "size": "896x896",
+            "maxFrames": 9,
+            "minFrames": 2
+          }
+        ],
+        "sizeConstraint": {
+          "maxEdge": 3840,
+          "maxPixels": 8294400,
+          "minPixels": 655360,
+          "pixelMultiple": 16,
+          "maxAspectRatio": 3
+        },
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultVariantId": "gpt-image-2.6-flare-high",
+        "variantDimension": "quality",
+        "defaultResolution": "2K",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "allowedOutputFormats": [
+          "png",
+          "gif",
+          "svg"
+        ],
+        "gifDefaultFrameCount": 9,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 0
+        },
+        "gifFrameDurationMsRange": {
+          "max": 2000,
+          "min": 20
+        },
+        "supportsReferenceImages": true,
+        "editAllowedOutputFormats": [
+          "png",
+          "gif"
+        ],
+        "gifDefaultFrameDurationMs": 200,
+        "requireSizeForAspectRatio": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gpt-image-2.6-sunburst",
+      "label": "GPT Image 2.6 Sunburst",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "variants": [
+          {
+            "tags": [
+              "低成本",
+              "快速",
+              "草稿迭代"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Sunburst Low",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "低成本",
+                  "快速",
+                  "草稿迭代"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Sunburst Low",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "低",
+                "description": "高能力模型的快速档，适合草稿与概念探索"
+              }
+            },
+            "modelId": "gpt-image-2.6-sunburst-low",
+            "priceTier": "expensive",
+            "shortLabel": "Low",
+            "variantKey": "low",
+            "description": "高能力模型的快速档，适合草稿与概念探索",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "速度均衡",
+              "日常创作"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Sunburst Medium",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "性价比最佳",
+                  "速度均衡",
+                  "日常创作"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Sunburst Medium",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "中",
+                "description": "兼顾质量与速度，适合日常视觉创作"
+              }
+            },
+            "modelId": "gpt-image-2.6-sunburst-medium",
+            "priceTier": "expensive",
+            "shortLabel": "Medium",
+            "variantKey": "medium",
+            "description": "兼顾质量与速度，适合日常视觉创作",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "高质量",
+              "精细设计"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Sunburst High",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "性价比最佳",
+                  "高质量",
+                  "精细设计"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Sunburst High",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "高",
+                "description": "增强细节、文字与一致性，适合精细设计"
+              }
+            },
+            "modelId": "gpt-image-2.6-sunburst-high",
+            "isDefault": true,
+            "priceTier": "expensive",
+            "shortLabel": "High",
+            "variantKey": "high",
+            "description": "增强细节、文字与一致性，适合精细设计",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "细节增强",
+              "专业成稿"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Sunburst XHigh",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "最高质量",
+                  "细节增强",
+                  "专业成稿"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Sunburst XHigh",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "超高",
+                "description": "高精度细节与文字表现，适合专业成稿"
+              }
+            },
+            "modelId": "gpt-image-2.6-sunburst-xhigh",
+            "priceTier": "expensive",
+            "shortLabel": "XHigh",
+            "variantKey": "xhigh",
+            "description": "高精度细节与文字表现，适合专业成稿",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "高成本",
+              "最终成稿"
+            ],
+            "badge": "new",
+            "label": "GPT Image 2.6 Sunburst Max",
+            "locales": {
+              "zh-CN": {
+                "icon": "",
+                "tags": [
+                  "最高质量",
+                  "高成本",
+                  "最终成稿"
+                ],
+                "badge": "new",
+                "label": "GPT Image 2.6 Sunburst Max",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "shortLabel": "极高",
+                "description": "Sunburst 最高质量档，适合关键商业成稿与最终输出"
+              }
+            },
+            "modelId": "gpt-image-2.6-sunburst-max",
+            "priceTier": "expensive",
+            "shortLabel": "Max",
+            "variantKey": "max",
+            "description": "Sunburst 最高质量档，适合关键商业成稿与最终输出",
+            "available": true
+          }
+        ],
+        "displayName": "GPT Image 2.6 Sunburst",
+        "aspectRatios": [
+          "1:1",
+          "4:5",
+          "5:4",
+          "3:4",
+          "4:3",
+          "2:3",
+          "3:2",
+          "9:16",
+          "16:9",
+          "9:21",
+          "21:9"
+        ],
+        "gifDefaultSize": "auto",
+        "gifSizePresets": [
+          {
+            "size": "auto",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "288x288",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "384x384",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "512x288",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "288x512",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "512x512",
+            "maxFrames": 16,
+            "minFrames": 2
+          },
+          {
+            "size": "768x768",
+            "maxFrames": 9,
+            "minFrames": 2
+          },
+          {
+            "size": "896x896",
+            "maxFrames": 9,
+            "minFrames": 2
+          }
+        ],
+        "sizeConstraint": {
+          "type": "complex",
+          "maxEdge": 3840,
+          "maxPixels": 8294400,
+          "minPixels": 655360,
+          "pixelMultiple": 16,
+          "maxAspectRatio": 3
+        },
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultVariantId": "gpt-image-2.6-sunburst-high",
+        "variantDimension": "quality",
+        "defaultResolution": "2K",
+        "supportsStreaming": false,
+        "allowedResolutions": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "allowedOutputFormats": [
+          "png",
+          "gif",
+          "svg"
+        ],
+        "gifDefaultFrameCount": 9,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 0
+        },
+        "gifFrameDurationMsRange": {
+          "max": 2000,
+          "min": 20
+        },
+        "supportsReferenceImages": true,
+        "gifDefaultFrameDurationMs": 200,
+        "requireSizeForAspectRatio": true,
+        "convertExtraParametersToSize": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gpt-image-2",
+      "label": "GPT Image 2",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "variants": [
+          {
+            "tags": [
+              "均衡",
+              "快速",
+              "草稿迭代"
+            ],
+            "label": "GPT Image 2 Low",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "均衡",
+                  "快速",
+                  "草稿迭代"
+                ],
+                "badge": "",
+                "label": "GPT Image 2 Low",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "创意理解强，适合低成本概念探索"
+              }
+            },
+            "modelId": "gpt-image-2-low",
+            "priceTier": "expensive",
+            "variantKey": "low",
+            "description": "创意理解强，适合低成本概念探索",
+            "estimatedDurationSeconds": 120,
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "标准成本",
+              "日常创作"
+            ],
+            "label": "GPT Image 2 Medium",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "性价比最佳",
+                  "标准成本",
+                  "日常创作"
+                ],
+                "badge": "",
+                "label": "GPT Image 2 Medium",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "设计文字均衡，适合日常视觉创作"
+              }
+            },
+            "modelId": "gpt-image-2-medium",
+            "priceTier": "expensive",
+            "variantKey": "medium",
+            "description": "设计文字均衡，适合日常视觉创作",
+            "estimatedDurationSeconds": 150,
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "高成本",
+              "最终成稿"
+            ],
+            "label": "GPT Image 2 High",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "最高质量",
+                  "高成本",
+                  "最终成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2 High",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "复杂设计精细，适合专业成品输出"
+              }
+            },
+            "modelId": "gpt-image-2-high",
+            "isDefault": true,
+            "priceTier": "expensive",
+            "variantKey": "high",
+            "description": "复杂设计精细，适合专业成品输出",
+            "estimatedDurationSeconds": 200,
+            "available": true
+          }
+        ],
+        "aspectRatios": [
+          "1:1",
+          "1:2",
+          "2:1",
+          "1:3",
+          "3:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "sizeConstraint": {
+          "maxEdge": 3840,
+          "maxPixels": 8294400,
+          "minPixels": 655360,
+          "pixelMultiple": 16,
+          "maxAspectRatio": 3
+        },
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultVariantId": "gpt-image-2-high",
+        "variantDimension": "quality",
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "720P",
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 1
+        },
+        "supportsReferenceImages": true,
+        "watermarkFootnoteValues": {
+          "disable": "no"
+        },
+        "estimatedDurationSeconds": 150,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gpt-image-2.5-flare",
+      "label": "GPT Image 2.5 Flare",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "variants": [
+          {
+            "tags": [
+              "低成本",
+              "快速",
+              "草稿迭代"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare Low",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "低成本",
+                  "快速",
+                  "草稿迭代"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare Low",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "最快低成本档，适合提示词迭代和草稿生成"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-low",
+            "priceTier": "expensive",
+            "variantKey": "low",
+            "description": "最快低成本档，适合提示词迭代和草稿生成",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "速度均衡",
+              "日常创作"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare Medium",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "性价比最佳",
+                  "速度均衡",
+                  "日常创作"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare Medium",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "快速与质量平衡，适合高频日常创作"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-medium",
+            "priceTier": "expensive",
+            "variantKey": "medium",
+            "description": "快速与质量平衡，适合高频日常创作",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "高质量",
+              "日常成稿"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare High",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "性价比最佳",
+                  "高质量",
+                  "日常成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare High",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "在较快速度下提升细节，适合日常成稿"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-high",
+            "isDefault": true,
+            "priceTier": "expensive",
+            "variantKey": "high",
+            "description": "在较快速度下提升细节，适合日常成稿",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "细节增强",
+              "专业成稿"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare XHigh",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "最高质量",
+                  "细节增强",
+                  "专业成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare XHigh",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "兼顾速度与高精细度，适合专业视觉输出"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-xhigh",
+            "priceTier": "expensive",
+            "variantKey": "xhigh",
+            "description": "兼顾速度与高精细度，适合专业视觉输出",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "高成本",
+              "最终成稿"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare Max",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "最高质量",
+                  "高成本",
+                  "最终成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare Max",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "Flare 最高质量档，适合关键最终输出"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-max",
+            "priceTier": "expensive",
+            "variantKey": "max",
+            "description": "Flare 最高质量档，适合关键最终输出",
+            "available": true
+          },
+          {
+            "tags": [
+              "均衡",
+              "自动",
+              "通用创作"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Flare Auto",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "均衡",
+                  "自动",
+                  "通用创作"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Flare Auto",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "自动匹配质量，适合高频通用创作"
+              }
+            },
+            "modelId": "gpt-image-2.5-flare-auto",
+            "priceTier": "expensive",
+            "variantKey": "auto",
+            "description": "自动匹配质量，适合高频通用创作",
+            "available": true
+          }
+        ],
+        "displayName": "GPT Image 2.5 Flare",
+        "aspectRatios": [
+          "1:1",
+          "1:2",
+          "2:1",
+          "1:3",
+          "3:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "sizeConstraint": {
+          "type": "complex",
+          "maxEdge": 3840,
+          "maxPixels": 8294400,
+          "minPixels": 655360,
+          "pixelMultiple": 16,
+          "maxAspectRatio": 3
+        },
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultVariantId": "gpt-image-2.5-flare-high",
+        "variantDimension": "quality",
+        "defaultResolution": "1K",
+        "supportsStreaming": false,
+        "allowedResolutions": [
+          "720P",
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 0
+        },
+        "supportsReferenceImages": true,
+        "requireSizeForAspectRatio": true,
+        "convertExtraParametersToSize": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "gpt-image-2.5-sunburst",
+      "label": "GPT Image 2.5 Sunburst",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "variants": [
+          {
+            "tags": [
+              "低成本",
+              "快速",
+              "草稿迭代"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst Low",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "低成本",
+                  "快速",
+                  "草稿迭代"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst Low",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "高能力模型的快速档，适合草稿与概念探索"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-low",
+            "priceTier": "expensive",
+            "variantKey": "low",
+            "description": "高能力模型的快速档，适合草稿与概念探索",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "速度均衡",
+              "日常创作"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst Medium",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "性价比最佳",
+                  "速度均衡",
+                  "日常创作"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst Medium",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "兼顾质量与速度，适合日常视觉创作"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-medium",
+            "priceTier": "expensive",
+            "variantKey": "medium",
+            "description": "兼顾质量与速度，适合日常视觉创作",
+            "available": true
+          },
+          {
+            "tags": [
+              "性价比最佳",
+              "高质量",
+              "精细设计"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst High",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "性价比最佳",
+                  "高质量",
+                  "精细设计"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst High",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "增强细节、文字与一致性，适合精细设计"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-high",
+            "isDefault": true,
+            "priceTier": "expensive",
+            "variantKey": "high",
+            "description": "增强细节、文字与一致性，适合精细设计",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "细节增强",
+              "专业成稿"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst XHigh",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "最高质量",
+                  "细节增强",
+                  "专业成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst XHigh",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "高精度细节与文字表现，适合专业成稿"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-xhigh",
+            "priceTier": "expensive",
+            "variantKey": "xhigh",
+            "description": "高精度细节与文字表现，适合专业成稿",
+            "available": true
+          },
+          {
+            "tags": [
+              "最高质量",
+              "高成本",
+              "最终成稿"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst Max",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "最高质量",
+                  "高成本",
+                  "最终成稿"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst Max",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "Sunburst 最高质量档，适合关键商业成稿与最终输出"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-max",
+            "priceTier": "expensive",
+            "variantKey": "max",
+            "description": "Sunburst 最高质量档，适合关键商业成稿与最终输出",
+            "available": true
+          },
+          {
+            "tags": [
+              "均衡",
+              "自动",
+              "通用创作"
+            ],
+            "badge": null,
+            "label": "GPT Image 2.5 Sunburst Auto",
+            "locales": {
+              "zh-CN": {
+                "icon": "model-openai",
+                "tags": [
+                  "均衡",
+                  "自动",
+                  "通用创作"
+                ],
+                "badge": "",
+                "label": "GPT Image 2.5 Sunburst Auto",
+                "oversea": {
+                  "icon": "",
+                  "tags": [],
+                  "badge": "",
+                  "label": "",
+                  "description": ""
+                },
+                "description": "自动匹配质量，适合通用视觉创作"
+              }
+            },
+            "modelId": "gpt-image-2.5-sunburst-auto",
+            "priceTier": "expensive",
+            "variantKey": "auto",
+            "description": "自动匹配质量，适合通用视觉创作",
+            "available": true
+          }
+        ],
+        "displayName": "GPT Image 2.5 Sunburst",
+        "aspectRatios": [
+          "1:1",
+          "1:2",
+          "2:1",
+          "1:3",
+          "3:1",
+          "2:3",
+          "3:2",
+          "3:4",
+          "4:3",
+          "4:5",
+          "5:4",
+          "9:16",
+          "16:9",
+          "21:9"
+        ],
+        "sizeConstraint": {
+          "type": "complex",
+          "maxEdge": 3840,
+          "maxPixels": 8294400,
+          "minPixels": 655360,
+          "pixelMultiple": 16,
+          "maxAspectRatio": 3
+        },
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultVariantId": "gpt-image-2.5-sunburst-high",
+        "variantDimension": "quality",
+        "defaultResolution": "1K",
+        "supportsStreaming": false,
+        "allowedResolutions": [
+          "720P",
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "defaultAspectRatio": "1:1",
+        "supportsAsyncSubmit": false,
+        "referenceImagesRange": {
+          "max": 16,
+          "min": 0
+        },
+        "supportsReferenceImages": true,
+        "requireSizeForAspectRatio": true,
+        "convertExtraParametersToSize": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "midjourney-v7",
+      "label": "Midjourney v7",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "2:3",
+          "4:3",
+          "16:9",
+          "9:16"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "720P",
+        "promptLengthLimit": 800,
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "720P"
+        ],
+        "defaultAspectRatio": "1:1",
+        "referenceImagesRange": {
+          "max": 1,
+          "min": 0
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 70,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "midjourney-v8.1",
+      "label": "Midjourney v8.1",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "2:3",
+          "4:3",
+          "16:9",
+          "9:16"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "720P"
+        ],
+        "defaultAspectRatio": "1:1",
+        "referenceImagesRange": {
+          "max": 4,
+          "min": 0
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 70,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "midjourney-v8.2",
+      "label": "Midjourney v8.2",
+      "contentType": "image",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "aspectRatios": [
+          "1:1",
+          "2:3",
+          "4:3",
+          "16:9",
+          "9:16"
+        ],
+        "supportedTools": [
+          "text_to_image",
+          "edit_image"
+        ],
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "allowedResolutions": [
+          "720P"
+        ],
+        "defaultAspectRatio": "1:1",
+        "referenceImagesRange": {
+          "max": 4,
+          "min": 0
+        },
+        "supportsReferenceImages": true,
+        "estimatedDurationSeconds": 70,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "tripo-3d-3.1",
+      "label": "Tripo 3.1（高精度模型）",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal",
+          "Geometry"
+        ],
+        "supportsPbr": true,
+        "faceCountRange": {
+          "max": 2000000,
+          "min": 50
+        },
+        "resultFormats": [
+          "GLB",
+          "FBX"
+        ],
+        "supportedViews": [
+          "front",
+          "back",
+          "left",
+          "right"
+        ],
+        "polygonTypes": [
+          "triangle",
+          "quadrilateral"
+        ],
+        "defaultTexture": true,
+        "faceCountLevels": {
+          "low": {
+            "max": 100000,
+            "min": 10000
+          },
+          "high": {
+            "max": 1500000,
+            "min": 500000
+          },
+          "medium": {
+            "max": 500000,
+            "min": 100000
+          }
+        },
+        "defaultEnablePbr": true,
+        "polygonTypeModes": [
+          "Normal",
+          "LowPoly",
+          "Geometry",
+          "Sketch"
+        ],
+        "textureQualities": [
+          "standard",
+          "detailed",
+          "extreme"
+        ],
+        "geometryQualities": [
+          "standard",
+          "detailed"
+        ],
+        "defaultPolygonType": "triangle",
+        "faceCountSubmitMin": 500,
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "GLB",
+        "supportsGenerateType": false,
+        "supportsResultFormat": false,
+        "defaultFaceCountLevel": "high",
+        "defaultTextureQuality": "standard",
+        "defaultGeometryQuality": "standard",
+        "additionalBooleanParams": [
+          "texture",
+          "generateParts"
+        ],
+        "allowPromptImageCoexist": true,
+        "faceCountRangeOverrides": [
+          {
+            "id": "quad-cap",
+            "when": {
+              "polygonType": "quadrilateral"
+            },
+            "range": {
+              "max": 150000,
+              "min": 500
+            },
+            "levels": {
+              "low": {
+                "max": 50000,
+                "min": 10000
+              },
+              "high": {
+                "max": 150000,
+                "min": 100000
+              },
+              "medium": {
+                "max": 100000,
+                "min": 50000
+              }
+            }
+          },
+          {
+            "id": "tri-standard",
+            "when": {
+              "polygonType": "triangle",
+              "geometryQuality": "standard"
+            },
+            "range": {
+              "max": 1500000,
+              "min": 500
+            },
+            "levels": {
+              "low": {
+                "max": 100000,
+                "min": 10000
+              },
+              "high": {
+                "max": 1500000,
+                "min": 500000
+              },
+              "medium": {
+                "max": 500000,
+                "min": 100000
+              }
+            }
+          },
+          {
+            "id": "tri-detailed",
+            "when": {
+              "polygonType": "triangle",
+              "geometryQuality": "detailed"
+            },
+            "range": {
+              "max": 2000000,
+              "min": 500
+            },
+            "levels": {
+              "low": {
+                "max": 100000,
+                "min": 10000
+              },
+              "high": {
+                "max": 2000000,
+                "min": 500000
+              },
+              "medium": {
+                "max": 500000,
+                "min": 100000
+              }
+            }
+          }
+        ],
+        "estimatedDurationSeconds": 300,
+        "multiViewGeometryPbrOnly": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "tripo-3d-p1",
+      "label": "Tripo P1（智能网格）",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal",
+          "Geometry"
+        ],
+        "supportsPbr": true,
+        "faceCountRange": {
+          "max": 20000,
+          "min": 500
+        },
+        "resultFormats": [
+          "GLB",
+          "FBX"
+        ],
+        "supportedViews": [
+          "front",
+          "back",
+          "left",
+          "right"
+        ],
+        "polygonTypes": [
+          "triangle"
+        ],
+        "defaultTexture": true,
+        "faceCountLevels": {
+          "low": {
+            "max": 5000,
+            "min": 500
+          },
+          "high": {
+            "max": 20000,
+            "min": 15000
+          },
+          "medium": {
+            "max": 15000,
+            "min": 5000
+          }
+        },
+        "defaultEnablePbr": true,
+        "polygonTypeModes": [],
+        "textureQualities": [
+          "standard",
+          "detailed",
+          "extreme"
+        ],
+        "textureAlignments": [
+          "original_image"
+        ],
+        "defaultPolygonType": "triangle",
+        "faceCountSubmitMin": 500,
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "GLB",
+        "additionalSeedParams": [
+          "imageSeed"
+        ],
+        "supportsGenerateType": false,
+        "supportsResultFormat": false,
+        "defaultFaceCountLevel": "high",
+        "defaultTextureQuality": "standard",
+        "additionalBooleanParams": [
+          "texture"
+        ],
+        "allowPromptImageCoexist": true,
+        "defaultTextureAlignment": "original_image",
+        "estimatedDurationSeconds": 180,
+        "multiViewGeometryPbrOnly": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "miora-3d",
+      "label": "Miora 3D (beta)",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal",
+          "Geometry"
+        ],
+        "supportsPbr": true,
+        "faceCountRange": {
+          "max": 1500000,
+          "min": 3000
+        },
+        "resultFormats": [
+          "GLB",
+          "OBJ"
+        ],
+        "supportedViews": [
+          "left",
+          "right",
+          "back"
+        ],
+        "imageOnly": true,
+        "polygonTypes": [
+          "triangle"
+        ],
+        "defaultTexture": true,
+        "faceCountLevels": {
+          "low": {
+            "max": 5000,
+            "min": 3000
+          },
+          "high": {
+            "max": 1500000,
+            "min": 1500000
+          },
+          "medium": {
+            "max": 150000,
+            "min": 50000
+          }
+        },
+        "defaultEnablePbr": false,
+        "polygonTypeModes": [],
+        "defaultPolygonType": "triangle",
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "GLB",
+        "defaultFaceCountLevel": "high",
+        "allowPromptImageCoexist": true,
+        "estimatedDurationSeconds": 120,
+        "supportsResultFormat": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "hunyuan-3d-pro-3.1",
+      "label": "H3D 3.1",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal",
+          "Geometry"
+        ],
+        "supportsPbr": true,
+        "faceCountRange": {
+          "max": 1500000,
+          "min": 3000
+        },
+        "resultFormats": [
+          "STL",
+          "USDZ",
+          "FBX"
+        ],
+        "supportedViews": [
+          "left",
+          "right",
+          "back",
+          "top",
+          "bottom",
+          "left_front",
+          "right_front"
+        ],
+        "polygonTypes": [
+          "triangle",
+          "quadrilateral"
+        ],
+        "defaultTexture": true,
+        "faceCountLevels": {
+          "low": {
+            "max": 100000,
+            "min": 40000
+          },
+          "high": {
+            "max": 1500000,
+            "min": 500000
+          },
+          "medium": {
+            "max": 500000,
+            "min": 100000
+          }
+        },
+        "defaultEnablePbr": false,
+        "polygonTypeModes": [],
+        "defaultPolygonType": "triangle",
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "STL",
+        "supportsResultFormat": false,
+        "defaultFaceCountLevel": "high",
+        "estimatedDurationSeconds": 300,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "hunyuan-3d-pro-3.0",
+      "label": "H3D 3.0",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal",
+          "LowPoly",
+          "Geometry"
+        ],
+        "supportsPbr": true,
+        "faceCountRange": {
+          "max": 1500000,
+          "min": 3000
+        },
+        "resultFormats": [
+          "STL",
+          "USDZ",
+          "FBX"
+        ],
+        "supportedViews": [
+          "left",
+          "right",
+          "bottom"
+        ],
+        "polygonTypes": [
+          "triangle",
+          "quadrilateral"
+        ],
+        "defaultTexture": true,
+        "faceCountLevels": {
+          "low": {
+            "max": 50000,
+            "min": 40000
+          },
+          "high": {
+            "max": 1000000,
+            "min": 300000
+          },
+          "medium": {
+            "max": 300000,
+            "min": 50000
+          }
+        },
+        "defaultEnablePbr": false,
+        "polygonTypeModes": [],
+        "defaultPolygonType": "triangle",
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "STL",
+        "defaultFaceCountLevel": "high",
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "hunyuan-3d-rigging",
+      "label": "3D Auto Rigging",
+      "contentType": "three_d",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "generateTypes": [
+          "Normal"
+        ],
+        "supportsPbr": false,
+        "faceCountRange": {
+          "max": 500000,
+          "min": 3000
+        },
+        "resultFormats": [
+          "FBX"
+        ],
+        "supportedViews": [],
+        "imageOnly": false,
+        "description": "Automatic rigging and skinning for an existing GLB / FBX model; outputs a rigged FBX with optional preset motion.",
+        "displayName": "3D Auto Rigging",
+        "polygonTypes": [],
+        "supportsPrompt": false,
+        "supportsRigging": true,
+        "polygonTypeModes": [],
+        "riggingFileTypes": [
+          "GLB",
+          "FBX"
+        ],
+        "promptLengthLimit": 0,
+        "defaultGenerateType": "Normal",
+        "defaultResultFormat": "FBX",
+        "riggingGenerateTypes": [
+          "Normal"
+        ],
+        "riggingMotionTypeMax": 48,
+        "supportsGenerateType": false,
+        "supportsResultFormat": false,
+        "additionalParameterKeys": [],
+        "allowPromptImageCoexist": false,
+        "estimatedDurationSeconds": 120,
+        "multiViewGeometryPbrOnly": false,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "minimax-h3-max",
+      "label": "MiniMax H3 Max",
+      "contentType": "video",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "480P",
+          "768P"
+        ],
+        "aspectRatios": [
+          "adaptive",
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16"
+        ],
+        "secondsRange": {
+          "max": 15,
+          "min": 5
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "768P",
+        "promptLengthLimit": 7000,
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 9,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 180,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceAudioTotalDuration": 15,
+        "referenceVideoTotalDuration": 15,
+        "supportsAspectRatioWithFrames": true,
+        "referenceAudioSingleDurationRange": {
+          "max": 15,
+          "min": 2
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 15,
+          "min": 2
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "minimax-h3",
+      "label": "MiniMax H3",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "768P",
+          "2K"
+        ],
+        "aspectRatios": [
+          "adaptive",
+          "21:9",
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16"
+        ],
+        "secondsRange": {
+          "max": 15,
+          "min": 4
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "768P",
+        "promptLengthLimit": 7000,
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 9,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 500,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceAudioTotalDuration": 16,
+        "referenceVideoTotalDuration": 16,
+        "supportsAspectRatioWithFrames": true,
+        "referenceAudioSingleDurationRange": {
+          "max": 16,
+          "min": 1
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 16,
+          "min": 2
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "seedance-2.5",
+      "label": "Seedance 2.5",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "480P",
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "16:9",
+          "9:16",
+          "4:3",
+          "3:4",
+          "1:1",
+          "21:9",
+          "adaptive"
+        ],
+        "secondsRange": {
+          "min": 4,
+          "max": 5
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 10,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 30,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 10,
+          "min": 1
+        },
+        "supportsAudioControl": true,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 300,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": true,
+        "referenceAudioTotalDuration": 30,
+        "referenceVideoTotalDuration": 30,
+        "supportsAspectRatioWithFrames": false,
+        "referenceAudioSingleDurationRange": {
+          "max": 30,
+          "min": 2
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 30,
+          "min": 2
+        },
+        "allowedSeconds": [
+          4,
+          5
+        ],
+        "fullDurations": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30
+        ],
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": true
+      }
+    },
+    {
+      "modelId": "kling-video-v4",
+      "label": "Kling 4.0",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "constraints": [
+          {
+            "id": "kling-v4-t2v-no-adaptive",
+            "then": {
+              "aspectRatio": [
+                "21:9",
+                "16:9",
+                "9:16",
+                "1:1"
+              ]
+            },
+            "when": {
+              "taskType": "text_to_video"
+            },
+            "message": "Kling 4.0 text-to-video does not support the adaptive aspect ratio. Use 21:9 / 16:9 / 9:16 / 1:1 instead."
+          }
+        ],
+        "resolutions": [
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "21:9",
+          "16:9",
+          "9:16",
+          "1:1",
+          "adaptive"
+        ],
+        "secondsRange": {
+          "max": 30,
+          "min": 3
+        },
+        "defaultSeconds": 5,
+        "inputFileFormats": {
+          "referenceImage": [
+            "jpg",
+            "jpeg",
+            "png"
+          ],
+          "firstFrameImage": [
+            "jpg",
+            "jpeg",
+            "png"
+          ]
+        },
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "inputImagePreprocess": {
+          "minWidth": 300,
+          "strategy": "reject",
+          "minHeight": 300,
+          "maxSizeBytes": 31457280,
+          "aspectRatioRange": {
+            "max": 2.5,
+            "min": 0.4
+          }
+        },
+        "referenceImagesRange": {
+          "max": 10,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 5,
+          "min": 1
+        },
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": false,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 360,
+        "referenceImagePreprocess": {
+          "minWidth": 300,
+          "strategy": "reject",
+          "minHeight": 300,
+          "maxSizeBytes": 31457280,
+          "aspectRatioRange": {
+            "max": 2.5,
+            "min": 0.4
+          }
+        },
+        "referenceVideoPreprocess": {
+          "fpsRange": {
+            "max": 60,
+            "min": 24
+          },
+          "maxWidth": 4553,
+          "minWidth": 700,
+          "strategy": "reject",
+          "maxHeight": 4553,
+          "minHeight": 700,
+          "maxSizeBytes": 314572800,
+          "aspectRatioRange": {
+            "max": 2.5,
+            "min": 0.4
+          }
+        },
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceVideoTotalDuration": 30,
+        "supportsAspectRatioWithFrames": false,
+        "referenceVideoSingleDurationRange": {
+          "max": 30,
+          "min": 3
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "seedance-2.0-fast",
+      "label": "Seedance 2.0 Fast",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "480P",
+          "720P"
+        ],
+        "aspectRatios": [
+          "4:3",
+          "3:4",
+          "1:1",
+          "21:9",
+          "9:16",
+          "16:9",
+          "adaptive"
+        ],
+        "secondsRange": {
+          "min": 4,
+          "max": 5
+        },
+        "defaultSeconds": 4,
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 9,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "supportsAudioControl": true,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 230,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceAudioTotalDuration": 16,
+        "referenceVideoTotalDuration": 16,
+        "supportsAspectRatioWithFrames": true,
+        "referenceAudioSingleDurationRange": {
+          "max": 16,
+          "min": 2
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 16,
+          "min": 2
+        },
+        "allowedSeconds": [
+          4,
+          5
+        ],
+        "fullDurations": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": true
+      }
+    },
+    {
+      "modelId": "wan-3.0",
+      "label": "万相 3.0",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "480P",
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "adaptive",
+          "16:9",
+          "9:16",
+          "1:1"
+        ],
+        "secondsRange": {
+          "max": 15,
+          "min": 3
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "promptLengthLimit": 2000,
+        "supportsWatermark": false,
+        "defaultAspectRatio": "adaptive",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 5,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 10,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 5,
+          "min": 1
+        },
+        "supportsAudioControl": true,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 300,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceAudioTotalDuration": 15,
+        "referenceVideoTotalDuration": 15,
+        "supportsAspectRatioWithFrames": true,
+        "referenceAudioSingleDurationRange": {
+          "max": 15,
+          "min": 1
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 15,
+          "min": 1
+        },
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "seedance-2.0",
+      "label": "Seedance 2.0",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "480P",
+          "720P",
+          "4K"
+        ],
+        "aspectRatios": [
+          "16:9",
+          "4:3",
+          "3:4",
+          "1:1",
+          "21:9",
+          "9:16",
+          "adaptive"
+        ],
+        "secondsRange": {
+          "min": 4,
+          "max": 5
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "referenceAudiosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "referenceImagesRange": {
+          "max": 9,
+          "min": 1
+        },
+        "referenceVideosRange": {
+          "max": 3,
+          "min": 1
+        },
+        "supportsAudioControl": true,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": true,
+        "supportsReferenceImages": true,
+        "supportsReferenceVideos": true,
+        "estimatedDurationSeconds": 300,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "referenceAudioTotalDuration": 15,
+        "referenceVideoTotalDuration": 15,
+        "supportsAspectRatioWithFrames": true,
+        "referenceAudioSingleDurationRange": {
+          "max": 16,
+          "min": 2
+        },
+        "referenceVideoSingleDurationRange": {
+          "max": 16,
+          "min": 2
+        },
+        "allowedSeconds": [
+          4,
+          5
+        ],
+        "fullDurations": [
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": true
+      }
+    },
+    {
+      "modelId": "kling-3.0-video",
+      "label": "Kling V3",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "720P",
+          "1080P",
+          "4K"
+        ],
+        "aspectRatios": [
+          "1:1",
+          "16:9",
+          "9:16"
+        ],
+        "secondsRange": {
+          "max": 15,
+          "min": 3
+        },
+        "defaultSeconds": 3,
+        "supportsImageUrl": true,
+        "defaultResolution": "1080P",
+        "promptLengthLimit": 2500,
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": false,
+        "supportsReferenceImages": false,
+        "supportsReferenceVideos": false,
+        "estimatedDurationSeconds": 170,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "supportsAspectRatioWithFrames": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "hailuo-2.3-video",
+      "label": "海螺 2.3",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "16:9"
+        ],
+        "allowedSeconds": [
+          6,
+          10
+        ],
+        "defaultSeconds": 6,
+        "supportsImageUrl": true,
+        "defaultResolution": "720P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": false,
+        "supportsReferenceAudios": false,
+        "supportsReferenceImages": false,
+        "supportsReferenceVideos": false,
+        "estimatedDurationSeconds": 160,
+        "supportsAspectRatioParam": true,
+        "allowedSecondsByResolution": {
+          "1080P": [
+            6
+          ]
+        },
+        "referenceVideoFollowsInput": false,
+        "supportsAspectRatioWithFrames": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "vidu-q2-pro-video",
+      "label": "Vidu Q2 Pro",
+      "contentType": "video",
+      "visible": true,
+      "available": true,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "21:9"
+        ],
+        "secondsRange": {
+          "max": 8,
+          "min": 1
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "1080P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "supportsAudioControl": false,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": false,
+        "supportsReferenceImages": false,
+        "supportsReferenceVideos": false,
+        "estimatedDurationSeconds": 150,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "supportsAspectRatioWithFrames": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    },
+    {
+      "modelId": "vidu-q3-pro-video",
+      "label": "Vidu Q3 Pro",
+      "contentType": "video",
+      "visible": true,
+      "available": false,
+      "editOnly": false,
+      "capabilities": {
+        "resolutions": [
+          "720P",
+          "1080P"
+        ],
+        "aspectRatios": [
+          "16:9",
+          "4:3",
+          "1:1",
+          "3:4",
+          "9:16",
+          "21:9"
+        ],
+        "secondsRange": {
+          "max": 16,
+          "min": 1
+        },
+        "defaultSeconds": 5,
+        "supportsImageUrl": true,
+        "defaultResolution": "1080P",
+        "supportsWatermark": false,
+        "defaultAspectRatio": "16:9",
+        "supportsTextToVideo": true,
+        "supportsAudioControl": true,
+        "supportsLastImageUrl": true,
+        "supportsReferenceAudios": false,
+        "supportsReferenceImages": false,
+        "supportsReferenceVideos": false,
+        "estimatedDurationSeconds": 150,
+        "supportsAspectRatioParam": true,
+        "referenceVideoFollowsInput": false,
+        "supportsAspectRatioWithFrames": true,
+        "supportsCharacterAsset": false,
+        "hasDurationTierRestriction": false
+      }
+    }
+  ]
+}

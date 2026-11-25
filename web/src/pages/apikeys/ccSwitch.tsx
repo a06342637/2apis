@@ -1,12 +1,15 @@
-import { useState } from "react";
-import { usePlaygroundModels } from "../../api/hooks";
+import { useEffect, useState } from "react";
+import { api } from "../../api/client";
+import type { ModelInfo } from "../../api/types";
 import { buildSections, displayName, modelValue } from "../../components/ModelPicker";
 import { Button as RawButton } from "../../components/ui/button";
 import { buildCcSwitchLink, CCSWITCH_TARGETS } from "../../lib/ccSwitch";
+import { errorText } from "../../lib/errors";
+import { isChatModel } from "../../lib/modelCapabilities";
 import { Button, Field, Notice, Select } from "../../ui";
 
 /**
- * 默认模型下拉：数据源与 Playground 同源（`/api/playground/models`），
+ * 默认模型下拉：使用实际 Key 读取 `/v1/models`，按它的账号范围与白名单过滤，
  * 按渠道分组（多渠道置顶 + 「仅 XX」），值语义与 Playground 一致
  * （多渠道裸 id 走自动路由、单渠道 `id@provider` 强制指定）。
  */
@@ -15,19 +18,43 @@ function ModelSelect({
   onChange,
   testid,
   id,
+  apiKey,
 }: {
   value: string;
   onChange: (value: string) => void;
   testid: string;
   /** 供外层 `Field` 的 htmlFor 关联（读屏报字段名、点 label 聚焦控件）。 */
   id?: string;
+  apiKey: string;
 }) {
-  const modelsQuery = usePlaygroundModels();
-  const fetched = modelsQuery.data?.data ?? [];
+  // 明文 Key 仅留在弹窗本地 state 与请求头，不写入 React Query 缓存。
+  const [result, setResult] = useState<{ key: string; data: ModelInfo[]; error?: string } | null>(null);
+  useEffect(() => {
+    setResult(null);
+    if (!apiKey.trim()) return;
+    const controller = new AbortController();
+    // 粘贴/输入 Key 时只读取最终值，避免每敲一字就请求上游。
+    const timer = setTimeout(() => {
+      void api.keyModels(apiKey, controller.signal).then((response) => {
+        if (!controller.signal.aborted) setResult({ key: apiKey, data: response.data ?? [] });
+      }).catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setResult({ key: apiKey, data: [], error: errorText(error, "模型列表加载失败") });
+        }
+      });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [apiKey]);
+  const current = result?.key === apiKey ? result : null;
+  const fetched = (current?.data ?? []).filter(item => isChatModel(item));
   const models = fetched.map((item) => ({ ...item, value: modelValue(item) }));
   const sections = buildSections(models);
 
   return (
+    <>
     <Select
       id={id}
       value={value}
@@ -45,6 +72,9 @@ function ModelSelect({
         </optgroup>
       ))}
     </Select>
+    {apiKey.trim() && !current && <p className="mt-1 text-xs text-muted-foreground">正在读取此 Key 可用模型…</p>}
+    {current?.error && <Notice tone="warn">{current.error}；可以留空默认模型后导入。</Notice>}
+    </>
   );
 }
 
@@ -63,7 +93,11 @@ export function CcSwitchImportButtons({
   testidPrefix?: string;
   warning?: string;
 }) {
-  const [model, setModel] = useState("");
+  const [selection, setSelection] = useState({ key: apiKey, model: "" });
+  useEffect(() => {
+    setSelection((previous) => previous.key === apiKey ? previous : { key: apiKey, model: "" });
+  }, [apiKey]);
+  const model = selection.key === apiKey ? selection.model : "";
   const origin = window.location.origin;
   const ready = apiKey.trim() !== "";
 
@@ -76,7 +110,8 @@ export function CcSwitchImportButtons({
       >
         <ModelSelect
           value={model}
-          onChange={setModel}
+          onChange={(model) => setSelection({ key: apiKey, model })}
+          apiKey={apiKey}
           testid={`${testidPrefix}-model`}
           id={`${testidPrefix}-model-select`}
         />

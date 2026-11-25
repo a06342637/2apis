@@ -53,6 +53,25 @@ describe("StatsPage", () => {
     expect(screen.getByTestId("group-table")).toHaveTextContent("TRAE");
   });
 
+  it("请求明细整体位于压缩收益之前", async () => {
+    mockFetch({
+      "/api/stats/overview": OVERVIEW,
+      "/api/stats/by-provider": PROVIDERS,
+      "/api/stats/by-model": MODELS,
+      "/api/stats/by-user": USERS,
+      "/api/stats/by-credential": CREDENTIALS,
+      "/api/stats/model-timeline": MODEL_TIMELINE,
+      "/api/stats/events": EVENTS_PAGE1,
+    });
+    renderPage(<StatsPage />, ADMIN);
+    await settle();
+    const details = screen.getByTestId("events-panel");
+    const compression = screen.getByTestId("compress-panel");
+    expect(details.compareDocumentPosition(compression) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(details).toContainElement(screen.getByTestId("events-table"));
+  });
+
   it("按模型趋势面板与 Top 文案渲染", async () => {
     mockFetch({
       "/api/stats/overview": OVERVIEW,

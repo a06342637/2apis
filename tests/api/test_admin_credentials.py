@@ -735,7 +735,7 @@ def test_zen_api_key_import_replaces_single_slot(admin_client):
             return Quota(probe_failed=True, probed_at=1)
 
     app.state.executor._deps.providers["zen"] = Stub()
-    seeded = app.state.credentials.candidates(["zen"])[0].credential_id
+    seeded = app.state.credentials.add(provider="zen", credential_data={}, added_by="root")
     app.state.credentials.cool_provider("zen", until=int(time.time()) + 3600)
 
     imported = client.post("/api/credentials", json={
@@ -751,10 +751,9 @@ def test_zen_api_key_import_replaces_single_slot(admin_client):
 
 
 def test_zen_anonymous_import_still_adds_when_slot_absent(admin_client):
-    """不带 Key 的导入仍走「补回虚拟凭证」老路（不触发单槽合并）。"""
+    """默认空池中，用户主动添加匿名 Zen 不触发单槽合并。"""
     app, client = admin_client
-    seeded = app.state.credentials.candidates(["zen"])[0].credential_id
-    assert app.state.credentials.delete(seeded)
+    assert app.state.credentials.candidates(["zen"]) == []
 
     created = client.post("/api/credentials", json={
         "provider": "zen", "credential": {}, "nickname": "OpenCode Zen"}).json()
@@ -776,6 +775,7 @@ def test_zen_api_key_import_adds_when_slot_missing(admin_client):
 def test_zen_api_key_import_falls_back_when_merge_fails(admin_client, monkeypatch):
     """单槽合并失败（并发删除）→ 退回新增，不能丢导入的 Key。"""
     app, client = admin_client
+    app.state.credentials.add(provider="zen", credential_data={}, added_by="root")
     monkeypatch.setattr(app.state.credentials, "merge_login_credential",
                         lambda *_args, **_kwargs: False)
 
@@ -816,6 +816,7 @@ def test_zen_import_merges_earliest_row_and_warns_on_duplicates(admin_client, ca
 def test_zen_import_single_slot_does_not_warn(admin_client, caplog):
     """只有一条 zen 时是正常状态：不得刷「检测到多行」的告警。"""
     app, client = admin_client
+    app.state.credentials.add(provider="zen", credential_data={}, added_by="root")
     assert len(app.state.credentials.candidates(["zen"])) == 1
 
     with caplog.at_level("WARNING", logger="src.api.admin_credentials"):
@@ -834,7 +835,7 @@ def test_zen_import_holds_edit_lock_around_merge(admin_client, monkeypatch):
     """
     app, client = admin_client
     credentials = app.state.credentials
-    seeded = credentials.candidates(["zen"])[0].credential_id
+    seeded = credentials.add(provider="zen", credential_data={}, added_by="root")
     acquired: list[str] = []
     real_edit_lock = credentials.edit_lock
     real_merge = credentials.merge_login_credential

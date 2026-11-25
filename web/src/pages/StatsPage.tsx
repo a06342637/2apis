@@ -351,8 +351,31 @@ export function StatsPage() {
 
       <StatsOverviewCards overviewFailed={overviewFailed} stats={stats} />
 
-      {/* 压缩收益与上面总览的缓存命中率**同屏**：省下的 token 只有在缓存仍命中
-          时才是净收益，分开看会得出相反结论。 */}
+      <EventsPanel
+        totalRequests={overview.data?.requests}
+        live={live}
+        toggleLive={toggleLive}
+        isOperator={session.is_operator}
+        exporting={exporting}
+        exportCsv={exportCsv}
+        exportNotice={exportNotice}
+        drillLabels={drillLabels}
+        clearDrill={clearDrill}
+        liveStatus={liveStatus}
+        liveRows={liveRows}
+        isError={events.isError}
+        isFetching={events.isFetching}
+        eventRows={eventRows}
+        eventSort={eventSort}
+        toggleEventSort={toggleEventSort}
+        pageIndex={pageIndex}
+        pageSize={pageSize}
+        hasNextPage={hasNextPage}
+        changePageSize={changePageSize}
+        onPageChange={changePage}
+      />
+
+      {/* 压缩收益复用总览的同一时间窗与缓存命中率，保证两组读数口径一致。 */}
       <CompressPanel stats={stats} isOperator={session.is_operator}
                      since={effectiveSince} until={effectiveUntil}
                      rangeReady={rangeReady} />
@@ -391,30 +414,6 @@ export function StatsPage() {
         isError={errors.isError}
         errorRows={errorRows}
         onDrill={applyDrill}
-      />
-
-      <EventsPanel
-        totalRequests={overview.data?.requests}
-        live={live}
-        toggleLive={toggleLive}
-        isOperator={session.is_operator}
-        exporting={exporting}
-        exportCsv={exportCsv}
-        exportNotice={exportNotice}
-        drillLabels={drillLabels}
-        clearDrill={clearDrill}
-        liveStatus={liveStatus}
-        liveRows={liveRows}
-        isError={events.isError}
-        isFetching={events.isFetching}
-        eventRows={eventRows}
-        eventSort={eventSort}
-        toggleEventSort={toggleEventSort}
-        pageIndex={pageIndex}
-        pageSize={pageSize}
-        hasNextPage={hasNextPage}
-        changePageSize={changePageSize}
-        onPageChange={changePage}
       />
 
       <PrivacyNotice />

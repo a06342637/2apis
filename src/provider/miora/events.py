@@ -13,6 +13,8 @@ def classify_status(status: int, body: bytes = b"") -> ErrKind:
     text = body.decode("utf-8", errors="replace").lower()
     if status == 401:
         return ErrKind.DEAD
+    if status == 429:
+        return ErrKind.SOFT
     if status == 402 or any(
         word in text for word in ("insufficient credit", "credit exhausted", "积分不足", "余额不足")
     ):
@@ -21,8 +23,6 @@ def classify_status(status: int, body: bytes = b"") -> ErrKind:
         return ErrKind.BLOCKED
     if status == 403:
         return ErrKind.SOFT
-    if status == 429:
-        return ErrKind.CONCURRENCY
     if status in (400, 404, 422):
         return ErrKind.INVALID
     return ErrKind.OTHER

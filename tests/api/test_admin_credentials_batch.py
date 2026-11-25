@@ -167,7 +167,7 @@ def test_batch_toggle_defaults_to_enabled(batch_app):
     app.state.credentials.set_enabled(credential_id, False)
     client.post("/api/credentials/batch",
                 json={"action": "toggle", "ids": [credential_id]})
-    # 按 id 取：`list_all()` 首位是启动时补的 zen 占位行，取 [0] 会断言到它
+    # 按 id 查找本次修改的用户账号。
     by_id = {row["id"]: row for row in app.state.credentials.list_all()}
     assert by_id[credential_id]["enabled"] == 1
 

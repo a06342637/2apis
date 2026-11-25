@@ -14,12 +14,15 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
+from ..auth.account_binding import credential_ids_from_text, normalize_credential_ids
+
 if TYPE_CHECKING:
     from .repo import ApiKeyRepository
 
 #: 管理台可改的列。顺序即审计 detail 的字段顺序（稳定可读）。
 EDITABLE_COLUMNS: tuple[str, ...] = (
-    "name", "provider_binding", "allowed_ips", "allowed_models", "expires_at",
+    "name", "provider_binding", "allowed_ips", "allowed_models", "expires_at", "credential_ids",
+    "group_ids",
 )
 
 _EDITABLE = frozenset(EDITABLE_COLUMNS)
@@ -41,10 +44,25 @@ def update_api_key_fields(repo: ApiKeyRepository, key_id: str, username: str,
         raise ValueError(f"不可编辑的列: {', '.join(sorted(unknown))}")
     if not changes:
         return True
+    values = dict(changes)
+    import json
+
+    for field in ("credential_ids", "group_ids"):
+        if field in values:
+            values[field] = json.dumps(normalize_credential_ids(values[field]))
     # 列名来自上面的白名单（不是用户输入），值全部参数化。
     assignments = ", ".join(f"{column} = ?" for column in changes)
     with repo._db.transaction() as conn:
+        if "credential_ids" in changes or "group_ids" in changes:
+            row = conn.execute("SELECT credential_ids,group_ids FROM api_keys "
+                               "WHERE id=? AND username=?", (key_id, username)).fetchone()
+            if row is None:
+                return False
+            accounts = credential_ids_from_text(values.get("credential_ids", row["credential_ids"]))
+            groups = credential_ids_from_text(values.get("group_ids", row["group_ids"]))
+            if accounts and groups:
+                raise ValueError("credential_ids and group_ids cannot both be non-empty")
         cursor = conn.execute(
             f"UPDATE api_keys SET {assignments} WHERE id = ? AND username = ?",
-            (*changes.values(), key_id, username))
+            (*values.values(), key_id, username))
     return cursor.rowcount > 0

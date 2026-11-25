@@ -1,4 +1,4 @@
-"""ZenProvider 委托、端点白名单与启动种子。"""
+"""ZenProvider 委托、端点白名单与主动添加账号。"""
 
 from __future__ import annotations
 
@@ -133,27 +133,8 @@ def test_zen_endpoint_accepts_trailing_slash():
                         ZEN_API_ENDPOINT="https://opencode.ai/")
     assert _zen_endpoint(settings) == "https://opencode.ai/"
 
-def test_seed_zen_credential_is_idempotent(tmp_path):
-    from src.db.conn import Database
-    from src.db.crypto import CredentialCipher
-    from src.db.migrate import apply_schema
-    from src.db.repo import CredentialRepository
-    from src.main import _seed_zen_credential
-    from tests.helpers.constants import SECRET
-
-    db = Database(tmp_path / "t.sqlite3")
-    apply_schema(db.connect())
-    repo = CredentialRepository(db, CredentialCipher(SECRET))
-
-    _seed_zen_credential(repo)
-    _seed_zen_credential(repo)                      # 已有 → 不再补
-    rows = repo.candidates(["zen"])
-    assert len(rows) == 1
-    assert repo.credential_data(rows[0].credential_id) == {}
-    db.close()
-
-async def test_build_app_seeds_zen_and_resolves_forced_route(tmp_path):
-    """端到端：默认装配种子 zen 凭证，`模型@zen` 能路由到 zen 渠道。"""
+async def test_build_app_keeps_zen_available_without_creating_an_account(tmp_path):
+    """默认装配保留手工添加能力，启动不创建 Zen 占位账号。"""
     from src.config import Settings
     from src.engine.model_resolver import resolve
     from src.main import build_app
@@ -164,7 +145,7 @@ async def test_build_app_seeds_zen_and_resolves_forced_route(tmp_path):
     app = build_app(settings)
     assert "zen" in app.state.executor._deps.providers
     rows = app.state.credentials.candidates(["zen"])
-    assert len(rows) == 1 and rows[0].health is None      # 未知而非耗尽
+    assert rows == []
     target = resolve("big-pickle@zen", "glm-5.2")
     assert target.providers == ("zen",) and target.forced
     app.state.executor._deps.providers["zen"].client          # noqa: B018 - 存在即可
@@ -176,8 +157,7 @@ async def test_build_app_seeds_zen_and_resolves_forced_route(tmp_path):
 def test_zen_credential_can_be_restored_after_delete(tmp_path, monkeypatch):
     """管理台删除 zen 虚拟凭证后，可用「添加 OpenCode Zen」从 UI 补回（无需重启）。
 
-    回归背景：种子只在 build_app 跑一次，用户删掉凭证后 /v1/models 就再也
-    没有 zen；前端「登录渠道账号」面板提供的一键补回走通用导入端点
+    前端「登录渠道账号」面板提供的手工添加走通用导入端点
     （provider=zen 时 import_credential 忽略入参、落空对象），这条链路必须稳定。
     """
     from fastapi.testclient import TestClient
@@ -197,10 +177,9 @@ def test_zen_credential_can_be_restored_after_delete(tmp_path, monkeypatch):
     app = build_app(settings)
     with TestClient(app) as client:
         credentials = app.state.credentials
-        seeded = credentials.candidates(["zen"])
-        assert len(seeded) == 1
-        assert credentials.delete(seeded[0].credential_id)          # 模拟管理台删除
         assert credentials.candidates(["zen"]) == []
+        first = credentials.add(provider="zen", credential_data={}, added_by="root")
+        assert credentials.delete(first)
 
         client.cookies.set("coding2api_session",
                            create_session_token("root", SECRET))

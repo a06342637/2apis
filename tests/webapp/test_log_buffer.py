@@ -143,9 +143,9 @@ def test_buffer_publish_reaches_subscriber_via_loop():
         def is_closed(self) -> bool:
             return False
 
-        def call_soon_threadsafe(self, callback, payload) -> None:
-            callback(payload)
-            self.published.append(payload)
+        def call_soon_threadsafe(self, callback, *args) -> None:
+            callback(*args)
+            self.published.append(callback)
 
     buffer = LogBuffer(capacity=lambda: 5)
     subscription = buffer.hub.subscribe()

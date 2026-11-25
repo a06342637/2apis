@@ -70,10 +70,12 @@ GATEWAY_GROUPS: tuple[tuple[str, str], ...] = (
     ("compress", "上下文压缩"),
     ("stream_thinking", "流式与思考"),
     ("gateway_control", "网关与计费"),
+    ("resources", "系统占用"),
     ("affinity", "选号与会话"),
     ("privacy", "出站隐私"),
     ("chat_throttle", "聊天节流"),
     ("codearts_throttle", "CodeArts 节流"),
+    ("miora_throttle", "Miora 账号"),
     ("pacer", "后台任务节流"),
     ("observability", "可观测性"),
 )
@@ -81,6 +83,23 @@ GATEWAY_GROUPS: tuple[tuple[str, str], ...] = (
 
 # 首批可热更清单。刻意不含上游端点、端口、密钥这类启动期项（见模块 docstring）。
 HOT_SETTINGS: tuple[HotSetting, ...] = (
+    HotSetting("resource_max_active_requests", int, "同时处理的生成请求数",
+               "限制推理和媒体请求的并发，整个响应发送结束才归还名额。"
+               "1 核 1GB 建议 4；0 关闭此限制，输入缓冲预算仍独立生效。",
+               minimum=0, maximum=64, group="resources"),
+    HotSetting("resource_max_queued_requests", int, "等待中的生成请求上限",
+               "达到并发或输入缓冲预算时在本地排队，排队期间不读取请求体。"
+               "默认 32；0 表示不排队。超出上限返回服务繁忙。",
+               minimum=0, maximum=256, group="resources"),
+    HotSetting("resource_queue_timeout_seconds", float, "排队等待上限（秒）",
+               "默认 60 秒，超时返回 503 和 Retry-After，避免无限积压。"
+               "0 立即返回繁忙；调整限制会在一秒内让排队请求重新判断。",
+               minimum=0, maximum=300, group="resources"),
+    HotSetting("resource_input_budget_mb", int, "生成请求输入缓冲预算（MiB）",
+               "按请求体长度预留预算，长度未知时按 16 MiB 保守预留。"
+               "1 核 1GB 建议 16；超过预算的单个请求返回 413。"
+               "0 关闭此预算，并发限制仍生效。",
+               minimum=0, maximum=512, group="resources"),
     HotSetting("default_model", str, "默认模型",
                "请求未指定 model（或为 auto/空）时使用的模型名。",
                group="model_routing"),
@@ -235,12 +254,28 @@ HOT_SETTINGS: tuple[HotSetting, ...] = (
                "上游按请求频率限流（实测 5 并发放行、第 6 个 429 "
                "user_model_rate_limited）。默认 2 留余量；0 关闭上限。",
                minimum=0, group="codearts_throttle"),
+    HotSetting("miora_auto_media_enabled", bool, "Miora 对话自动生成媒体",
+               "允许 Miora 对话模型在用户要求生成图片或视频时调用网关媒体工具，"
+               "返回可下载的资源链接。仅使用此 Key 获准的账号与媒体模型；"
+               "会消耗上游媒体额度。关闭后仍可调用标准生图和视频接口。",
+               group="miora_throttle"),
     HotSetting("miora_chat_min_interval", float, "Miora 聊天最小间隔（秒）",
-               "每账号独立节流，默认 0。多个账号之间不共享等待队列。",
-               minimum=0.0, group="chat_throttle"),
+               "同账号请求起点至少相隔此秒数，并向上小幅抖动；默认 5，0 关闭间隔。"
+               "多个账号各自排队，不共享等待。配合滚动窗口降低突发频率。",
+               minimum=0.0, group="miora_throttle"),
     HotSetting("miora_max_concurrency", int, "Miora 每账号并发上限",
-               "默认 1，适配免费账号。付费账号可按套餐调整；0 关闭上限。",
-               minimum=0, group="codearts_throttle"),
+               "本地在途名额默认 1；0 关闭此层上限。同账号运行时仍串行保护选模，"
+               "提高此值不会让同账号并行推理；不同账号可以并行。",
+               minimum=0, group="miora_throttle"),
+    HotSetting("miora_request_window_seconds", float, "Miora 滚动窗口（秒）",
+               "默认 60，与窗口请求数配合限制同账号请求起点；窗口满时本地等待，"
+               "不向上游连发。0 关闭窗口，间隔和并发限制仍生效。",
+               minimum=0.0, group="miora_throttle"),
+    HotSetting("miora_max_requests_per_window", int, "Miora 窗口内最多请求数",
+               "默认每账号每 60 秒最多启动 3 次，这是本地保守建议，不是上游承诺。"
+               "与并发上限独立；0 关闭窗口次数限制。仍遇到 429 时先遵守上游"
+               "Retry-After，再适当增加间隔或降低此值。",
+               minimum=0, group="miora_throttle"),
     HotSetting("qoder_chat_min_interval", float, "Qoder 聊天最小间隔（秒）",
                "Qoder 真实账号渠道专用节流（默认 5s，0 关闭）。与其余渠道各自"
                "独立，不共享。", minimum=0.0, group="chat_throttle"),
@@ -977,12 +1012,40 @@ class RuntimeSettings:
         return int(self.get("raccoon_max_concurrency"))
 
     @property
+    def miora_auto_media_enabled(self) -> bool:
+        return bool(self.get("miora_auto_media_enabled"))
+
+    @property
+    def resource_max_active_requests(self) -> int:
+        return int(self.get("resource_max_active_requests"))
+
+    @property
+    def resource_max_queued_requests(self) -> int:
+        return int(self.get("resource_max_queued_requests"))
+
+    @property
+    def resource_queue_timeout_seconds(self) -> float:
+        return float(self.get("resource_queue_timeout_seconds"))
+
+    @property
+    def resource_input_budget_mb(self) -> int:
+        return int(self.get("resource_input_budget_mb"))
+
+    @property
     def miora_chat_min_interval(self) -> float:
         return float(self.get("miora_chat_min_interval"))
 
     @property
     def miora_max_concurrency(self) -> int:
         return int(self.get("miora_max_concurrency"))
+
+    @property
+    def miora_request_window_seconds(self) -> float:
+        return float(self.get("miora_request_window_seconds"))
+
+    @property
+    def miora_max_requests_per_window(self) -> int:
+        return int(self.get("miora_max_requests_per_window"))
 
     @property
     def qoder_chat_min_interval(self) -> float:

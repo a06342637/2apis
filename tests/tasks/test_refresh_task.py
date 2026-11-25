@@ -91,12 +91,8 @@ async def test_concurrent_refresh_rechecks_new_expiry_after_edit_lock(repo):
     assert credentials.credential_data(credential_id)["refresh_token"] == "rotated"
 
 
-async def test_refresh_task_skips_paused_credential(repo):
-    """回归 #15：用户软暂停（enabled=0）的凭证不该被预刷新。
-
-    线上症状是任务报告 `failed=1`，而失败者正是早已停用的旧凭证 —— 预刷新
-    白占调度窗口，真实失败被掩盖。
-    """
+async def test_refresh_task_maintains_paused_credential_without_enabling_it(repo):
+    """软暂停只停止 API；预刷新继续并保留暂停状态。"""
     credentials, _db = repo
     paused = credentials.add(provider="codebuddy", credential_data={
         "bearer_token": "old", "refresh_token": "RT", "auth_source": "oauth",
@@ -106,9 +102,10 @@ async def test_refresh_task_skips_paused_credential(repo):
     task = RefreshTask(credentials, {"codebuddy": provider}, skew_seconds=3600,
                        now=lambda: 1_000_000)
     report = await task.run_once()
-    assert report.attempted == 0 and report.skipped == 1 and report.failed == 0
-    assert provider.refresh_calls == 0
-    assert credentials.credential_data(paused)["bearer_token"] == "old"
+    assert report.attempted == 1 and report.succeeded == 1 and report.failed == 0
+    assert provider.refresh_calls == 1
+    assert credentials.credential_data(paused)["bearer_token"] == "NEW"
+    assert credentials.list_all()[0]["enabled"] == 0
 
 async def test_refresh_task_marks_relogin_required_on_terminal_failure(repo):
     """一次性续期凭据被作废 → 标记「需重新登录」并停止重试。

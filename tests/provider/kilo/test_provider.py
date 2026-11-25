@@ -1,4 +1,4 @@
-"""KiloProvider 委托、端点白名单与启动种子。"""
+"""KiloProvider 委托、端点白名单与主动添加账号。"""
 
 from __future__ import annotations
 
@@ -125,27 +125,8 @@ def test_kilo_allowed_parses_comma_separated_endpoints():
     assert validate_kilo_endpoint_allowed("https://alt.example.com/", settings) is True
     assert validate_kilo_endpoint_allowed("https://nope.example.com", settings) is False
 
-def test_seed_kilo_credential_is_idempotent(tmp_path):
-    from src.db.conn import Database
-    from src.db.crypto import CredentialCipher
-    from src.db.migrate import apply_schema
-    from src.db.repo import CredentialRepository
-    from src.main import _seed_kilo_credential
-    from tests.helpers.constants import SECRET
-
-    db = Database(tmp_path / "t.sqlite3")
-    apply_schema(db.connect())
-    repo = CredentialRepository(db, CredentialCipher(SECRET))
-
-    _seed_kilo_credential(repo)
-    _seed_kilo_credential(repo)                      # 已有 → 不再补
-    rows = repo.candidates(["kilo"])
-    assert len(rows) == 1
-    assert repo.credential_data(rows[0].credential_id) == {}
-    db.close()
-
-async def test_build_app_seeds_kilo_and_resolves_forced_route(tmp_path):
-    """端到端：默认装配种子 kilo 凭证，`模型@kilo` 能路由到 kilo 渠道。"""
+async def test_build_app_keeps_kilo_available_without_creating_an_account(tmp_path):
+    """默认装配保留手工添加能力，启动不创建 Kilo 占位账号。"""
     from src.config import Settings
     from src.engine.model_resolver import resolve
     from src.main import build_app
@@ -156,7 +137,7 @@ async def test_build_app_seeds_kilo_and_resolves_forced_route(tmp_path):
     app = build_app(settings)
     assert "kilo" in app.state.executor._deps.providers
     rows = app.state.credentials.candidates(["kilo"])
-    assert len(rows) == 1 and rows[0].health is None      # 未知而非耗尽
+    assert rows == []
     target = resolve("some-model@kilo", "glm-5.2")
     assert target.providers == ("kilo",) and target.forced
     app.state.executor._deps.providers["kilo"].client          # noqa: B018 - 存在即可
@@ -184,10 +165,9 @@ def test_kilo_credential_can_be_restored_after_delete(tmp_path, monkeypatch):
     app = build_app(settings)
     with TestClient(app) as client:
         credentials = app.state.credentials
-        seeded = credentials.candidates(["kilo"])
-        assert len(seeded) == 1
-        assert credentials.delete(seeded[0].credential_id)          # 模拟管理台删除
         assert credentials.candidates(["kilo"]) == []
+        first = credentials.add(provider="kilo", credential_data={}, added_by="root")
+        assert credentials.delete(first)
 
         client.cookies.set("coding2api_session",
                            create_session_token("root", SECRET))

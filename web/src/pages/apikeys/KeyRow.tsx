@@ -7,18 +7,21 @@ import {
   usageLabel,
   usageOf,
 } from "../../api/keyQuota";
-import type { ApiKey } from "../../api/types";
+import type { ApiKey, CredentialGroup } from "../../api/types";
 import { Button, TableCell, TableRow } from "../../ui";
 import { providerBindingLabel } from "./meta";
+import { RevealKey } from "./RevealKey";
 
 /**
  * 列表行：纯展示 + 行内动作回调。
  *
  * 行内状态（删除二次确认、正在编辑的配额/策略、导入对话框）仍由页面壳持有——
  * 这里只把「点了哪一行」传回去，不复制一份状态。
+ * 验证后查看的密码/明文由 RevealKey 临时持有，不进入页面的查询缓存。
  */
 export function KeyRow({
   item,
+  accountGroups,
   window,
   confirming,
   onRemove,
@@ -29,6 +32,7 @@ export function KeyRow({
   onConfirmDelete,
 }: {
   item: ApiKey;
+  accountGroups?: CredentialGroup[];
   /** 用量窗口（today / 7d / 30d）：仅影响「用量」列文案。 */
   window: ApiKeyWindow;
   confirming: boolean;
@@ -42,9 +46,16 @@ export function KeyRow({
   return (
     <TableRow key={item.id}>
       <TableCell label="名称">{item.name || "—"}</TableCell>
-      <TableCell label="Key" className="font-mono text-xs">{item.preview}</TableCell>
+      <TableCell label="Key" className="font-mono text-xs">
+        <RevealKey key={item.id} id={item.id} preview={item.preview} canReveal={item.can_reveal} />
+      </TableCell>
       <TableCell label="渠道" className="text-xs" data-testid={`key-binding-${item.id}`}>
         {providerBindingLabel(item.provider_binding)}
+      </TableCell>
+      <TableCell label="账号范围" className="text-xs" data-testid={`key-credentials-${item.id}`}>
+        {item.group_ids?.length ? `按 ${item.group_ids.length} 个分组：${item.group_ids.map((id) =>
+          accountGroups?.find((group) => group.id === id)?.name ?? id).join("、")}`
+          : item.credential_ids?.length ? `指定 ${item.credential_ids.length} 个账号` : "全部账号"}
       </TableCell>
       <TableCell label="到期" className="text-xs tabular-nums" data-testid={`key-expires-${item.id}`}>
         {item.expires_at ? formatTime(item.expires_at) : "永不过期"}

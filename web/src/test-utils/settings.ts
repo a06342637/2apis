@@ -51,6 +51,7 @@ export const GROUPS = [
   { value: "affinity", label: "选号与会话" },
   { value: "chat_throttle", label: "聊天节流" },
   { value: "codearts_throttle", label: "CodeArts 节流" },
+  { value: "miora_throttle", label: "Miora 账号与限速" },
   { value: "pacer", label: "后台任务节流" },
   { value: "observability", label: "可观测性" },
 ];

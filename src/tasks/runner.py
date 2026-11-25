@@ -239,6 +239,9 @@ class TaskRunner:
         另一个，也不影响后面的循环建立。注意**不改变** `_loop_specs` 的接线，
         手动触发仍走那份清单。
         """
+        resume = getattr(self._refresh, "resume", None)
+        if callable(resume):
+            resume()
         await self._guarded(self._refresh.run_once(),
                             "启动 token 预刷新", key="refresh")
         await self._guarded(self._quota_probe.run_once(apply_pacing=False),
@@ -572,6 +575,10 @@ class TaskRunner:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         self._tasks.clear()
+        # 即时导入/手工刷新不在周期 _tasks 中，也必须在关闭 provider/SQLite 前排空。
+        drain = getattr(self._refresh, "drain", None)
+        if callable(drain):
+            await drain()
 
 
 def _as_report(result: object) -> dict[str, Any]:

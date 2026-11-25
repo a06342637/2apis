@@ -94,7 +94,8 @@ const DEFAULT_ROUTES: Record<string, unknown> = {
 export function mockCredentialsFetch(
   routes: Record<string, unknown | ((url: string) => Response)>,
 ) {
-  return mockFetch({ "/api/playground/models": { object: "list", data: [] }, ...routes });
+  return mockFetch({ "/api/playground/models": { object: "list", data: [] },
+    "/api/credential-groups": { groups: [], is_operator: true }, ...routes });
 }
 
 /** 按 URL 分派的 fetch mock；函数路由会收到完整 URL 字符串。 */

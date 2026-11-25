@@ -13,6 +13,7 @@ import {
   ToggleLeft,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
 import {
   formatDuration,
   formatNumber,
@@ -22,10 +23,12 @@ import {
 } from "../../api/display";
 import type { CredentialState } from "../../api/display";
 import { STATE_ORDER } from "../../lib/credentialList";
+import { MIORA_MODEL_GROUP_LABELS } from "../../lib/modelCapabilities";
 import type { ProviderGroup } from "../../lib/credentialList";
 import { rateLabel } from "../../components/ModelPicker";
 import type { ProviderModel } from "../../components/ModelPicker";
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { MioraCapabilities, MioraOfficialMediaModels } from "../../components/MioraCapabilities";
 import { LongTextTip } from "../../components/Tip";
 import { Checkbox, TableCell, TableRow } from "../../ui";
 import { QuotaRing } from "./cells";
@@ -71,6 +74,7 @@ export function CredentialGroupHeader({
   expirySecondaryWindow,
   onToggleGroup,
   onToggleGroupSelected,
+  groupAction,
 }: {
   group: ProviderGroup;
   isCollapsed: boolean;
@@ -84,12 +88,16 @@ export function CredentialGroupHeader({
   expirySecondaryWindow: number;
   onToggleGroup: (key: string) => void;
   onToggleGroupSelected: (ids: string[], checked: boolean) => void;
+  groupAction?: ReactNode;
 }) {
   // 到期积分：以「窗口 + 数字」两个图块呈现，比一行长句更像仪表盘。
   // 主/次窗口措辞区分开（主窗口 36h 是次窗口 7 天的子集）。
   // 措辞必须点明「窗口」：它是调度窗口（36h / 7d），不是某笔额度的
   // 剩余到期时间——实测「1.5天」被读成倒计时（积分今天到期却显示 1.5 天）。
   const primaryWindowLabel = `${formatDuration(expiryWindow)}窗口内到期`;
+  const gatewayGroupOrder = ["chat", "image", "video", "unconnected"];
+  const displayedModels = group.provider === "miora" ? [...groupModels].sort((left, right) =>
+    gatewayGroupOrder.indexOf(left.gatewayGroup ?? "chat") - gatewayGroupOrder.indexOf(right.gatewayGroup ?? "chat")) : groupModels;
   const secondaryWindowLabel = `${formatDuration(expirySecondaryWindow)}窗口内到期`;
   // 到期积分按本组那本账取：CodeArts（credits）的到期阶梯与其余渠道（pool）
   // 同源，直接对通用字段求和即可；免费层无额度接口，恒无到期积分。
@@ -150,10 +158,10 @@ export function CredentialGroupHeader({
                                 data-testid={`group-toggle-${group.key}`}
                                 aria-expanded={!isCollapsed}
                                 onClick={() => onToggleGroup(group.key)}
-                                className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-4 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                                className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                               >
                               {/* 身份：折叠箭头 + 品牌图标 + 渠道名 + 账号数 */}
-                              <span className="flex w-48 shrink-0 items-center gap-2">
+                              <span className="flex w-40 shrink-0 items-center gap-2">
                                 <ChevronRight
                                   className={cn(
                                     "size-4 shrink-0 text-muted-foreground transition-transform",
@@ -179,9 +187,9 @@ export function CredentialGroupHeader({
                                   各组的「状态 / 额度 / 到期」起点会各错各的、读起来不成列。
                                   窄屏放不下时按整块换行，块内仍保持同一套对齐。
                                   （今日签到在右簇，与模型一起贴右，见折叠按钮之后。） */}
-                              <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                              <span className="flex flex-wrap items-center gap-x-3 gap-y-2">
                                 {/* 状态分布：只列出现过的态，图标语义与行内状态徽章同源 */}
-                                <span className="flex w-40 shrink-0 items-center gap-2">
+                                <span className="flex w-36 shrink-0 items-center gap-2">
                                   <span className="grid size-7 shrink-0 place-items-center rounded-md bg-background text-muted-foreground ring-1 ring-border/70">
                                     <Activity className="size-3.5" aria-hidden />
                                   </span>
@@ -219,7 +227,7 @@ export function CredentialGroupHeader({
                                 {/* 额度合计：占比环 + 剩余 / 总量（标签行带精确百分比）。
                                     免费层（zen / kilo）无额度接口，null 显示 — 且不出环，
                                     退回一个中性图标位保持各块对齐。 */}
-                                <span className="flex w-48 shrink-0 items-center gap-2">
+                                <span className="flex w-40 shrink-0 items-center gap-2">
                                   {quotaPct !== null ? (
                                     <span data-testid={`group-${group.key}-quota-pct`}>
                                       <QuotaRing pct={quotaPct} />
@@ -309,7 +317,7 @@ export function CredentialGroupHeader({
                             <span className="flex shrink-0 items-center">
                               {showCheckin && (
                                 <span
-                                  className="flex w-40 shrink-0 items-center gap-2 pr-3"
+                                  className="flex w-32 shrink-0 items-center gap-2 pr-3"
                                   data-testid={`group-${group.key}-checkin`}
                                   title={checkinTitle}
                                 >
@@ -355,7 +363,9 @@ export function CredentialGroupHeader({
                                   真要在手机上看，需要换成 Popover（点击开合）。 */}
                               {groupModels.length > 0 && (
                                 <LongTextTip
-                                  className="w-80 max-w-[min(90vw,20rem)] p-0"
+                                  className={group.provider === "miora"
+                                    ? "w-96 max-w-[min(90vw,24rem)] p-0"
+                                    : "w-80 max-w-[min(90vw,20rem)] p-0"}
                                   content={
                                     <div data-testid={`group-${group.key}-models`}>
                                       {/* 头部：渠道身份 + 条数，吸顶不随清单滚走——
@@ -369,16 +379,33 @@ export function CredentialGroupHeader({
                                           {groupModels.length} 个模型
                                         </span>
                                       </div>
+                                      {group.provider === "miora" && (
+                                        <div className="border-b border-border bg-muted/30 px-3 py-2">
+                                          <MioraCapabilities compact />
+                                        </div>
+                                      )}
                                       {/* 清单：限高内滚（不把弹层顶出视口），行间细分隔线 */}
                                       <ul className="max-h-64 divide-y divide-border/60 overflow-y-auto">
-                                        {groupModels.map((model) => (
+                                        {displayedModels.map((model, index) => (
                                           <li
                                             key={model.id}
                                             data-testid={`group-${group.key}-model`}
-                                            className="flex items-baseline justify-between gap-3 px-3 py-1"
+                                            className="px-3 py-1.5"
                                           >
-                                            <span className="min-w-0 truncate text-xs text-foreground">
+                                            {group.provider === "miora" && (index === 0 ||
+                                              model.gatewayGroup !== displayedModels[index - 1].gatewayGroup) && (
+                                              <p data-testid="miora-model-section" className="mb-1 text-xs font-semibold text-foreground">
+                                                {MIORA_MODEL_GROUP_LABELS[model.gatewayGroup ?? "chat"]}
+                                              </p>
+                                            )}
+                                            <div className="flex items-baseline justify-between gap-3">
+                                            <span className="min-w-0 text-xs text-foreground">
                                               {model.label}
+                                              {model.purpose?.route && (
+                                                <span className="ml-1 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">
+                                                  {model.purpose.route}
+                                                </span>
+                                              )}
                                             </span>
                                             {/* 倍率做成数值胶囊：等宽数字 + 免费额度单独着色，
                                                 扫一列倍率时数字右对齐、颜色分档一眼可辨 */}
@@ -394,9 +421,24 @@ export function CredentialGroupHeader({
                                             >
                                               {model.rate === undefined ? "—" : rateLabel(model.rate)}
                                             </span>
+                                            </div>
+                                            {model.purpose && (
+                                              <div data-testid="model-purpose" className="mt-1 text-[11px] leading-snug text-muted-foreground">
+                                                <p>{model.purpose.label}</p>
+                                                <p>{model.purpose.description}</p>
+                                              </div>
+                                            )}
+                                            {model.rawId && (
+                                              <p className="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+                                                原始 ID：{model.rawId}
+                                              </p>
+                                            )}
                                           </li>
                                         ))}
                                       </ul>
+                                      {group.provider === "miora" && (
+                                        <div className="px-3 py-2"><MioraOfficialMediaModels /></div>
+                                      )}
                                       {/* 脚注：口径说明，避免「免 / —」被误读 */}
                                       <div className="border-t border-border px-3 py-1.5 text-[11px] leading-snug text-muted-foreground">
                                         倍率＝该渠道的消耗倍率；<span className="text-ok-ink">免</span>＝免费额度，
@@ -427,6 +469,7 @@ export function CredentialGroupHeader({
                                   </button>
                                 </LongTextTip>
                               )}
+                              {groupAction && <span className="shrink-0 pr-3">{groupAction}</span>}
                             </span>
                             </div>
                           </TableCell>

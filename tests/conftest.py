@@ -223,6 +223,23 @@ def price_catalog_offline(monkeypatch, request):
 
 
 @pytest.fixture(autouse=True)
+def miora_media_catalog_offline(monkeypatch, request):
+    """媒体目录单独隔离；旧 ACP/启动测试不得额外真实访问 Film 媒体控制面。
+
+    媒体协议测试以 real_upstream("miora_media") 保留实现，并使用 MockTransport
+    验证；该标记不会取消其他渠道的网络隔离。
+    """
+    if "miora_media" in _real_upstream(request):
+        return
+    from src.provider.miora.media import MioraMediaClient
+
+    async def fake_catalog(self, credential, *, force=False):
+        return []
+
+    monkeypatch.setattr(MioraMediaClient, "catalog", fake_catalog)
+
+
+@pytest.fixture(autouse=True)
 def upstream_status_offline(monkeypatch):
     """一律不真连状态源：把任务用的 `fetch_all` 换成「什么都抓不到」。
 

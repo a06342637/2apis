@@ -103,11 +103,7 @@ async def test_activity_task_skips_unsupported_and_disabled(activity_repo):
     assert provider.calls == 1
 
 async def test_activity_task_skips_soft_disabled_credentials(activity_repo):
-    """`enabled=0`（用户软暂停）不参与活跃上报：暂停不能只停调度。
-
-    与 checkin / refresh / quota_probe / growth 同口径。此前只判 `disabled`，
-    于是「暂停」的号仍被拿去打卡。
-    """
+    """活跃上报可包含模拟推理，仍尊重软暂停；token/额度维护另行继续。"""
     _add(activity_repo, token="a")
     _add(activity_repo, token="b", enabled=False)
     provider = _FakeProvider()

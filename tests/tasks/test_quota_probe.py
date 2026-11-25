@@ -79,12 +79,8 @@ async def test_quota_probe_skips_when_credential_vanished(repo):
     assert report.skipped == 1
 
 
-async def test_quota_probe_skips_disabled_and_paused_credentials(repo):
-    """硬禁用与用户软暂停的号不探测：必然失败，只会白打上游并刷 WARNING。
-
-    口径与 refresh / checkin / growth / activity 一致（实测容器实例对一条
-    10-15 就过期的硬禁用号每小时探一次，7 天 160 次必然 401）。
-    """
+async def test_quota_probe_maintains_paused_but_skips_hard_disabled_credentials(repo):
+    """暂停账号仍查额度；已失效的硬禁用账号不再打上游。"""
     from src.engine.scheduler import ErrorOutcome
 
     credentials, _db = repo
@@ -98,14 +94,14 @@ async def test_quota_probe_skips_disabled_and_paused_credentials(repo):
 
     report = await task.run_once()
 
-    assert report.attempted == 1
-    assert report.succeeded == 1
-    assert report.skipped == 2
-    # 死号/暂停号的 health 不被探测改写（保持原值）
+    assert report.attempted == 2
+    assert report.succeeded == 2
+    assert report.skipped == 1
     healths = {c.credential_id: c.health for c in credentials.candidates()}
     assert healths[dead] is None
-    assert healths[paused] is None
+    assert healths[paused] == 80
     assert healths[alive] == 80
+    assert next(row for row in credentials.list_all() if row["id"] == paused)["enabled"] == 0
 
 
 async def test_quota_probe_scopes_credential_for_proxy_stickiness(repo):

@@ -353,10 +353,8 @@ class CheckinTask:
         skipped_providers = _parse_providers(self._skip_providers())
         self._prune(current)
         for candidate in self._credentials.candidates():
-            # `enabled=0`（用户软暂停）同样跳过，口径与调度器 is_selectable 一致。
-            # 必须早于 seen.add：否则暂停凭证会白占上游账号的本轮名额，后面那条
-            # 启用中的同账号凭证每轮都被 seen 挡下 → 该渠道签到永久静默失效。
-            if candidate.disabled or not candidate.enabled:
+            # 暂停只停止 API 调度，签到维护继续；硬禁用仍早于账号去重跳过。
+            if candidate.disabled:
                 report.skipped += 1
                 continue
             # 渠道级止损：上游长期停发时不必每轮空锤（仅跳过签到，聊天照常）。

@@ -4,14 +4,17 @@ import { api } from "../api/client";
 import { PROVIDER_LABEL } from "../api/providers";
 import type { Provider, TosRisk } from "../api/types";
 import { useDialogFocus } from "../hooks/useDialogFocus";
+import type { LoginLinkCancelRegistry } from "../hooks/useLoginLink";
 import {
   IMPORT_PROVIDERS,
   detectProvider,
   parseCredentialInput,
 } from "../lib/credentialImport";
 import { safeHttpUrl } from "../lib/safeUrl";
+import { loginSuccessNotice } from "../lib/upstreamLogin";
 import { errorText } from "../lib/errors";
 import { Button, Field, Input, Notice, Select, Tabs, Textarea } from "../ui";
+import { CredentialLoginLink } from "./CredentialLoginLink";
 
 /** 支持「登录渠道账号」按钮的渠道（有 poll / callback / paste 轨道的渠道）。 */
 const LOGIN_PROVIDERS: Provider[] = [
@@ -90,13 +93,6 @@ function safeAuthUrl(raw: string | undefined): string | null {
   return safeHttpUrl(raw);
 }
 
-/** 登录成功提示：合并更新与新增必须区分，否则用户不知道池子里是否多了一条。 */
-function loginSuccessNotice(merged: boolean | undefined): string {
-  return merged
-    ? "登录成功，已更新该账号的凭证。"
-    : "登录成功，凭证已保存。";
-}
-
 /**
  * 添加凭证对话框：登录渠道 / JSON 导入两分区 + 免费层一键补回。
  *
@@ -141,6 +137,8 @@ export function AddCredentialDialog({
   const [loginProviders, setLoginProviders] = useState<Provider[]>([]);
   const loginStatesRef = useRef<Partial<Record<Provider, string>>>({});
   const loginTimersRef = useRef<Partial<Record<Provider, number>>>({});
+  // [CUSTOM] 链接登录独立管理；切回原弹窗入口时先取消同渠道的链接会话。
+  const linkCancelsRef = useRef<LoginLinkCancelRegistry>({});
   // CodeArts paste 轨道：授权后把浏览器地址栏里打不开的 127.0.0.1 回调链接粘回来
   const [pasteProvider, setPasteProvider] = useState<Provider | null>(null);
   const [pasteUrl, setPasteUrl] = useState("");
@@ -207,6 +205,7 @@ export function AddCredentialDialog({
   };
 
   const startLogin = async (provider: Provider, forceLogin = false) => {
+    const cancelledLink = linkCancelsRef.current[provider]?.();
     onError("");
     onNotice("");
     // 先同步开一个占位窗口：window.open 若在 await 之后才调用，
@@ -214,6 +213,7 @@ export function AddCredentialDialog({
     const popup = window.open("", "_blank");
     if (popup) popup.opener = null;               // 切断对管理台 window 的引用
     try {
+      await cancelledLink;
       const started = await api.upstreamStart(provider, forceLogin);
       loginStatesRef.current[provider] = started.state;
       if (!started.auth_url) {
@@ -535,7 +535,16 @@ export function AddCredentialDialog({
                 添加 Miora 账号
               </Button>
             </div>
-            <div className="border-t border-border pt-3">
+            {/* [CUSTOM] 远程/无弹窗授权入口；原绿色登录按钮保持在上方。 */}
+            <div className="space-y-2" data-testid="credential-login-links">
+              {LOGIN_PROVIDERS.map(provider => <CredentialLoginLink key={provider}
+                provider={provider} cancelRegistry={linkCancelsRef.current}
+                disabled={busy || loginProviders.includes(provider) || pasteProvider === provider}
+                onNotice={onNotice} onImported={onImported} />)}
+            </div>
+            <details className="border-t border-border pt-3" data-testid="manual-raccoon">
+              <summary className="mb-2 cursor-pointer text-xs font-medium"
+                data-testid="manual-raccoon-summary">小浣熊 · 手工添加</summary>
               <div className="mb-2 text-xs text-muted-foreground">
                 小浣熊没有 OAuth 登录轨道，凭据是网页会话 JWT：在浏览器 DevTools →
                 Application → Cookies 里复制 <code>xhx_token</code> 的值，粘到下方。
@@ -574,8 +583,10 @@ export function AddCredentialDialog({
                   添加小浣熊
                 </Button>
               </div>
-            </div>
-            <div className="border-t border-border pt-3">
+            </details>
+            <details className="border-t border-border pt-3" data-testid="manual-lingxi">
+              <summary className="mb-2 cursor-pointer text-xs font-medium"
+                data-testid="manual-lingxi-summary">灵犀 · 手工添加</summary>
               <div className="mb-2 text-xs text-muted-foreground">
                 灵犀没有 OAuth 登录轨道，凭据是 WPS 账号 cookie：在浏览器打开
                 lingxi.kdocs.cn 登录后，DevTools → Application → Cookies 里复制整段
@@ -615,8 +626,10 @@ export function AddCredentialDialog({
                   添加灵犀
                 </Button>
               </div>
-            </div>
-            <div className="border-t border-border pt-3">
+            </details>
+            <details className="border-t border-border pt-3" data-testid="manual-free">
+              <summary className="mb-2 cursor-pointer text-xs font-medium"
+                data-testid="manual-free-summary">OpenCode Zen / Kilo · 手工添加</summary>
               <div className="mb-2 text-xs text-muted-foreground">
                 OpenCode Zen / Kilo 免费层无需凭证/登录，删除其虚拟凭证后点下方按钮补回
                 （永久停用请改用「暂停」）。Zen 若已充值，可粘贴 Console 的 API Key
@@ -685,7 +698,7 @@ export function AddCredentialDialog({
                   {hasKilo ? "Kilo 已添加" : "添加 Kilo"}
                 </Button>
               </div>
-            </div>
+            </details>
           </div>
         ) : (
           <form onSubmit={submitImport} className="mt-4 space-y-3" data-testid="add-credential-import">

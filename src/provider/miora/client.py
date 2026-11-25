@@ -32,6 +32,8 @@ from ..base import (
     UpstreamProtocolViolation,
     UpstreamReloginRequired,
     ensure_public_host,
+    read_body_bounded,
+    retry_hints,
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
@@ -201,11 +203,17 @@ class MioraClient(LazyClients):
                 "X-Product": "miora", "X-Miora-Locale": "zh-CN"}
 
     async def _request(self, credential: MioraCredential, method: str,
-                       path: str, *, body: dict | None = None, params: dict | None = None) -> Any:
+                       path: str, *, body: dict | None = None, params: dict | None = None,
+                       timeout: float | None = None) -> Any:
         response = await self._short.request(
             method, f"{self.host}{path}", headers=self._headers(credential),
             json=body, params=params,
-            timeout=150 if method == "POST" and path == f"{API}/cloud-agent/runtimes" else 30)
+            timeout=timeout if timeout is not None else (
+                150 if method == "POST" and path == f"{API}/cloud-agent/runtimes" else 30))
+        if response.status_code == 429:
+            body_bytes = await read_body_bounded(response)
+            raise MioraHTTPError(429, body_bytes,
+                                 **retry_hints(response.headers, body=body_bytes))
         data = await json_or_raise(response, MioraHTTPError, path, with_retry_hints=True)
         if not isinstance(data, dict):
             raise UpstreamProtocolViolation("Miora 返回了无效 REST 响应")
@@ -214,7 +222,9 @@ class MioraClient(LazyClients):
             status = data.get("httpStatus")
             if isinstance(status, bool) or not isinstance(status, int) or not 400 <= status <= 599:
                 status = 400
-            raise MioraHTTPError(status, json.dumps(data, ensure_ascii=False).encode())
+            body_bytes = json.dumps(data, ensure_ascii=False).encode()
+            raise MioraHTTPError(status, body_bytes,
+                                 **retry_hints(response.headers, body=body_bytes))
         return data.get("data", data)
 
     @asynccontextmanager
@@ -331,9 +341,14 @@ class MioraClient(LazyClients):
             raise UpstreamReloginRequired("Miora 缺少刷新令牌，需重新登录")
         response = await self._short.post(f"{self.host}/api/auth/refresh-token",
                                           json={"refresh_token": credential.refresh_token})
+        if response.status_code == 429:
+            body_bytes = await read_body_bounded(response)
+            raise MioraHTTPError(429, body_bytes,
+                                 **retry_hints(response.headers, body=body_bytes))
         if response.status_code in (400, 401):
             raise UpstreamReloginRequired("Miora 刷新令牌已失效，需重新登录")
-        data = await json_or_raise(response, MioraHTTPError, "Miora token refresh")
+        data = await json_or_raise(response, MioraHTTPError, "Miora token refresh",
+                                   with_retry_hints=True)
         if not isinstance(data, dict) or not _text(data.get("access_token")):
             raise UpstreamProtocolViolation("Miora 刷新响应缺少 access_token")
         if not _text(data.get("refresh_token")):

@@ -41,6 +41,8 @@ export interface ApiKeyListResponse {
 export interface ApiKeyPatch {
   name?: string;
   provider_binding?: string;
+  credential_ids?: string[];
+  group_ids?: string[];
   allowed_ips?: string;
   allowed_models?: string;
   expires_at?: number | null;
@@ -100,5 +102,18 @@ export async function updateApiKey(id: string, patch: ApiKeyPatch): Promise<void
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
+  });
+}
+
+/** 明文只交给行内临时组件；不用 query/mutation 缓存，也不重试。 */
+export function revealApiKey(id: string, password: string, signal: AbortSignal): Promise<{
+  api_key: string;
+}> {
+  return requestApiKeyJson(`/api/api-keys/${encodeURIComponent(id)}/reveal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+    signal,
+    cache: "no-store",
   });
 }

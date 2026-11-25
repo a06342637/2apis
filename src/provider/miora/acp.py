@@ -16,7 +16,13 @@ from typing import Any
 import httpx
 
 from ...engine.sse import iter_frames
-from ..base import ErrKind, UpstreamHTTPError, UpstreamProtocolViolation, read_body_bounded
+from ..base import (
+    ErrKind,
+    UpstreamHTTPError,
+    UpstreamProtocolViolation,
+    read_body_bounded,
+    retry_hints,
+)
 from .events import classify_status
 
 
@@ -62,8 +68,10 @@ class AcpConnection:
         self.endpoint = endpoint
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout = timeout
-        self._queue: asyncio.Queue[dict | Exception | _PromptPostEOF] = asyncio.Queue(maxsize=256)
+        # 单帧上限仍沿用 SSE 的8MiB；4帧队列施加背压，避免低内存机器堆积大缓冲。
+        self._queue: asyncio.Queue[dict | Exception | _PromptPostEOF] = asyncio.Queue(maxsize=4)
         self._next_id = 0
+        self._active_method = ""
         self._context: Any = None
         self._reader: asyncio.Task | None = None
 
@@ -77,7 +85,9 @@ class AcpConnection:
             async with asyncio.timeout(min(self.timeout, 30)):
                 response = await self._context.__aenter__()
                 if response.status_code >= 400:
-                    raise AcpHTTPError(response.status_code, await read_body_bounded(response))
+                    body = await read_body_bounded(response)
+                    raise AcpHTTPError(response.status_code, body,
+                                       **retry_hints(response.headers, body=body))
                 connection = response.headers.get("Acp-Connection-Id")
                 if not connection:
                     raise UpstreamProtocolViolation("Miora ACP 缺少连接标识")
@@ -105,19 +115,28 @@ class AcpConnection:
     async def _read(self, response: httpx.Response) -> None:
         try:
             async for frame in jsonrpc_frames(response):
-                await self._queue.put(frame)
+                await self._publish(frame)
             await self._queue.put(UpstreamProtocolViolation("Miora ACP 通知流提前结束"))
         except Exception as error:
             await self._queue.put(error)
 
+    async def _publish(self, frame: dict) -> None:
+        # session/load 等准备期快照不供 API 消费。丢掉无id噪声，保留GET控制结果及
+        # 服务端回调；prompt阶段按原顺序保留全部通知，慢客户端会反压两条流。
+        if "id" in frame or self._active_method == "session/prompt":
+            await self._queue.put(frame)
+
     async def _post(self, request: dict) -> None:
+        expects_result = "id" in request and "method" in request
         try:
             async with self.client.stream(
                     "POST", self.endpoint, headers={
                         **self.headers, "Accept": "application/json, text/event-stream"},
                     json=request) as response:
                 if response.status_code >= 400:
-                    raise AcpHTTPError(response.status_code, await read_body_bounded(response))
+                    body = await read_body_bounded(response)
+                    raise AcpHTTPError(response.status_code, body,
+                                       **retry_hints(response.headers, body=body))
                 content_type = response.headers.get("Content-Type", "")
                 if "text/event-stream" in content_type:
                     received_result = False
@@ -126,7 +145,8 @@ class AcpConnection:
                             if (frame.get("id") == request.get("id")
                                     and ("result" in frame or "error" in frame)):
                                 received_result = True
-                            await self._queue.put(frame)
+                            if expects_result:
+                                await self._publish(frame)
                     except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ReadTimeout):
                         # 200 SSE 的 POST 读取中断与缺少终态的 EOF 同义；GET 决定能否恢复。
                         # 已派发的 RPC error 不会消失；非 prompt 控制请求仍上抛原异常。
@@ -142,11 +162,17 @@ class AcpConnection:
                         raise UpstreamProtocolViolation("Miora ACP 返回了无效 JSON") from error
                     if not isinstance(frame, dict) or frame.get("jsonrpc") != "2.0":
                         raise UpstreamProtocolViolation("Miora ACP 返回了无效响应")
-                    await self._queue.put(frame)
+                    if expects_result:
+                        await self._publish(frame)
                 elif response.status_code != 202:
                     raise UpstreamProtocolViolation("Miora ACP 返回了未知响应类型")
         except Exception as error:
-            await self._queue.put(error)
+            if expects_result:
+                await self._queue.put(error)
+            else:
+                # 回调响应和取消通知的ACK不是新的RPC结果；消费端同步回复回调时
+                # 不能往自己正在等待的满队列入队。回复错误由调用者直接处理。
+                raise
 
     async def _reject_request(self, frame: dict) -> None:
         """从不授权云端工具代替客户端执行；未知扩展按 JSON-RPC 拒绝。"""
@@ -159,13 +185,14 @@ class AcpConnection:
             # 取消是尽力通知，不能让失败请求的清理继续无限占住账号锁。
             async with asyncio.timeout(min(self.timeout, 5)):
                 await self._post({"jsonrpc": "2.0", "method": method, "params": params})
-        except TimeoutError:
+        except Exception:  # noqa: BLE001 - 尽力取消：网络/协议失败均不能拖住清理
             pass
 
     async def rpc_frames(self, method: str, params: dict) -> AsyncIterator[dict]:
         self._next_id += 1
         request_id = self._next_id
         request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        self._active_method = method
         task = asyncio.create_task(self._post(request))
         result: dict | None = None
         end_params: dict | None = None
@@ -210,6 +237,7 @@ class AcpConnection:
         except TimeoutError as error:
             raise UpstreamProtocolViolation("Miora ACP 请求超时") from error
         finally:
+            self._active_method = ""
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task

@@ -948,6 +948,9 @@ class Model:
     # 上游为该模型配置的默认档位（CB: reasoning.effort ∈ {high, medium}；
     # TRAE 的 reasoning_effort_config 只有 support_thinking 布尔，无档位，为 None）
     default_effort: str | None = None
+    # 媒体目录与对话目录共用模型列表；端点明确实际支持的调用方式。
+    gateway_endpoints: tuple[str, ...] | None = None
+    output_modalities: tuple[str, ...] | None = None
 
 
 class AuthFlow(StrEnum):

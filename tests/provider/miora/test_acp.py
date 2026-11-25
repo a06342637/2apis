@@ -37,6 +37,27 @@ def test_short_ticket_classification(status, kind):
     assert AcpHTTPError(status, b"").kind() == kind
 
 
+@pytest.mark.parametrize("method,header", [
+    ("GET", True), ("POST", True), ("GET", False), ("POST", False)])
+async def test_acp_429_keeps_account_retry_hints(method, header, monkeypatch):
+    monkeypatch.setattr("src.provider.base.time.time", lambda: 1000)
+    async def handle(request):
+        return httpx.Response(429, json={"message": "usage reset at 1970-01-01 00:17:10 UTC+0"},
+                              headers={"Retry-After": "20"} if header else {})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as http:
+        connection = AcpConnection(http, URL, "synthetic")
+        if method == "GET":
+            with pytest.raises(AcpHTTPError) as caught:
+                await connection.__aenter__()
+            error = caught.value
+        else:
+            await connection._post({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+            error = await connection._queue.get()
+        assert error.kind() == ErrKind.SOFT
+        assert error.retry_after_seconds == (20 if header else 30)
+        assert error.retry_at == (1020 if header else 1030)
+
+
 async def test_frame_control_json_and_event_filter():
     response = httpx.Response(200, content=(
         b'event: heartbeat\ndata: invalid\n\n'
@@ -278,6 +299,22 @@ async def test_post_eof_does_not_hide_failed_missing_or_rpc_error_end_turn(mode)
                     "session/prompt", {"sessionId": "s"})]
 
 
+async def test_failed_get_end_turn_after_post_eof_is_rejected_without_timer_race(monkeypatch):
+    """精确控制两条通道的完成顺序，不能靠超时碰巧证明失败 endTurn 被拒绝。"""
+    async with httpx.AsyncClient() as client:
+        connection = AcpConnection(client, URL, "private")
+
+        async def post(request):
+            connection._queue.put_nowait({"jsonrpc": "2.0", "method": "session/endTurn",
+                "params": {"sessionId": "s", "stopReason": "error"}})
+            connection._queue.put_nowait(_PromptPostEOF(request["id"]))
+
+        monkeypatch.setattr(connection, "_post", post)
+        with pytest.raises(UpstreamProtocolViolation, match="未成功结束"):
+            _ = [frame async for frame in connection.rpc_frames(
+                "session/prompt", {"sessionId": "s"})]
+
+
 async def test_post_eof_and_colliding_server_request_does_not_count_as_rpc_result():
     incoming = QueueStream()
     replies = []
@@ -310,7 +347,7 @@ async def test_sse_notification_response_does_not_mark_a_prompt_eof():
                 "jsonrpc": "2.0", "id": None, "result": {}})))) as client:
         connection = AcpConnection(client, URL, "private")
         await connection.notify("session/cancel", {"sessionId": "s"})
-        assert isinstance(connection._queue.get_nowait(), dict)
+        # 通知ACK不属于对话结果，也不能塞住没有消费者的队列。
         assert connection._queue.empty()
 
 

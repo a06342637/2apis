@@ -615,16 +615,13 @@ def test_next_credit_reset_boundaries(hour, expected_offset_days):
 
 def test_next_credit_reset_ignores_process_timezone(monkeypatch):
     """进程 TZ 改成 UTC 也不偏移：上游按北京时间重置。"""
-    monkeypatch.setenv("TZ", "UTC")
-    time.tzset()
-    try:
-        # 北京时间 2026-09-21 03:00 = UTC 2026-09-20 19:00
-        moment = int(datetime(2026, 9, 21, 3, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
-        assert next_credit_reset(moment) == int(
-            datetime(2026, 9, 21, 4, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+    # Windows 没有 tzset；直接模拟 UTC 的 localtime 同样覆盖旧实现回归。
+    monkeypatch.setattr(time, "localtime", time.gmtime)
+    # 北京时间 2026-09-21 03:00 = UTC 2026-09-20 19:00
+    moment = int(datetime(2026, 9, 21, 3, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
+    assert time.localtime(moment).tm_mday == 20
+    assert next_credit_reset(moment) == int(
+        datetime(2026, 9, 21, 4, 0, tzinfo=ZoneInfo("Asia/Shanghai")).timestamp())
 
 def test_select_skips_model_cooled_credential_when_filtered():
     """端到端：调用方按模型过滤后，被冷却的凭证不再被选中，换模型仍最优。"""

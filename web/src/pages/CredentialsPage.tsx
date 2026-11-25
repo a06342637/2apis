@@ -1,9 +1,11 @@
-import { Database, Plus, Search, Upload } from "lucide-react";
+import { Database, FolderOpen, Plus, Search, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { useCredentials, usePlaygroundModels, useQueryClient } from "../api/hooks";
+import { useCredentialGroups, useCredentials, usePlaygroundModels, useQueryClient } from "../api/hooks";
+import type { Provider } from "../api/types";
+import { PROVIDER_LABEL } from "../api/providers";
 import { groupModelsByProvider } from "../components/ModelPicker";
 import { PageHeader } from "../components/PageHeader";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -32,6 +34,7 @@ import { CredentialDialogs } from "./credentials/dialogs";
 import { BatchActionBar, CredentialFilterBar } from "./credentials/filters";
 import type { BatchButton } from "./credentials/helpers";
 import { CredentialTable } from "./credentials/table";
+import { CredentialGroupsDialog } from "./credentials/CredentialGroupsDialog";
 
 /**
  * 凭证管理页：页面主体只负责取数、筛选/展开/选中状态与动作编排。
@@ -52,6 +55,9 @@ export function CredentialsPage() {
   // 当前黑名单的渠道），因此组里「有凭证」与「有模型」是同一口径，不必另算一套。
   const modelsQuery = usePlaygroundModels();
   const client = useQueryClient();
+  const accountGroupsQuery = useCredentialGroups(session.username);
+  const accountGroups = accountGroupsQuery.isError ? undefined : accountGroupsQuery.data?.groups;
+  const [managingGroups, setManagingGroups] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // 添加凭证对话框（登录渠道 / JSON 导入 / 免费层补回都收在里面）
@@ -476,11 +482,25 @@ export function CredentialsPage() {
                 sort={sort}
                 order={order}
                 toggle={toggle}
+                groupAction={(group) => <Button size="sm" variant="ghost"
+                  data-testid={`credential-groups-${group.provider}`}
+                  onClick={() => setManagingGroups(group.provider as Provider)}>
+                  <FolderOpen className="size-3.5" />
+                  账号分组 {accountGroups ? accountGroups.filter((item) => item.provider === group.provider).length : "—"}
+                </Button>}
               />
             )}
           </>
         )}
       </Panel>
+
+      {managingGroups && <CredentialGroupsDialog provider={managingGroups}
+        label={PROVIDER_LABEL[managingGroups]} credentials={credentials}
+        groups={accountGroups} loading={accountGroupsQuery.isLoading}
+        canWrite={canWrite && accountGroupsQuery.data?.is_operator === true}
+        onClose={() => setManagingGroups(null)}
+        onRetry={async () => (await accountGroupsQuery.refetch()).data?.groups}
+        onChanged={() => client.invalidateQueries({ queryKey: ["admin", session.username, "credential-groups"] })} />}
 
       <CredentialDialogs
         canWrite={canWrite}

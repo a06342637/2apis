@@ -2,9 +2,34 @@
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
 
+## 账号分组、Key 查看与小内存部署
+
+每个渠道的凭证栏最右侧提供「账号分组」管理，可创建、改名、编辑成员和删除。
+Key 创建/编辑可选全部账号、指定账号或指定分组；绑定分组使用稳定组 ID，成员变化
+在后续请求动态生效。分组不存在或成员全部删除时拒绝调用，不退回公共池；暂停/失效
+成员保留归属，但不能参与新请求。轮换游标按 Key 独立，健康、冷却、在途护栏继续共享。
+
+列表点击「查看 Key」需验证当前登录密码。新 Key 经 APP_SECRET 加密保存；明文只在
+查看窗口临时显示，隐藏、关闭、卸载或 60 秒超时清除。历史版本只保存摘要的 Key 无法
+还原，接口明确提示重新创建；已有明确保存的旧明文可由主机管理员核对摘要后加密补入。
+登录密码修改不会重置 API Key，Key 仍由原 APP_SECRET 加密，必须保留该密钥。
+
+1 核 1GB 的 Docker 默认限制为 512 MiB 内存、768 MiB 内存与交换总量、0.75 CPU。
+「网关配置 → 系统占用」可调整同时处理数、排队上限、超时和输入缓冲预算；建议
+4 个活跃请求、最多 32 个等待、60 秒超时、总输入 16 MiB。排队阶段不读取请求体，
+不会先把所有大上下文堆进内存；合法请求过载时等待，排队满/超时返回 503 + Retry-After。
+图片 Base64 按块输出，下载与编码共享 IO 并发限制（MEDIA_IO_CONCURRENCY 默认 2，
+1GB 可设 1）。ACP 通知缓冲从 256 收紧到 4 帧，登录准备期通知不会堵住控制回复。
+热目录最多缓存 128 个账号，闲置限流桶会过期清理；日志待投递最多 200 条、一轮一个
+唤醒回调，溢出丢弃旧的实时消息，持久日志仍照常写入。长日志脱敏采用线性扫描。
+
+一键更新使用专属受限 BuildKit：256 MiB 内存、512 MiB 内存与交换总量、25% CPU，
+构建结束停止构建器，保留缓存。主机建议有持久 swap，保护网络代理与 SSH 的可用性。
+安装与失败恢复见 [更新助手部署说明](scripts/SYSTEM_UPDATE.md)。
+
 ## Miora 接入
 
-Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，重新导入同一账号会更新原凭证。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。
+Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，重新导入同一账号会更新原凭证。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。暂停仅停止 API 选号，预刷新、额度探测、签到和成长维护继续；模拟推理活跃和模型探活尊重暂停。
 
 导入后会先按账号执行共享预刷新，再用持久化的新票据探测额度；过期 access token 搭配有效 refresh token 可以自动续期，刷新临时失败会保留账号等待重试。并发刷新取得编辑锁后会重新检查有效期，避免重复消费轮转票据。
 
@@ -20,6 +45,10 @@ copy(JSON.stringify({authToken: localStorage.getItem("authToken"), refreshToken:
 每个账号自动查找或创建一个 `2apis API workspace` 项目，后续复用该项目和运行时；每次 API 调用创建独立对话，把客户端历史完整传入，避免不同用户上下文串话。已有项目可在导入 JSON 中用 `project_id` 指定。模型目录预热会预取运行时短票，连接前重新领取短票，未发送推理时遇到短票 401 可重建一次；不会自动重放已发送的推理。同一账号串行对话以隔离运行时全局选模参数，不同账号可以并行。
 
 ### 可选模型
+
+图片与视频模型也从账号的 Film Studio 动态目录接出，包含可用质量变体。
+生图 `/v1/images/generations`、异步视频 `/v1/videos`、对话自动媒体工具及 Codex/dsh 用法见
+[Miora 媒体 API](docs/miora-media.md)。模型列表按用途标注，媒体 ID 使用对应端点。
 
 目录来自账号运行时的 ACP `session/load`，不硬编码网页的“自动”选项。2026-11-25 实测返回 **32 个模型/路由条目，加 3 个网页模式，共 35 个选项**；以后随上游目录更新。模型是否允许实际调用由账号套餐、积分和上游权限决定。
 
@@ -68,7 +97,7 @@ response = client.messages.create(
 print(response.content)
 ```
 
-两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用严格 JSON 模拟**：传入客户端工具定义，校验函数白名单、参数对象及常见类型/必填/属性约束，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`；工具由原客户端执行。支持 `auto` / `none` / `required` / 指定函数与关闭并行调用。发现 Miora 内置云端工具请求会中止该轮，异常断流会取消未完成的上游推理。媒体生成、云端文件操作不属于本渠道的代码 API 能力。
+两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用严格 JSON 模拟**：传入客户端工具定义，校验函数白名单、参数对象及常见类型/必填/属性约束，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`；客户端函数由原客户端执行。支持 `auto` / `none` / `required` / 指定函数与关闭并行调用。网关另提供 Film Studio 图片/视频工具，由服务器执行并返回真实资源链接；云端文件操作仍不开放。异常断流会取消未完成的上游推理。
 
 ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completion_tokens` 会作为提示中的输出预算，**不能保证硬 token 上限**；非默认 `temperature` / `top_p` / penalties 及 `stop`、`logprobs`、`seed`、`response_format`、`prediction` 等无法兑现的参数会明确返回 400。图片、音频、文件输入及音频输出在联网前返回能力不支持的 400。`reasoning_effort` 支持 `low` / `medium` / `high`，每轮显式设置，省略时使用 `medium`，不会继承上一位调用者的档位。工具响应需缓冲后校验，调用帧会在校验通过后发出。
 
@@ -237,7 +266,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 
 ## 渠道
 
-> CodeBuddy（含国际）/ TRAE / Qoder / CodeArts / OfficeAce / 小浣熊 / 灵犀 需凭证；**Zen 与 Kilo 无凭证免费层**——池里一条虚拟占位行（调度 / 冷却 / 统计照常），额度列「免费层（无额度接口）」，健康度恒「无探测」。删虚拟行重启复活；永久停用 →「暂停」。
+> CodeBuddy（含国际）/ TRAE / Qoder / CodeArts / OfficeAce / 小浣熊 / 灵犀 / Miora 需凭证。Zen 与 Kilo 免费层可在管理台手工添加；程序启动不创建默认账号，删除后也不会重新出现。
 
 ### OpenCode Zen（`zen`）
 
@@ -425,7 +454,7 @@ curl -X POST http://127.0.0.1:8000/v1/fetch \
 }
 ```
 
-从未探测成功 → `balance_known` = `false`（未知，不是 0）。
+从未探测成功 → `balance_known` = `false`（未知，不是 0）。余额仅汇总当前 Key 的渠道与账号范围；分组成员变化会同步影响查询，不显示其他账号额度。
 
 ### 池健康检查与指标
 
@@ -456,11 +485,14 @@ curl -X POST http://127.0.0.1:8000/v1/fetch \
 - **配额**：六项独立，`0` / 留空 = 不限——`daily_requests` / `daily_tokens` / `daily_cost_usd` / `rpm` / `tpm`（按预估值）/ `max_concurrency`。当日类按北京时间自然日，速率 / 并发为进程内滑动窗口；超限 429 + `quota_exceeded`，`Retry-After` 指向可重试时刻；异常一律放行 + warning。**`daily_cost_usd` 是 fail closed 口径**：窗口内只要存在「有 token 但价表里查不到价」的请求，就按已达上限阻断（成本量不出来时不能假装有配额）——所以给这个限额前先确认价表覆盖你实际在用的模型。
 - **自助查询**：`GET /v1/usage?days=1|7|30` 返回自己的用量、剩余额度、当前速率占用。
 - **编辑策略**：`PUT /api/api-keys/{id}` 改名称 / 渠道绑定 / 来源 IP 白名单 / 模型白名单 / 到期时间（明文与 id 不可改，换 Key 必须重新签发）。**未提供**的字段保持原值，传空串（`expires_at` 传 `null`）= 清空该项；改的是鉴权每次现读的列，下一个请求即生效，审计 `api_key.update` 带字段 diff（不含明文）。
+- **绑定账号**：创建/编辑 Key 可勾选已添加账号。`credential_ids=[]` 使用全池，非空时目录与所有生成出口只用所选账号及其模型，叠加渠道绑定、账号/Key/用户白名单。在所选可用账号内按在途负载与轮询调度；账号暂停、删除或失效不会退回全池。修改省略该字段保持原绑定，明确传 `[]` 才恢复全部账号。
+- **绑定分组**：`group_ids` 与 `credential_ids` 不能同时非空。分组模式每次鉴权从数据库解析当前成员，主推理与 search/fetch 辅助账号都受范围限制；一个空组不阻止同一 Key 的其他有效组，缺失组或最终空集合明确拒绝。Cookie 直接进入的 Playground 按原用户策略使用公共池，不假装使用某一把 Key。
+- **重新查看**：`POST /api/api-keys/{id}/reveal` 传当前登录密码，仅本人、有效会话、CSRF 校验通过后返回 `{api_key}`，响应 no-store。错误密码受限流保护，审计不写入密码或 Key。
 - **窗口用量**：列表 `?window=today|7d|30d`（默认 `today`），按含今天在内的最近 N 个自然日聚合每把 Key 的请求数 / token / 成本；无明细返回 0。
 
 ### 凭证暂停与批量运维
 
-- **暂停** = 摘出对话 + 签到 / 预刷新跳过；其余后台任务（额度探测、成长、活跃上报）照常。适用「不接聊天、积分继续领」。≠「已禁用」（渠道判定会话失效后的系统禁用，需重登后「恢复」）。同一开关 `POST /api/credentials/{id}/toggle`。Zen / Kilo 是虚拟占位行，**暂停是永久停用的唯一方式**；暂停也会把该渠道从模型列表摘掉。
+- **暂停** = 摘出 API 选号与模型列表。token 预刷新、额度探测、签到和成长维护照常；模拟推理活跃与模型探活跳过。系统硬禁用表示凭据失效，需要重登后恢复。同一开关 `POST /api/credentials/{id}/toggle`；手工删除的账号不会在重启后复活。
 - **批量**：`POST /api/credentials/batch`，`{action: "probe"|"toggle"|"checkin"|"revive", ids: [...], enabled?, force?}`，一次 ≤200 条，重复 id 去重。
 - **批量导入**：`POST /api/credentials/batch-import`，`{items: [{provider, credential, nickname?, tags?}]}`，一次 ≤100 条；坏条目进 `failed`（带 `index` 与原因），同渠道解密后内容一致进 `skipped`。支持粘贴 JSON 数组 / JSONL 或选文件。
 - **单条导出**：`GET /api/credentials/{id}/export` 返回与导入同形的 JSON（含明文凭证，仅 admin / operator，落 `credential.export` 审计）。
@@ -541,7 +573,7 @@ curl -X POST http://127.0.0.1:8000/v1/fetch \
 - **按账本分流**：流水带 `ledger`（`pool` / `credits`）；CodeArts 与小浣熊记 `credits`，其余 `pool`。`GET /api/credentials/{id}/credit-events?ledger=`。
 - **签到记录**（「更多操作 → 签到记录」）= 签到审计日志，每轮一行（时间 / 结果 / 领取积分 / 上游业务码 / 文案 / 触发方式），保留 90 天；`GET /api/credentials/{id}/checkin-events?limit=`。这是**动作的逐次结果**，不依赖余额 diff，故「显示成功却没加积分」可直接对上游答复定位。
 - **可用性时间线**（凭证详情 →「查看时间线」）= 状态迁移历史（冷却开始 / 冷却结束 / 硬失败 / 恢复 / 启停），每行带模型（模型级冷却时）、脱敏原因、可读说明与触发请求 ID；`GET /api/credentials/{id}/timeline?since=&until=&limit=`（operator+），保留 30 天。与 `credential_model_cooldowns` 的**当前态**互补：回答「昨天 14:00 这个号为什么不可用」不必再翻服务端日志。
-- **今日签到汇总**：`GET /api/credentials` 每条附 `checkin_today`（本地审计里今天最近一条，今日无记录 `null`）。`null` = 还没有结论（任务未轮到 / 暂停 / 无签到能力），不是失败。
+- **今日签到汇总**：`GET /api/credentials` 每条附 `checkin_today`（本地审计里今天最近一条，今日无记录 `null`）。`null` = 还没有结论（任务未轮到或无签到能力），不是失败；软暂停继续签到维护。
 
 ### 分组维度
 
@@ -995,3 +1027,12 @@ pnpm build
 ## 授权协议
 
 MIT，见 [LICENSE](LICENSE)。上游署名见 [NOTICE](NOTICE)。
+
+## 更新系统
+
+管理台支持检查 GitHub main 的版本与 commit，并更新 CI 全部通过的固定提交。
+相同版本号的新 commit 也能检测；覆盖本地源码前保存校验备份，失败自动回滚。
+回滚时若新服务已轮换登录票据，仅在 APP_SECRET 一致、账号匹配且时间可证明更新时
+保留四项登录字段，防止恢复已失效的刷新票据；其他数据恢复旧备份，原备份不被修改。
+账号、API Key、APP_SECRET 与部署配置保留。需先安装独立 root 主机助手，应用保持非 root，
+只挂载专用 Unix socket 与只读 secret；安装与接口说明见 [主机更新助手](scripts/SYSTEM_UPDATE.md)。

@@ -241,8 +241,9 @@ def _map_tools(tools: Any) -> list[dict[str, Any]]:
       `ToolName::new(namespace, name)`）：展平成 `{ns}__{name}` 在客户端看来
       是一个「默认命名空间里不存在的新工具」，模型一旦调用就是
       `unsupported call`，比不提供更糟。
-    * 其余（`web_search` / `tool_search` / `image_generation` / `file_search` /
-      `custom` …）：托管工具由**推理服务端**执行，本网关没有该能力；
+    * `image_generation` 由请求映射另存配置，Miora 媒体工具层执行。
+    * 其余（`web_search` / `tool_search` / `file_search` / `custom` …）：
+      托管工具不能翻译成客户端函数；
       `custom` 是 freeform 工具（`apply_patch` 的 lark 语法），chat 的
       `function.parameters` 表达不了「整段自由文本」还不破坏 Codex 的
       `custom_tool_call` 配对。跳过是降级，但 400 会让**整轮请求失败**——
@@ -435,6 +436,12 @@ def parse_responses_request(body: Any) -> ChatRequest:
         mapped = _map_tools(tools)
         if mapped:
             upstream["tools"] = mapped
+        image_tools = [tool for tool in tools if tool.get("type") == "image_generation"]
+        if len(image_tools) > 1:
+            raise InvalidRequest("only one image_generation tool may be configured")
+        if image_tools:
+            # Miora 服务端工具执行后返回真实资源链接；其它渠道按原映射处理。
+            upstream["miora_image_generation"] = dict(image_tools[0])
     for key in ("temperature", "top_p"):
         if key in body:
             value = require_finite_number(body[key], key)
@@ -442,7 +449,13 @@ def parse_responses_request(body: Any) -> ChatRequest:
                 raise InvalidRequest(f"temperature must be <= {MAX_TEMPERATURE}")
             upstream[key] = value
     if "tool_choice" in body:
-        upstream["tool_choice"] = _map_tool_choice(body["tool_choice"])
+        if body["tool_choice"] == {"type": "image_generation"}:
+            if "miora_image_generation" not in upstream:
+                raise InvalidRequest("image_generation tool_choice requires the tool definition")
+            upstream["tool_choice"] = "auto"
+            upstream["miora_image_generation_forced"] = True
+        else:
+            upstream["tool_choice"] = _map_tool_choice(body["tool_choice"])
     if isinstance(body.get("parallel_tool_calls"), bool):
         upstream["parallel_tool_calls"] = body["parallel_tool_calls"]
     if "max_output_tokens" in body and body["max_output_tokens"] is not None:
