@@ -1048,3 +1048,5 @@ MIT，见 [LICENSE](LICENSE)。上游署名见 [NOTICE](NOTICE)。
 保留四项登录字段，防止恢复已失效的刷新票据；其他数据恢复旧备份，原备份不被修改。
 账号、API Key、APP_SECRET 与部署配置保留。需先安装独立 root 主机助手，应用保持非 root，
 只挂载专用 Unix socket 与只读 secret；安装与接口说明见 [主机更新助手](scripts/SYSTEM_UPDATE.md)。
+助手 unit 使用 `RuntimeDirectoryPreserve=yes` 保持 socket 目录跨停止/重启不变，
+避免应用挂载旧目录后失联；旧安装的 unit 升级与挂载恢复步骤见上述部署说明。

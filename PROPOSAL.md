@@ -198,4 +198,6 @@ Provider 只管上游私有部分（发请求、解析事件、分类错误、�
 旧服务在构建期间运行，切换前排空并备份校验源码、完整 data、SQLite、密钥和部署配置。
 切换失败恢复旧镜像、代码、数据库、权限与配置并验证 healthy；主机持久化进度、锁与重启恢复。
 APP_SECRET、账号、API Key 与 Tunnel 配置保留，应用不持有 Docker socket。
+助手 unit 保留运行目录跨停止/重启的 inode（`RuntimeDirectoryPreserve=yes`），
+仅重新创建目录内的 socket，保证应用现有目录挂载仍能连接；旧失联挂载需重建应用恢复。
 接口与安装细节见 [scripts/SYSTEM_UPDATE.md](scripts/SYSTEM_UPDATE.md)。

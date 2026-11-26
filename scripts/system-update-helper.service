@@ -15,6 +15,7 @@ UMask=0027
 Environment=DOCKER_CONFIG=/var/lib/2apis-update/docker-config
 RuntimeDirectory=2apis-update
 RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
