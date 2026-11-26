@@ -4,6 +4,7 @@ import pytest
 
 from src import main
 from src.api.deps import ServicePaused
+from src.auth.session import create_session_token
 from src.compat.openai.request import InvalidRequest
 from src.provider.base import Event, EventKind
 from src.provider.miora import MioraProvider
@@ -12,8 +13,19 @@ from src.request_context import credential_scope
 from tests.api.test_miora_integration import token
 from tests.api.test_miora_preflight import gateway as _gateway_fixture
 from tests.helpers.auth import isolated_settings
+from tests.helpers.constants import SECRET
 
 gateway = _gateway_fixture
+
+
+def assert_pause_stats(client, account, mode):
+    client.cookies.set("coding2api_session", create_session_token("root", SECRET))
+    response = client.get("/api/stats/events", params={"credential_id": account})
+    assert response.status_code == 200, response.text
+    events = response.json()["events"]
+    assert len(events) == 1
+    expected = "service_paused" if mode == "gateway" else "invalid_request"
+    assert events[0]["error_type"] == expected
 
 
 def test_waiting_chat_reads_latest_persisted_token_before_inference(gateway):
@@ -56,6 +68,7 @@ def test_waiting_chat_stops_when_operator_pauses_before_inference(gateway, mode)
     assert response.status_code != 200, response.text
     assert not boundary.posts
     assert app.state.services.key_quota.inflight(key["id"]) == 0
+    assert_pause_stats(client, account, mode)
 
 
 @pytest.mark.parametrize("mode", ["gateway", "account"])
@@ -79,6 +92,7 @@ def test_stream_pause_is_controlled_and_does_not_penalize_account(gateway, mode)
     assert after.health == before.health and after.cooling_until == before.cooling_until
     assert app.state.services.key_quota.inflight(key["id"]) == 0
     assert "internal_error" not in response.text, response.text
+    assert_pause_stats(client, account, mode)
 
 
 def test_main_wires_actual_client_and_guards_no_context_selected_missing_and_paused_accounts(

@@ -548,6 +548,7 @@ export type UsageErrorType =
   | "network_error"
   | "no_healthy_credential"
   | "rate_limit"
+  | "service_paused"
   | "truncated_stream"
   | "upstream_error"
   | "upstream_protocol"
@@ -568,6 +569,7 @@ export const USAGE_ERROR_LABEL: Record<UsageErrorType, string> = {
   network_error: "本机网络故障",
   no_healthy_credential: "无可用凭证",
   rate_limit: "额度耗尽",
+  service_paused: "服务暂停",
   truncated_stream: "上游截断",
   upstream_error: "渠道错误",
   upstream_protocol: "渠道响应异常",

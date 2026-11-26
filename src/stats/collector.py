@@ -69,6 +69,7 @@ CONTROLLED_ERROR_TYPES = frozenset({
     #   credential_unavailable — session 失效（_error_type_for(DEAD)）
     #   account_restricted — 账号被上游风控限制（_error_type_for(RESTRICTED)）
     #   invalid_request    — 请求无效（_record_invalid）
+    #   service_paused     — 运营暂停的本地拒绝，不算渠道故障
     #   model_not_found   — 上游明确说「没有这个模型」（_error_type_for(BLOCKED)）
     #   no_healthy_credential — 无可用凭证（executor 耗尽轮换）
     #   model_unavailable     — 耗尽轮换但候选全部只因**该模型**的模型级
@@ -85,7 +86,7 @@ CONTROLLED_ERROR_TYPES = frozenset({
     #   truncated_stream             — 流正常关闭但没走到终态（不冷却凭证，只留痕）
     "client_disconnect", "credential_unavailable",
     "account_restricted",
-    "invalid_request", "model_not_found", "no_healthy_credential",
+    "invalid_request", "service_paused", "model_not_found", "no_healthy_credential",
     "model_unavailable", "context_overflow", "model_capability",
     "rate_limit", "upstream_error", "upstream_protocol", "upstream_timeout",
     "network_error",

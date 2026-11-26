@@ -7,7 +7,8 @@ from src.api.deps import ServicePaused as ExportedServicePaused
 from src.api.streaming import respond_with_stream_start
 from src.compat.openai.errors import ServicePaused
 from src.compat.openai.request import ChatRequest, InvalidRequest
-from src.engine.executor import Executor
+from src.engine.executor import Executor, _classify, _failure_type
+from src.provider.base import ErrKind
 
 
 def source(error, *, emitted=False, gate=None):
@@ -89,3 +90,16 @@ async def test_local_rejection_after_header_grace_stays_standard_error_frame(mon
 
 def test_legacy_service_paused_import_is_the_shared_class():
     assert ExportedServicePaused is ServicePaused
+
+
+@pytest.mark.parametrize("kind", [None, ErrKind.SOFT])
+@pytest.mark.parametrize("error,expected", [
+    (ServicePaused(), "service_paused"), (InvalidRequest("invalid"), "invalid_request"),
+])
+def test_local_failure_stats_override_upstream_kind_without_reclassifying(error, expected, kind):
+    assert _classify(error) is None
+    assert _failure_type(kind, error) == expected
+
+
+def test_unknown_failure_stats_keep_existing_upstream_fallback():
+    assert _failure_type(None, RuntimeError("unexpected")) == "upstream_protocol"

@@ -1560,8 +1560,8 @@ class Executor:
                     kind = await self._credit_if_exhausted(
                         _classify(error), credential_id, provider_id)
                     if kind is None:
-                        # 未归类的逃逸异常：`stream_guarded` 会把它兜成 500
-                        # internal_error。必须先留一行明细（已出帧时上游可能已真实
+                        # 未知故障由 `stream_guarded` 兜成 internal_error；本地暂停/
+                        # 请求拒绝使用受控错误类型。先留一行明细（已出帧时可能已真实
                         # 计费）再原样上抛——不冷却凭证（无从判断是谁的问题）。
                         # 已由 DEAD/RESTRICTED 尝试行覆盖本请求且未出帧时不重复
                         # 记账，避免 `requests` 虚高（与下面收尾行同一口径）。
@@ -3002,8 +3002,8 @@ class Executor:
                                      state: _StreamState | None = None) -> None:
         """未归类异常（`_classify` 返回 None）的**留痕**行。
 
-        这类异常会一路逃到 `stream_guarded` 变成 500 `internal_error`：无法
-        判断是账号 / 上游 / 本机哪一侧的问题，所以**不冷却凭证**（惩罚一个
+        未知故障在 `stream_guarded` 中成为 `internal_error`；本地暂停和请求拒绝
+        则使用各自受控类型。无法归类的故障不应猜测责任方，所以**不冷却凭证**（惩罚一个
         完全健康的号只会把一次上游抖动放大成整池不可用）；但也绝不能不留
         记录——归因面板看不到，已出帧的 token（上游可能已真实计费）全部漏记。
         字段口径与 `_record_success` / 收尾行保持一致。
@@ -3012,8 +3012,7 @@ class Executor:
         self._deps.record(
             username=username, provider=provider_id, credential_id=credential_id,
             model=model, ok=False,
-            # kind 为 None 时 `_failure_type` 落到受控兜底值 `upstream_protocol`
-            # （与「上游响应不符合协议」同一归因口径）。
+            # 本地暂停/无效请求先按异常类型归类；只有未知故障兜底 upstream_protocol。
             error_type=_failure_type(None, error),
             input_tokens=_usage_field(usage, "input_tokens"),
             output_tokens=_usage_field(usage, "output_tokens"),
@@ -3545,6 +3544,10 @@ def _failure_type(kind: ErrKind | None, error: Exception | None = None, *,
     睡眠唤醒后六渠道同时 ENOTFOUND，面板全显示「上游超时」）。传输异常随后
     在 SOFT 之前兜住：`upstream_timeout` 而不是 `rate_limit`。
     """
+    if isinstance(error, ServicePaused):
+        return "service_paused"
+    if isinstance(error, InvalidRequest):
+        return "invalid_request"
     if _is_network_error(error):
         return "network_error"
     if _is_transport_error(error):
