@@ -28,7 +28,7 @@ class GitHubSource:
 
     @staticmethod
     def _read(url: str) -> bytes:
-        request = Request(url, headers={"User-Agent": "2apis-updater/0.1.1",
+        request = Request(url, headers={"User-Agent": "2apis-updater/0.1.2",
                                        "Accept": "application/vnd.github+json"})
         with urlopen(request, timeout=30) as response:  # nosec B310 - 固定 https GitHub 地址
             return response.read(4 * 1024 * 1024)

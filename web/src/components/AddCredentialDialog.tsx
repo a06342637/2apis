@@ -528,7 +528,11 @@ export function AddCredentialDialog({
                 onClick={() => {
                   setImportProvider("miora");
                   setManualProvider("miora");
-                  setRaw((current) => current.trim() === "" ? IMPORT_TEMPLATES.miora ?? "" : current);
+                  setRaw((current) =>
+                    current.trim() === "" || current === IMPORT_TEMPLATES[importProvider]
+                      ? IMPORT_TEMPLATES.miora ?? ""
+                      : current,
+                  );
                   setTab("import");
                 }}
               >

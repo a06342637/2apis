@@ -984,6 +984,12 @@ class CredentialRepository:
             "SELECT provider FROM credentials WHERE id = ?", (credential_id,)).fetchone()
         return row["provider"] if row else None
 
+    def maintenance_allowed(self, credential_id: str) -> bool:
+        """存在且未硬禁用才允许维护；API软暂停/冷却不停止登录票据维护。"""
+        row = self._db.connect().execute(
+            "SELECT disabled FROM credentials WHERE id = ?", (credential_id,)).fetchone()
+        return row is not None and not bool(row["disabled"])
+
     def has_same_credential(self, provider: str, credential_data: dict[str, Any]) -> bool:
         """同渠道是否已有内容完全相同的凭证（批量导入去重用）。
 

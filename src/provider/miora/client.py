@@ -38,7 +38,7 @@ from ..base import (
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
 from .acp import AcpConnection, AcpHTTPError
-from .credential import MioraCredential
+from .credential import MioraCredential, jwt_subject
 from .events import classify_status, parse_update
 from .live import CredentialReader, current_credential
 from .tools import MioraToolRequestError, parse_response, prepare_prompt
@@ -359,7 +359,12 @@ class MioraClient(LazyClients):
             raise UpstreamProtocolViolation("Miora 刷新响应缺少 refresh_token")
         old = credential.to_dict()
         old.pop("expires_at", None)
-        return MioraCredential.from_dict({**old, **data}).to_dict()
+        refreshed = MioraCredential.from_dict({**old, **data})
+        # access/refresh票来自不同账号时，上游可能为刷新票签发另一身份；不能换号落库。
+        # 只核对新access token自己的sub，不能借merged里的旧uid证明新票身份。
+        if credential.uid and jwt_subject(refreshed.access_token) != credential.uid:
+            raise UpstreamReloginRequired("Miora 刷新票据与当前账号身份不一致，需重新登录")
+        return refreshed.to_dict()
 
     async def stream_chat(self, credential: MioraCredential, payload: dict,
                           model: str) -> AsyncIterator[Event]:
@@ -378,6 +383,10 @@ class MioraClient(LazyClients):
                 current = current_credential(credential, self.reload_credential)
                 if current.project_id != credential.project_id:
                     raise InvalidModelName("Miora project changed while this request was queued")
+                # 等锁期间后台目录可能更新映射或移除模型，不能沿用旧 model/tier。
+                selected = account.selections.get(model)
+                if selected is None:
+                    raise InvalidModelName("Miora 模型目录已更新，不再提供指定模型")
                 async with aclosing(self._stream_session(
                         current, account, payload, prompt, selected)) as stream:
                     async for event in stream:
