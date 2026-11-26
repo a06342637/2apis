@@ -1,12 +1,14 @@
-import { Fragment } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ProviderGroup } from "../../lib/credentialList";
+import type { Credential, CredentialGroup } from "../../api/types";
 import { rateSummary } from "../../components/ModelPicker";
 import type { ProviderModel } from "../../components/ModelPicker";
 import { Table, TableBody, TableCell, TableRow } from "../../ui";
 import type { Actions, CheckinLogState, CreditEventsState } from "./actions";
 import { CreditDrawer, CheckinLogDrawer } from "./drawers";
-import { CredentialGroupHeader } from "./groupHeader";
+import { CredentialAccountGroupHeader, CredentialGroupHeader } from "./groupHeader";
+import { accountSections } from "./accountSections";
 import { supportsGrowth } from "./helpers";
 import { ColumnHeaderRow, Row } from "./row";
 
@@ -18,6 +20,8 @@ import { ColumnHeaderRow, Row } from "./row";
  */
 export function CredentialTable({
   groups,
+  accountGroups,
+  filterKey = "",
   expanded,
   canWrite,
   selected,
@@ -42,6 +46,8 @@ export function CredentialTable({
   groupAction,
 }: {
   groups: ProviderGroup[];
+  accountGroups?: CredentialGroup[];
+  filterKey?: string;
   expanded: Set<string>;
   canWrite: boolean;
   selected: Set<string>;
@@ -65,6 +71,42 @@ export function CredentialTable({
   toggle: (columnKey: string) => void;
   groupAction?: (group: ProviderGroup) => ReactNode;
 }) {
+  const [collapsedAccounts, setCollapsedAccounts] = useState<Set<string>>(new Set());
+  // 新筛选展开二级组，避免匹配到账号却被上一次的折叠藏住；轮询/排序保留折叠。
+  useEffect(() => { setCollapsedAccounts(new Set()); }, [filterKey]);
+  const toggleAccounts = (key: string) => setCollapsedAccounts((previous) => {
+    const next = new Set(previous);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    return next;
+  });
+  const renderRows = (group: ProviderGroup, items: Credential[], grouped = false) => items.map((credential) => (
+    <Fragment key={credential.id}>
+      <Row credential={credential} ledger={group.ledger} now={now} expiryWindow={expiryWindow}
+        expirySecondaryWindow={expirySecondaryWindow} tokenWarning={tokenWarning} canWrite={canWrite}
+        showGrowth={supportsGrowth(group.provider)} busy={busy} selected={selected.has(credential.id)} grouped={grouped}
+        onSelect={toggleSelected} confirming={confirmDelete === credential.id}
+        creditsOpen={creditEvents?.credentialId === credential.id && creditEvents.ledger === group.ledger}
+        onConfirmDelete={setConfirmDelete} actions={actions} />
+      {creditEvents?.credentialId === credential.id && creditEvents.ledger === group.ledger && (
+        <TableRow data-testid={`credit-row-${credential.id}`}>
+          <TableCell colSpan={canWrite ? 7 : 5} className="p-0">
+            <CreditDrawer credentialId={credential.id} ledger={creditEvents.ledger} events={creditEvents.events}
+              sort={creditEvents.sort} order={creditEvents.order} onSort={sortCredits}
+              onClose={() => actions.credits(credential, creditEvents.ledger)} />
+          </TableCell>
+        </TableRow>
+      )}
+      {checkinLog?.credentialId === credential.id && (
+        <TableRow data-testid={`checkin-row-${credential.id}`}>
+          <TableCell colSpan={canWrite ? 7 : 5} className="p-0">
+            <CheckinLogDrawer credentialId={credential.id} events={checkinLog.events}
+              onClose={() => actions.checkinLog(credential)} />
+          </TableCell>
+        </TableRow>
+      )}
+    </Fragment>
+  ));
   return (
     // 长列表限高 + 吸顶列头：列头随每个展开的渠道组渲染（见 ColumnHeaderRow），
     // 滚到第 20 行时列名与操作按钮还在，不必回顶确认「这一列到底是什么」。
@@ -85,7 +127,7 @@ export function CredentialTable({
           // （canWrite）时出现，与 ColumnHeaderRow / Row 的渲染条件严格一致。
           // canWrite：选择 + 凭证 + 状态 + 额度 + token + 成长 + 操作 = 7；
           // viewer：去掉选择与操作两列 = 5。
-          const columnCount = canWrite ? 7 : 5;
+          const sections = accountSections(group, accountGroups);
           // 本组是否已全选：决定组头 checkbox 的勾选态。用 group.items
           // （组内全部行）而不是 filtered，因为组头「全选本渠道」的语义
           // 就是这一渠道下的所有账号。
@@ -99,7 +141,7 @@ export function CredentialTable({
           // 而最低倍率正是「这渠道值不值得优先用」的答案。免费额度
           // （rate 0）不参与取最低——渠道里混着 1~2 个免费模型时按字面
           // 取最小会显示「最低 免」，读起来像整个渠道免费。
-          const rateText = rateSummary(groupModels);
+          const rateText = rateSummary(groupModels.filter((model) => !model.access || model.access.available === true));
           // 额度合计的进度条：剩余 / 总量（免费层两者皆 null，不出条）
           const quotaPct =
             group.remaining !== null && group.total !== null && group.total > 0
@@ -132,55 +174,19 @@ export function CredentialTable({
                               order={order}
                               toggle={toggle}
                             />
-                            {group.items.map((credential) => (
-                              <Fragment key={credential.id}>
-                                <Row
-                                  credential={credential}
-                                  ledger={group.ledger}
-                                  now={now}
-                                  expiryWindow={expiryWindow}
-                                  expirySecondaryWindow={expirySecondaryWindow}
-                                  tokenWarning={tokenWarning}
-                                  canWrite={canWrite}
-                                  showGrowth={showGrowth}
-                                  busy={busy}
-                                  selected={selected.has(credential.id)}
-                                  onSelect={toggleSelected}
-                                  confirming={confirmDelete === credential.id}
-                                  creditsOpen={creditEvents?.credentialId === credential.id
-                                    && creditEvents.ledger === group.ledger}
-                                  onConfirmDelete={setConfirmDelete}
-                                  actions={actions}
-                                />
-                                {/* 抽屉由调用方渲染成**独立的下一行**（见 TableBody）。 */}
-                                {creditEvents?.credentialId === credential.id
-                                  && creditEvents.ledger === group.ledger && (
-                                  <TableRow data-testid={`credit-row-${credential.id}`}>
-                                    <TableCell colSpan={columnCount} className="p-0">
-                                      <CreditDrawer
-                                        credentialId={credential.id}
-                                        ledger={creditEvents.ledger}
-                                        events={creditEvents.events}
-                                        sort={creditEvents.sort}
-                                        order={creditEvents.order}
-                                        onSort={sortCredits}
-                                        onClose={() => actions.credits(credential, creditEvents.ledger)}
-                                      />
+                            {sections === null ? renderRows(group, group.items) : sections.map((section) => (
+                              <Fragment key={section.key}>
+                                <CredentialAccountGroupHeader section={section} providerLabel={group.label}
+                                  collapsed={collapsedAccounts.has(section.key)} canWrite={canWrite} busy={busy}
+                                  selected={selected} onToggle={() => toggleAccounts(section.key)} onSelect={toggleGroupSelected} />
+                                {!collapsedAccounts.has(section.key) && (section.items.length > 0
+                                  ? renderRows(group, section.items, section.groupId !== undefined)
+                                  : <TableRow data-testid={`account-group-empty-${section.key}`}>
+                                    <TableCell colSpan={canWrite ? 7 : 5} className="pl-12 text-xs text-muted-foreground">
+                                      {!section.membershipKnown ? "当前账号只能查看组名与成员数量。"
+                                        : section.memberCount === 0 ? "此分组暂无账号。" : "当前筛选条件下没有匹配账号。"}
                                     </TableCell>
-                                  </TableRow>
-                                )}
-                                {/* 签到记录抽屉：与流水同为「独立下一行」，一次只开一个。 */}
-                                {checkinLog?.credentialId === credential.id && (
-                                  <TableRow data-testid={`checkin-row-${credential.id}`}>
-                                    <TableCell colSpan={columnCount} className="p-0">
-                                      <CheckinLogDrawer
-                                        credentialId={credential.id}
-                                        events={checkinLog.events}
-                                        onClose={() => actions.checkinLog(credential)}
-                                      />
-                                    </TableCell>
-                                  </TableRow>
-                                )}
+                                  </TableRow>)}
                               </Fragment>
                             ))}
                           </>

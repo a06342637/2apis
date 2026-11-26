@@ -26,13 +26,13 @@ export function CredentialLoginLink({ provider, cancelRegistry, disabled, onNoti
             readOnly placeholder="点击获取登录链接" />
         </Field>
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" disabled={busy || !row.authUrl || !row.state}
+          <Button type="button" size="sm" disabled={busy || !row.authUrl || !row.state}
             data-testid={`${prefix}-copy`} onClick={() => void copy()}>复制链接</Button>
-          <Button size="sm" disabled={busy} data-testid={`${prefix}-refresh`}
+          <Button type="button" size="sm" disabled={busy} data-testid={`${prefix}-refresh`}
             onClick={() => void refresh()}>{row.loading ? "获取中…" : row.authUrl ? "刷新链接" : "获取链接"}</Button>
-          {provider === "officeace" && <Button size="sm" disabled={busy}
+          {provider === "officeace" && <Button type="button" size="sm" disabled={busy}
             data-testid={`${prefix}-switch`} onClick={() => void refresh(true)}>换账号刷新</Button>}
-          {row.state && <Button size="sm" variant="ghost" data-testid={`${prefix}-cancel`}
+          {row.state && <Button type="button" size="sm" variant="ghost" data-testid={`${prefix}-cancel`}
             onClick={() => void cancel()}>取消链接登录</Button>}
         </div>
         <Field label={`${PROVIDER_LABEL[provider]} 回调链接`} htmlFor={`${prefix}-callback`}
@@ -43,7 +43,7 @@ export function CredentialLoginLink({ provider, cancelRegistry, disabled, onNoti
             placeholder={provider === "codearts"
               ? "http://127.0.0.1:12800/oauth/callback?code=…&state=…" : "完整授权回调链接"} />
         </Field>
-        <Button size="sm" variant="primary" disabled={busy || !row.state
+        <Button type="button" size="sm" variant="primary" disabled={busy || !row.state
           || (row.flow !== "poll" && !row.callback.trim())} data-testid={`${prefix}-complete`}
           onClick={() => void complete()}>{row.completing ? "完成中…" : "完成登录"}</Button>
         {row.hint && <p role="status" data-testid={`${prefix}-hint`}

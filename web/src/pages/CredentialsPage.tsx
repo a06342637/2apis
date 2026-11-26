@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import { useCredentialGroups, useCredentials, usePlaygroundModels, useQueryClient } from "../api/hooks";
+import { useCredentialGroups, useCredentials, useQueryClient } from "../api/hooks";
+import { useDisplayModels } from "../api/modelDisplay";
 import type { Provider } from "../api/types";
-import { PROVIDER_LABEL } from "../api/providers";
+import { PROVIDER_LABEL, providerLabel, providerRank } from "../api/providers";
 import { groupModelsByProvider } from "../components/ModelPicker";
 import { PageHeader } from "../components/PageHeader";
 import { PageSkeleton } from "../components/PageSkeleton";
@@ -35,6 +36,7 @@ import { BatchActionBar, CredentialFilterBar } from "./credentials/filters";
 import type { BatchButton } from "./credentials/helpers";
 import { CredentialTable } from "./credentials/table";
 import { CredentialGroupsDialog } from "./credentials/CredentialGroupsDialog";
+import { withAccountGroupProviders } from "./credentials/accountSections";
 
 /**
  * 凭证管理页：页面主体只负责取数、筛选/展开/选中状态与动作编排。
@@ -51,9 +53,9 @@ export function CredentialsPage() {
   // 时应自动刷新（与 useTasks 同口径）。
   const { data, isLoading, isError, dataUpdatedAt } =
     useCredentials(session.username, 30_000, sort, order);
-  // 组头「模型 N 个」：与 Playground / `/v1/models` 同源（只含有可用凭证且过
-  // 当前黑名单的渠道），因此组里「有凭证」与「有模型」是同一口径，不必另算一套。
-  const modelsQuery = usePlaygroundModels();
+  // 组头使用完整展示目录：含上游明确锁定的模型并标注权限；独立缓存不会把
+  // 这些条目混入 Playground 或客户端的可调用模型选择器。
+  const modelsQuery = useDisplayModels(session.username);
   const client = useQueryClient();
   const accountGroupsQuery = useCredentialGroups(session.username);
   const accountGroups = accountGroupsQuery.isError ? undefined : accountGroupsQuery.data?.groups;
@@ -135,11 +137,24 @@ export function CredentialsPage() {
     // now 每 30s 轮询才变，纳入依赖是为了让「冷却中」筛选在到点后自动收放
     [credentials, filters, now],
   );
-  const groups = useMemo(
-    () => sortGroups(groupByProvider(filtered, now), groupSort),
-    [filtered, now, groupSort],
-  );
-  const providerCounts = useMemo(() => providerOptions(credentials), [credentials]);
+  const groups = useMemo(() => {
+    const occupiedProviders = new Set(credentials.map((credential) => credential.provider));
+    const emptyGroups = (accountGroups ?? []).filter((item) =>
+      !occupiedProviders.has(item.provider)
+      && (filters.provider === ANY || filters.provider === item.provider)
+      && filters.query.trim() === "" && filters.state === ANY && filters.tag === ANY);
+    return sortGroups(withAccountGroupProviders(groupByProvider(filtered, now), emptyGroups), groupSort);
+  }, [filtered, now, groupSort, accountGroups, credentials, filters]);
+  const providerCounts = useMemo(() => {
+    const counts = providerOptions(credentials);
+    const seen = new Set(counts.map((item) => item.value));
+    for (const item of accountGroups ?? []) {
+      if (seen.has(item.provider)) continue;
+      seen.add(item.provider);
+      counts.push({ value: item.provider, label: providerLabel(item.provider), count: 0 });
+    }
+    return counts.sort((left, right) => providerRank(left.value) - providerRank(right.value));
+  }, [credentials, accountGroups]);
   const stateCounts = useMemo(
     () => stateOptions(credentials, now, filters.state),
     [credentials, now, filters.state],
@@ -204,9 +219,13 @@ export function CredentialsPage() {
     setFilters(next);
     if (next.query.trim() !== "" || next.provider !== ANY ||
         next.state !== ANY || next.tag !== ANY) {
-      setExpanded(new Set(groupByProvider(
+      const occupiedProviders = new Set(credentials.map((credential) => credential.provider));
+      const emptyGroups = (accountGroups ?? []).filter((item) => !occupiedProviders.has(item.provider)
+        && (next.provider === ANY || next.provider === item.provider)
+        && next.query.trim() === "" && next.state === ANY && next.tag === ANY);
+      setExpanded(new Set(withAccountGroupProviders(groupByProvider(
         credentials.filter((item) => matchesFilters(item, next, now)), now,
-      ).map((group) => group.key)));
+      ), emptyGroups).map((group) => group.key)));
     } else {
       setExpanded(new Set());
     }
@@ -227,6 +246,7 @@ export function CredentialsPage() {
   const refresh = () => Promise.all([
     client.invalidateQueries({ queryKey: ["admin"] }),
     client.invalidateQueries({ queryKey: ["playground-models"] }),
+    client.invalidateQueries({ queryKey: ["model-display"] }),
   ]);
 
   // 流水抽屉内排序：改排序需重新取数（后端排），并保持方向直觉
@@ -413,7 +433,7 @@ export function CredentialsPage() {
             description="服务暂时不可用或会话已过期，请稍后重试。"
             data-testid="credentials-error-state"
           />
-        ) : credentials.length === 0 ? (
+        ) : credentials.length === 0 && (accountGroups?.length ?? 0) === 0 ? (
           <EmptyState
             icon={<Database className="size-5" />}
             title="还没有凭证"
@@ -451,7 +471,7 @@ export function CredentialsPage() {
               />
             )}
 
-            {filtered.length === 0 ? (
+            {filtered.length === 0 && groups.length === 0 ? (
               <EmptyState
                 icon={<Search className="size-5" />}
                 title="没有匹配的凭证"
@@ -461,6 +481,8 @@ export function CredentialsPage() {
             ) : (
               <CredentialTable
                 groups={groups}
+                accountGroups={accountGroups}
+                filterKey={JSON.stringify(filters)}
                 expanded={expanded}
                 canWrite={canWrite}
                 selected={selected}

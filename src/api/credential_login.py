@@ -14,6 +14,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+from collections.abc import Callable
 from typing import Any
 
 from ..provider.login_identity import login_identities_for
@@ -47,12 +50,16 @@ async def save_login_credential(
         nickname: str,
         added_by: str,
         tags: list[str] | None = None,
+        new_nickname: Callable[[], str] | None = None,
+        merge_identical: bool = False,
 ) -> tuple[str, bool]:
     """登录结果落库，返回 `(credential_id, 是否为合并更新)`。
 
     - 有稳定身份且命中同渠道既有凭证 → 就地更新（解除硬禁用/冷却），保留
       `enabled` / `pinned` / `tags` / `added_by` / `created_at`。
     - 没有身份、没有命中、或命中行在加锁前被删除 → 新增。
+    - `new_nickname` 只在未填写昵称的新增行生成默认名，合并不改旧昵称；
+      `merge_identical` 可按完全一致的内容合并无稳定身份的手工导入凭证。
 
     **查 → 合并 → 新增整段持渠道登录锁**：`find_login_credential` 读库与
     `credentials.add` 写库之间若被并发登录插进来，两边都会查到「没有既有
@@ -62,17 +69,29 @@ async def save_login_credential(
     更新另走凭证级编辑锁：预刷新任务也是「解密 → await 上游 → 整份覆写」，
     不加锁时两边的快照会互相覆盖。
     """
-    target = login_identities_for(provider_id, credential_data)
+    def nickname_for_new() -> str:
+        return nickname or (new_nickname() if new_nickname is not None else "")
+
+    def identity(data):
+        return login_identities_for(provider_id, data)
+    target = identity(credential_data)
+    if not target and merge_identical:
+        # 没有稳定uid时仅合并内容完全一致的凭证，不借邮箱/昵称猜账号身份。
+        def exact_identity(data):
+            encoded = json.dumps(data, sort_keys=True, ensure_ascii=False).encode("utf-8")
+            return frozenset({hashlib.sha256(encoded).hexdigest()})
+        identity = exact_identity
+        target = identity(credential_data)
     if not target:
         # 没有稳定身份 = 不能安全合并，直接新增（不加锁也没人有东西可抢）。
         credential_id = services.credentials.add(
             provider=provider_id, credential_data=credential_data,
-            nickname=nickname, added_by=added_by, tags=tags)
+            nickname=nickname_for_new(), added_by=added_by, tags=tags)
         return credential_id, False
 
     async with _login_lock(provider_id):
         existing_id = services.credentials.find_login_credential(
-            provider_id, lambda data: login_identities_for(provider_id, data), target)
+            provider_id, identity, target)
         if existing_id is not None:
             async with services.credentials.edit_lock(existing_id):
                 if services.credentials.merge_login_credential(
@@ -80,5 +99,5 @@ async def save_login_credential(
                     return existing_id, True
         credential_id = services.credentials.add(
             provider=provider_id, credential_data=credential_data,
-            nickname=nickname, added_by=added_by, tags=tags)
+            nickname=nickname_for_new(), added_by=added_by, tags=tags)
         return credential_id, False

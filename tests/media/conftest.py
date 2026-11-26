@@ -85,7 +85,7 @@ def media_env(tmp_path):
         return SimpleNamespace(id=data["id"], identity=lambda: data["id"])
 
     class Client:
-        async def catalog(self, credential, *, force=False):
+        async def catalog(self, credential, *, force=False, include_unavailable=False):
             state.calls.append(("catalog", get_credential_id(), force))
             if force and state.on_force:
                 state.on_force()

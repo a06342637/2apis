@@ -183,6 +183,17 @@ def _packages_value(text: str | None) -> list[dict[str, Any]] | None:
     return [item for item in items if isinstance(item, dict)]
 
 
+def _quota_detail_value(text: str | None) -> dict[str, Any] | None:
+    """历史空值/坏 JSON 一律为未知，不从无效订阅信息推断套餐。"""
+    if not text:
+        return None
+    try:
+        detail = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    return detail if isinstance(detail, dict) else None
+
+
 # 列表排序白名单：API 键 → 取值函数（`None` 值统一排最后，见 src/sorting.py）。
 # 凭证列含派生字段（quota_expiring_credits 等），故在 Python 侧排序而非 SQL。
 CREDENTIAL_SORT_KEYS: dict[str, Callable[[dict[str, Any]], Any]] = {
@@ -851,12 +862,13 @@ class CredentialRepository:
             conn.execute(
                 "UPDATE credentials SET quota_remaining = ?, quota_total = ?, "
                 "quota_cycle_end = ?, quota_expiry_ladder = ?, quota_packages = ?, "
-                "web_cookie_state = ?, "
+                "web_cookie_state = ?, quota_detail = COALESCE(?, quota_detail), "
                 "quota_probed_at = ?, health = ? "
                 "WHERE id = ?",
                 (quota.remaining, quota.total, quota.cycle_end,
                  _ladder_text(quota.expiry_ladder), _packages_text(quota.packages),
                  quota.web_cookie_state,
+                 json.dumps(quota.detail, ensure_ascii=False) if quota.detail is not None else None,
                  quota.probed_at,
                  health_score(quota), credential_id),
             )
@@ -865,6 +877,11 @@ class CredentialRepository:
                     conn, credential_id, ledger=quota_ledger(previous["provider"]),
                     before=previous["quota_remaining"], after=quota.remaining,
                     probed_at=quota.probed_at, window_start=previous["quota_probed_at"])
+
+    def quota_detail(self, credential_id: str) -> dict[str, Any] | None:
+        row = self._db.connect().execute(
+            "SELECT quota_detail FROM credentials WHERE id = ?", (credential_id,)).fetchone()
+        return _quota_detail_value(row["quota_detail"]) if row is not None else None
 
     @staticmethod
     def _record_credit_event(conn, credential_id: str, *, ledger: str, before, after,
@@ -1135,7 +1152,7 @@ class CredentialRepository:
             "health, cooling_until, cooling_kind, err_count, quota_remaining, "
             "quota_total, quota_cycle_end, "
             "quota_probed_at, growth_last_run_at, growth_last_result, created_at, added_by, "
-            "quota_expiry_ladder, quota_packages, data_enc, "
+            "quota_expiry_ladder, quota_packages, quota_detail, data_enc, "
             "web_cookie_state, routing_weight, login_secret, "
             "token_expires_at, token_issued_at, "
             # 编辑版本号 + 账号级模型白名单：管理台编辑对话框据此带
@@ -1169,6 +1186,7 @@ class CredentialRepository:
             ladder = _ladder_value(row["quota_expiry_ladder"])
             rec["quota_expiry_ladder"] = ladder
             rec["quota_packages"] = _packages_value(row["quota_packages"])
+            rec["quota_detail"] = _quota_detail_value(row["quota_detail"])
             # 标签以列表下发（库里是逗号分隔文本）：展示层不必知道存储形态，
             # 脏数据由 tags_value 读路径容错滤掉。
             rec["tags"] = tags_value(row["tags"])

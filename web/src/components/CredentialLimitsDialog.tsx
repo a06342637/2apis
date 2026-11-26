@@ -183,6 +183,11 @@ export function CredentialLimitsDialog({
           >
             <textarea
               id="limits-per-model-input"
+              name="credential-model-token-limits"
+              autoComplete="off"
+              data-lpignore="true"
+              data-1p-ignore="true"
+              data-bwignore="true"
               rows={3}
               value={perModel}
               data-testid="limits-per-model"

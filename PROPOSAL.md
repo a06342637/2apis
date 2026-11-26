@@ -1,5 +1,17 @@
 # Coding2API 设计文档
 
+## 2apis v0.1.4：目录权限与管理界面
+
+- 模型弹层独立支持 hover 预览与点击固定，整层按 Radix available-height/width 和视口限高，内容与官网详情共同滚动；保留 Escape、外点关闭和焦点恢复。
+- Key 表格合并为五组信息，保留完整策略、用量、时间与操作；二级账号组仅改变显示位置，成员选择使用同一 Set，未归组和空组可见，viewer 不推断未下发的成员。
+- 普通输入使用 autocomplete=off、稳定独立 name 与密码管理器忽略提示；搜索为 search 类型，凭证/JSON 表单隔离，显式登录语义不变。Miora 代码块使用现有 Clipboard API/fallback，并反馈复制结果。
+- Model 增加 required_account_tier/account_available/account_unavailable_reason 元数据。完整展示目录与可路由账号目录缓存分离，明确 false 不进入执行缓存；混合池显示可用性取当前允许账号的并集，每个 Key 实际选号仍按其 CID 目录判断。
+- 完整目录由已认证的 Playground include_unavailable 展示模式提供，不扩展 /v1 的默认客户端目录；public media catalog 的最低套餐证据有界缓存，仅补套餐标识，不能覆盖已认证账号的 available/reason。无效 payload 先纯校验，避免提前准备 ACP 项目。
+- schema 43 幂等补 `credentials.quota_detail`，`Quota.detail` 附加匿名化套餐状态；只保存 tier/status/vip/expiry/probe 时间，不保存上游原始账户体。旧余额调用的 detail=None 保留已有信息，明确探测失败则写 unknown，成功余额不会因套餐接口失败丢失。
+- Miora 订阅只作展示与目录失效依据，不授予模型权限；普通账号可使用无需 VIP 的模型并可能扣积分。账号和提供方目录签名包含稳定套餐字段与有效期边界，不含 probed_at，套餐变化或到期仅刷新受影响账号目录。二级分组勾选靠前，成员选择缩进并保持全页同一选择集合。
+- 限额数字先检查有限性与 SQLite 整数范围；白名单类型严格 text/null，版本/策略/限额在同一数据库事务提交，失败回滚，坏 JSON 仅跳过无法解析的条目。
+- 批量凭证支持 JSON 数组/JSONL/相邻对象、独立 Cookie 或完整 JWT/Bearer，邮箱前缀与上行邮箱只绑定明确的一条凭证，截断 JWT 不拼接跨账号票据。Miora 新账号昵称工厂按北京时间和新增无名账号序号惰性调用，旧账号重登不应用自动名；显式邮箱可改名。批量预览有视口限高且输入仍可手动编辑。
+
 ## 2apis v0.1.3：系统审查
 
 - 华为云系到期时间必须先检查非有限值再转整数，缺失/非法到期元数据仍按未知处理；单条与批量导入共用同一归一规则。

@@ -26,7 +26,7 @@ from .endpoints import (
     estimated_tokens,
     quota_exceeded_response,
 )
-from .models import serve_models
+from .models import serve_display_models, serve_models
 from .streaming import with_keepalive
 
 
@@ -48,6 +48,7 @@ def create_router(services: Services) -> APIRouter:
 
     @router.get("/api/playground/models")
     async def playground_list_models(request: Request,
+                                     include_unavailable: bool = False,
                                      principal=Depends(principal_from_request)):
         # 管理台入口用 stale-while-revalidate：先回缓存的旧列表，过期渠道后台刷，
         # 不把 zen 探活的十几秒压在打开页面上。request 用于把能力分表
@@ -58,6 +59,9 @@ def create_router(services: Services) -> APIRouter:
         # 仍能枚举全池模型——调用侧虽然会拦，但模型名本身就是信息。
         # 取不到策略行按「不限制」放行，与调用侧的宽容读路径一致。
         policy = services.user_repo.get(principal.username) or {}
+        if include_unavailable:
+            return await serve_display_models(
+                services, request, str(policy.get("allowed_models") or ""))
         return await serve_models(
             services, request=request,
             user_allowed_models=str(policy.get("allowed_models") or ""))

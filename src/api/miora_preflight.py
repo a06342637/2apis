@@ -25,6 +25,23 @@ def _scoped_rows(services: Services, principal: ApiKeyPrincipal, tables):
     return [row for row in rows if row.credential_id in tables]
 
 
+def miora_account_scope(services: Services, request: ChatRequest, binding: str) -> tuple[str, ...]:
+    """明确走 Miora 的全池请求也逐账号校验目录，不能用池的权限并集选号。"""
+    target = resolve(request.model, services.settings.default_model)
+    if binding and binding != "miora":
+        return ()
+    if target.forced and target.providers != ("miora",):
+        return ()
+    providers = {provider for provider, aliases in services.model_aliases.items()
+                 if target.model.lower() in aliases}
+    if not providers:
+        providers = {row.provider for row in services.credentials.candidates(selectable_only=True)}
+    if binding != "miora" and not target.forced and providers != {"miora"}:
+        return ()
+    return tuple(row.credential_id for row in services.credentials.candidates(
+        ["miora"], selectable_only=True))
+
+
 async def preflight_miora(
     services: Services,
     request: ChatRequest,
@@ -32,6 +49,7 @@ async def preflight_miora(
     *,
     account_tables: dict[str, dict[str, Model]] | None = None,
     provider_binding: str | None = None,
+    validate_only: bool = False,
 ) -> None:
     """只读取已加载的可信目录；空表、缺表和自动模型保留原执行路径。"""
     target = resolve(request.model, services.settings.default_model)
@@ -56,6 +74,8 @@ async def preflight_miora(
             builtin_options(marker)
     except ValueError as error:
         raise InvalidRequest(str(error)) from error
+    if validate_only:
+        return
     if (request.model is None or not request.model.strip()
             or request.model.strip().lower() == "auto"):
         return

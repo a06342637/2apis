@@ -141,6 +141,23 @@ async def clients():
         yield api, MioraMediaClient(client), MioraCredential("test", uid="user")
 
 
+async def test_full_display_catalog_cannot_submit_locked_models(clients):
+    api, client, credential = clients
+    api.catalogue = {
+        "data": [
+            row(),
+            row("video", available=False, requiredTier="standard", unavailableReason="tier_locked"),
+        ]
+    }
+    displayed = await client.catalog(credential, include_unavailable=True)
+    assert [model.id for model in displayed] == ["image", "video"]
+    assert displayed[1].account_available is False
+    assert [model.id for model in await client.catalog(credential)] == ["image"]
+    with pytest.raises(MioraMediaRequestError):
+        await client.submit(credential, "video", "video", "A cup")
+    assert all(call[1] == MEDIA_CATALOG_API for call in api.calls)
+
+
 @pytest.mark.parametrize("data", [None, [], {}, {"data": {}}])
 def test_catalog_rejects_invalid_envelope(data):
     with pytest.raises(UpstreamProtocolViolation):

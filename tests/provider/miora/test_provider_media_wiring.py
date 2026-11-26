@@ -68,7 +68,7 @@ async def test_media_source_hook_reports_partial_directory_and_recovers(monkeypa
     provider = MioraProvider(client=Client())
     assert provider.model_list_source() == (False, "")
 
-    async def failed(credential):
+    async def failed(credential, *, include_unavailable=False):
         raise MioraHTTPError(503, b"temporary directory failure")
 
     monkeypatch.setattr(provider.media_client, "catalog", failed)
@@ -76,7 +76,7 @@ async def test_media_source_hook_reports_partial_directory_and_recovers(monkeypa
     degraded, reason = provider.model_list_source()
     assert degraded and "保留文本" in reason
 
-    async def recovered(credential):
+    async def recovered(credential, *, include_unavailable=False):
         return [Model(id="image", gateway_endpoints=("/v1/images/generations",))]
 
     monkeypatch.setattr(provider.media_client, "catalog", recovered)

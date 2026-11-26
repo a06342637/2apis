@@ -233,7 +233,7 @@ def miora_media_catalog_offline(monkeypatch, request):
         return
     from src.provider.miora.media import MioraMediaClient
 
-    async def fake_catalog(self, credential, *, force=False):
+    async def fake_catalog(self, credential, *, force=False, include_unavailable=False):
         return []
 
     monkeypatch.setattr(MioraMediaClient, "catalog", fake_catalog)

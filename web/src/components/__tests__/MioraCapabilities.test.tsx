@@ -1,10 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelInfo } from "../../api/types";
 import type { ProviderGroup } from "../../lib/credentialList";
 import { CredentialGroupHeader } from "../../pages/credentials/groupHeader";
 import { ModelPicker, groupModelsByProvider, modelValue, pickDefaultModel } from "../ModelPicker";
+import { stubPopupGeometry } from "@/test-utils/popupGeometry";
 
 const models: ModelInfo[] = [
   { id: "hy4flash", name: "Hy4 Flash 标准路由", object: "model", owned_by: "2apis", providers: ["miora"] },
@@ -13,7 +14,9 @@ const models: ModelInfo[] = [
 ];
 
 describe("Miora 模型用途", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("凭证池弹层每项都有用途，并列出已接出的生成接口", async () => {
+    stubPopupGeometry("group-miora-model-count");
     const group: ProviderGroup = {
       key: "miora", provider: "miora", label: "Miora", ledger: "credits",
       items: [], states: {}, remaining: 75, total: 100, expiring: null,
@@ -51,6 +54,7 @@ describe("Miora 模型用途", () => {
   });
 
   it("真实媒体条目按端点分组，目录中的未接入条目不误标可调用", async () => {
+    stubPopupGeometry("group-miora-model-count");
     const extended: ModelInfo[] = [...models,
       { id: "gem-3.1", name: "Nano Banana 2", object: "model", owned_by: "2apis", providers: ["miora"],
         gateway_endpoints: ["/v1/images/generations"], output_modalities: ["image"] },
@@ -69,7 +73,7 @@ describe("Miora 模型用途", () => {
     await userEvent.hover(screen.getByTestId("group-miora-model-count"));
     const popover = await screen.findByTestId("group-miora-models");
     expect(within(popover).getAllByTestId("miora-model-section").map(node => node.textContent)).toEqual([
-      "文本/代码 · 可调用", "图片生成 · 可调用", "视频生成 · 可调用", "目录模型 · 未接入",
+      "文本/代码", "图片生成", "视频生成", "目录模型",
     ]);
     const rows = within(popover).getAllByTestId("group-miora-model");
     expect(rows).toHaveLength(6);

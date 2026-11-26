@@ -143,8 +143,12 @@ class Services:
     # executor 也持有**同一引用**（ExecutorDeps.model_list_cache）：聊天路径的
     # 倍率查询（免费优先调度档）从这里读 credit_rate，目录刷新后立即可见。
     model_list_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Miora 账号集合/订阅权限的上次尝试版本；不包括每轮探测时间，避免无效重拉。
+    model_list_account_versions: dict[str, tuple] = field(default_factory=dict)
     # 绑定 Key 的按账号目录缓存；策略过滤在每次响应现算，不混入渠道共享目录。
     credential_model_cache: dict[str, tuple[float, dict[str, Any]]] = field(default_factory=dict)
+    # 完整账号目录只供管理台展示，不能交给执行器；与可用目录共用版本与 LRU。
+    credential_model_display_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 仅内部保存凭证指纹；登录轮转后目录缓存立即失效，不记录或回显该值。
     credential_model_versions: dict[str, str] = field(default_factory=dict)
     # 上次**尝试**拉取时间（monotonic，成功或失败都刷新）：TTL 内的请求不再打

@@ -2352,7 +2352,9 @@
         },
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "seedance-2.5",
@@ -2452,7 +2454,9 @@
         ],
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": true
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "kling-video-v4",
@@ -2572,7 +2576,9 @@
         },
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "seedance-2.0-fast",
@@ -2656,7 +2662,9 @@
         ],
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": true
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "wan-3.0",
@@ -2721,7 +2729,9 @@
         },
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "seedance-2.0",
@@ -2806,7 +2816,9 @@
         ],
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": true
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "kling-3.0-video",
@@ -2848,7 +2860,9 @@
         "supportsAspectRatioWithFrames": true,
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "hailuo-2.3-video",
@@ -2891,7 +2905,9 @@
         "supportsAspectRatioWithFrames": true,
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     },
     {
       "modelId": "vidu-q2-pro-video",
@@ -2977,7 +2993,9 @@
         "supportsAspectRatioWithFrames": true,
         "supportsCharacterAsset": false,
         "hasDurationTierRestriction": false
-      }
+      },
+      "requiredTier": "standard",
+      "unavailableReason": "tier_locked"
     }
   ]
 }

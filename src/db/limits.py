@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from ..engine.limits import CredentialLimits, Usage
@@ -31,7 +33,7 @@ def _per_model_value(text: Any) -> dict[str, int]:
         return {}
     try:
         items = json.loads(text)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return {}
     if not isinstance(items, dict):
         return {}
@@ -39,7 +41,7 @@ def _per_model_value(text: Any) -> dict[str, int]:
     for model, cap in items.items():
         try:
             out[str(model)] = int(cap)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
     return out
 
@@ -61,6 +63,12 @@ class LimitsRepository:
 
     def __init__(self, db) -> None:
         self._db = db
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        """凭证编辑和限额共享同一数据库时，整体提交或回滚关联的仓储写入。"""
+        with self._db.transaction():
+            yield
 
     def get(self, credential_id: str) -> CredentialLimits | None:
         row = self._db.connect().execute(

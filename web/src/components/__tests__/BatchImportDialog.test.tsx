@@ -152,4 +152,83 @@ describe("BatchImportDialog", () => {
     await userEvent.click(screen.getByTestId("batch-cancel"));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("混合粘贴分别预览邮箱并提交每个账号自己的刷新票", async () => {
+    const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({
+      created: [{ index: 0, id: "new", tos: { level: "green", reason: "", basis: "" } }],
+      skipped: [], failed: [],
+    });
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: [
+      "one@example.com", JSON.stringify({ authToken: "synthetic-one", refreshToken: "r1" }, null, 2),
+      "two@example.com Cookie: authToken=synthetic-two; refreshToken=r2",
+      "synthetic-third-account",
+    ].join("\r\n") } });
+    expect(screen.getByTestId("batch-preview")).toHaveTextContent("one@example.com");
+    expect(screen.getByTestId("batch-preview")).toHaveTextContent("two@example.com");
+    expect(screen.getByTestId("batch-preview")).toHaveTextContent("新增时自动编号");
+    await userEvent.click(screen.getByTestId("batch-submit"));
+    expect(spy).toHaveBeenCalledWith([
+      expect.objectContaining({ provider: "miora", nickname: "one@example.com",
+        credential: expect.objectContaining({ authToken: "synthetic-one", refreshToken: "r1" }) }),
+      expect.objectContaining({ provider: "miora", nickname: "two@example.com",
+        credential: expect.objectContaining({ authToken: "synthetic-two", refreshToken: "r2" }) }),
+      expect.objectContaining({ provider: "miora", nickname: "",
+        credential: expect.objectContaining({ authToken: "synthetic-third-account" }) }),
+    ]);
+  });
+
+  it("服务器失败项和本地坏记录一起保留，成功项不会重新提交", async () => {
+    const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({
+      created: [{ index: 0, id: "new", tos: { level: "green", reason: "", basis: "" } }],
+      skipped: [], failed: [{ index: 1, reason: "synthetic upstream failure" }],
+    });
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: [
+      "synthetic-success", "retry@example.com synthetic-retry-account", '{"refreshToken":"refresh-only"}',
+    ].join("\n") } });
+    await userEvent.click(screen.getByTestId("batch-submit"));
+    await waitFor(() => expect(screen.getByTestId("batch-text")).toHaveValue(
+      JSON.stringify(spy.mock.calls[0][0][1]) + '\n{"refreshToken":"refresh-only"}',
+    ));
+    expect(screen.getByTestId("batch-count")).toHaveTextContent("识别 1 条，1 行有问题");
+    spy.mockResolvedValue({ created: [], skipped: [{ index: 0, reason: "duplicate" }], failed: [] });
+    await userEvent.click(screen.getByTestId("batch-submit"));
+    expect(spy.mock.calls[1][0]).toEqual([spy.mock.calls[0][0][1]]);
+  });
+
+  it("可切换原始票据默认渠道，明确JSON渠道仍优先", () => {
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value:
+      'synthetic-opaque\n{"authToken":"synthetic-miora"}' } });
+    fireEvent.change(screen.getByTestId("batch-provider"), { target: { value: "codebuddy" } });
+    expect(parseBatchText((screen.getByTestId("batch-text") as HTMLTextAreaElement).value,
+      "codebuddy").entries.map((row) => row.provider)).toEqual(["codebuddy", "miora"]);
+    expect(screen.getByTestId("batch-count")).toHaveTextContent("识别 2 条");
+  });
+
+  it("超过100条禁用提交，回到100条可提交", () => {
+    renderDialog();
+    const text = Array.from({ length: 101 }, (_, index) => "synthetic-account-" + index);
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: text.join("\n") } });
+    expect(screen.getByTestId("batch-submit")).toBeDisabled();
+    expect(screen.getByText("一次最多导入 100 条，请分批粘贴。")).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: text.slice(0, 100).join("\n") } });
+    expect(screen.getByTestId("batch-submit")).not.toBeDisabled();
+  });
+
+  it("提交期间禁用编辑和文件入口，完成后恢复", async () => {
+    let finish!: (result: { created: []; skipped: []; failed: [] }) => void;
+    vi.spyOn(api, "batchImportCredentials").mockImplementation(() => new Promise((resolve) => {
+      finish = resolve;
+    }));
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: "synthetic-account" } });
+    await userEvent.click(screen.getByTestId("batch-submit"));
+    for (const id of ["batch-text", "batch-provider", "batch-pick-file", "batch-cancel"]) {
+      expect(screen.getByTestId(id)).toBeDisabled();
+    }
+    finish({ created: [], skipped: [], failed: [] });
+    await waitFor(() => expect(screen.getByTestId("batch-text")).not.toBeDisabled());
+  });
 });

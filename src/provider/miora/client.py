@@ -37,10 +37,12 @@ from ..base import (
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
+from .access import model_access
 from .acp import AcpConnection, AcpHTTPError
 from .credential import MioraCredential, jwt_subject
 from .events import classify_status, parse_update
 from .live import CredentialReader, current_credential
+from .subscription import subscription_state
 from .tools import MioraToolRequestError, parse_response, prepare_prompt
 
 API = "/api/ai"
@@ -207,10 +209,13 @@ class MioraClient(LazyClients):
 
     async def _request(self, credential: MioraCredential, method: str,
                        path: str, *, body: dict | None = None, params: dict | None = None,
-                       timeout: float | None = None) -> Any:
+                       timeout: float | None = None, anonymous: bool = False) -> Any:
         credential = current_credential(credential, self.reload_credential)
+        headers = self._headers(credential)
+        if anonymous:
+            headers.pop("Authorization")
         response = await self._short.request(
-            method, f"{self.host}{path}", headers=self._headers(credential),
+            method, f"{self.host}{path}", headers=headers,
             json=body, params=params,
             timeout=timeout if timeout is not None else (
                 150 if method == "POST" and path == f"{API}/cloud-agent/runtimes" else 30))
@@ -338,7 +343,15 @@ class MioraClient(LazyClients):
             raise UpstreamProtocolViolation("Miora 积分响应缺少有效余额") from error
         if not math.isfinite(total) or not math.isfinite(used) or total < 0 or used < 0:
             raise UpstreamProtocolViolation("Miora 积分响应包含无效余额")
-        return Quota(remaining=max(0, total - used), total=total, probed_at=int(time.time()))
+        moment = int(time.time())
+        try:
+            subscription = await self._request(
+                credential, "POST", "/api/miora-billing/subscription", body={})
+        except (httpx.HTTPError, MioraHTTPError, UpstreamProtocolViolation, RecursionError):
+            # 订阅补充探测失败不打坏已拿到的积分，也不能把未知账号猜成 free。
+            subscription = None
+        detail = {"miora_subscription": subscription_state(subscription, now=moment)}
+        return Quota(remaining=max(0, total - used), total=total, probed_at=moment, detail=detail)
 
     async def refresh_token(self, credential: MioraCredential) -> dict:
         if not credential.refresh_token:
@@ -480,8 +493,10 @@ def catalog_models(loaded: Any, tiers: Any) -> tuple[list[Model], dict[str, tupl
             max_input_tokens=_positive_int(item.get("maxInputTokens")),
             max_output_tokens=_positive_int(item.get("maxOutputTokens")),
             supports_images=False,
-            supports_tool_call=True, supports_reasoning=item.get("supportsReasoning") is True))
-        selections[model_id] = (model_id, _text(tier.get("tierKey")))
+            supports_tool_call=True, supports_reasoning=item.get("supportsReasoning") is True,
+            **model_access(item, tier)))
+        if models[-1].account_available is not False:
+            selections[model_id] = (model_id, _text(tier.get("tierKey")))
     for item in tier_items:
         if not isinstance(item, dict) or item.get("category") != "tier":
             continue
@@ -493,8 +508,10 @@ def catalog_models(loaded: Any, tiers: Any) -> tuple[list[Model], dict[str, tupl
         chinese = locales.get("zh-CN") if isinstance(locales, dict) else None
         name = _text(chinese.get("name")) if isinstance(chinese, dict) else ""
         models.append(Model(id=model_id, name=name or tier_key,
-                            credit_rate=_rate(item.get("billingFactor")), supports_tool_call=True))
-        selections[model_id] = (raw_id, tier_key)
+                            credit_rate=_rate(item.get("billingFactor")), supports_tool_call=True,
+                            **model_access(item)))
+        if models[-1].account_available is not False:
+            selections[model_id] = (raw_id, tier_key)
     if not models:
         raise UpstreamProtocolViolation("Miora ACP 返回了空模型目录")
     return models, selections

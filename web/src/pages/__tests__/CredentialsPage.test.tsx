@@ -1111,7 +1111,7 @@ describe("CredentialsPage", () => {
     ]);
     // 多行清单走 panel 表面（卡片底 + 描边 + 阴影），不是反色气泡：反色底放大段
     // 文字会糊成一块，且气泡的箭头会盖住描边留一道缺口
-    expect(tip.closest("[data-slot='tooltip-content']"))
+    expect(tip.closest("[data-slot='model-popup-content']"))
       .toHaveAttribute("data-surface", "panel");
     await userEvent.unhover(cbCount);
 
