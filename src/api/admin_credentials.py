@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from ..audit.actions import (
     ACTION_CREDENTIAL_DELETE,
@@ -50,6 +50,7 @@ from ..provider.tos import tos_for
 from ..request_context import credential_scope
 from ..sorting import sort_rows
 from ..tags import parse_tags
+from .credential_export import encode_credential_export, validate_export_ids
 from .credential_login import save_login_credential
 from .deps import Services, csrf_protected, principal_from_request
 
@@ -980,6 +981,23 @@ def create_router(services: Services) -> APIRouter:
             offset=max(0, offset))
         return {"events": events, "limit": effective,
                 "has_more": len(events) == effective}
+
+    @router.post("/api/credentials/export")
+    async def export_credentials(payload: dict,
+                                 _csrf: None = Depends(csrf_protected),
+                                 principal=Depends(principal_from_request)):
+        """仅导出所选账号；完整文件生成成功才发送，失败不返回部分凭证。"""
+        require_operator(principal)
+        ids = validate_export_ids(payload)
+        content = encode_credential_export(credentials, ids)
+        services.audit.record(
+            actor=principal.username, action=ACTION_CREDENTIAL_EXPORT,
+            detail=json.dumps({"count": len(ids), "ids": ids}, ensure_ascii=False))
+        logger.info("管理员 %s 批量导出 %d 条凭证", principal.username, len(ids))
+        return Response(content, media_type="application/json", headers={
+            "Content-Disposition": 'attachment; filename="coding2api-credentials.json"',
+            "Cache-Control": "no-store",
+        })
 
     @router.get("/api/credentials/{credential_id}/export")
     async def export_credential(credential_id: str,

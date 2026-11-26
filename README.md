@@ -1,6 +1,12 @@
-# 2apis · v0.1.4
+# 2apis · v0.1.5
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.5 批量导出凭证
+
+- 凭证页勾选账号、分组或渠道全选后，可在批量操作栏点击「导出凭证」，一次下载一个 JSON 文件，导出后保留选择。
+- `POST /api/credentials/export` 只导出 `ids` 指定的账号，去重保序，文件为可直接重新批量导入的 JSON 数组，保留渠道、昵称、标签和登录票据。权限与单条导出一致，仅管理员/操作员可用；响应禁止缓存，操作记审计。
+- 沿用单条导出的敏感字段规则，不额外导出账号密码或 CodeArts/Qoder 网页 Cookie。每次最多 5,000 个凭证，文件最大 16 MiB；异常时保留选择，过大时提示减少选择后重试，不返回部分文件，不刷新上游票据。
 
 ## v0.1.4 账号目录与界面修复
 
@@ -223,7 +229,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.4`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.5`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

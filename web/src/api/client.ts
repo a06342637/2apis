@@ -281,6 +281,34 @@ export const api = {
     }
     return { blob: await response.blob() };
   },
+  /** 当前勾选凭证导出：直接下载 JSON 数组，不进入列表或查询缓存。 */
+  exportCredentials: async (ids: string[]) => {
+    const guard = timeoutGuard({}, REQUEST_TIMEOUT_MS);
+    try {
+      const path = "/api/credentials/export";
+      const response = await fetch(path, {
+        method: "POST",
+        ...json({ ids }),
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: guard.signal,
+        headers: { "X-Requested-With": "XMLHttpRequest", "Content-Type": "application/json" },
+      });
+      if (!response.ok) {
+        if (isSessionExpiry(path, response.status)) notifyUnauthorized();
+        const body = await readBody(response);
+        const error = (body as { error?: { code?: string; message?: string } } | null)?.error;
+        throw new ApiError(response.status, error?.code ?? "export_failed",
+          error?.message || `导出失败（HTTP ${response.status}）`);
+      }
+      return { blob: await response.blob() };
+    } catch (error) {
+      if (guard.timedOut()) throw new ApiError(0, "timeout", `请求超时（${REQUEST_TIMEOUT_MS / 1000} 秒）`);
+      throw error;
+    } finally {
+      guard.dispose();
+    }
+  },
   // ---------------------------------------------------------------- 备份
   backups: () => request<BackupListResponse>("/api/backups"),
   createBackup: () =>
