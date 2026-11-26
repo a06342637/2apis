@@ -105,9 +105,8 @@ function StatsContent() {
   // 自定义模式下以解析结果为准；否则用预设范围的 since（无 until）
   const effectiveSince = range === "custom" ? custom?.since : since;
   const effectiveUntil = range === "custom" ? custom?.until : undefined;
-  // 自定义输入非法（两个框都填了却解析不出）时，提示用户而不是静默退回全量
-  const customInvalid = range === "custom" && custom === null
-    && (customFrom.trim() !== "" || customTo.trim() !== "");
+  // 自定义窗口无效或两端都为空时，提示并暂停，避免静默退回全量。
+  const customInvalid = range === "custom" && custom === null;
   // 自定义范围非法时**暂停取数**：effectiveSince/Until 此时都是 undefined，
   // 直接发出去等于「不限定时间窗」的全量统计——既与页面上「已暂停取数」的
   // 文案矛盾，又会在用户逐字编辑输入框时反复触发无时间窗的全表扫描。
@@ -210,6 +209,7 @@ function StatsContent() {
   if (drill.ok !== undefined) drillLabels.push(drill.ok === 0 ? "只看失败" : "只看成功");
 
   const exportCsv = async () => {
+    if (!rangeReady) return;
     setExporting(true);
     setExportNotice(null);
     try {
@@ -272,10 +272,10 @@ function StatsContent() {
   // 延迟分位只在延迟类指标下取数（其余指标用不上，省一次明细表扫描）
   const latencyPercentile = useStatsPercentileTimeline(
     session.username, undefined, effectiveSince, effectiveUntil,
-    metric === "ttfb" ? "ttfb" : "latency", LATENCY_METRICS.has(metric));
+    metric === "ttfb" ? "ttfb" : "latency", rangeReady && LATENCY_METRICS.has(metric));
   // 失败归因：端点仅 operator+（viewer 打开会 403），故按角色禁用查询
   const errors = useStatsErrors(session.username, effectiveSince, effectiveUntil,
-                                undefined, session.is_operator);
+                                undefined, rangeReady && session.is_operator);
   const errorRows = errors.data?.errors ?? [];
 
   // 四个维度各取一维（各维度行结构一致），切 tab 才换查询、不再为不渲染的
@@ -359,6 +359,7 @@ function StatsContent() {
       <StatsOverviewCards overviewFailed={overviewFailed} stats={stats} />
 
       <EventsPanel
+        rangeReady={rangeReady}
         totalRequests={overview.data?.requests}
         live={live}
         toggleLive={toggleLive}

@@ -71,7 +71,7 @@ export function StatsFilters(props: StatsFiltersProps) {
             </Field>
             {customInvalid && (
               <p className="pb-2 text-xs text-destructive" data-testid="custom-range-invalid">
-                开始时间须早于结束时间，且格式有效；已暂停取数。
+                请至少填写一个有效时间，开始时间须早于结束时间；已暂停取数。
               </p>
             )}
           </div>

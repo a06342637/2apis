@@ -40,7 +40,9 @@ def handler_for(service: UpdateService, secret: str):
                     raise ValueError("无效的助手请求")
                 request = json.loads(self.rfile.read(length))
                 supplied = request.get("secret")
-                if not isinstance(supplied, str) or not hmac.compare_digest(supplied, secret):
+                if not isinstance(supplied, str) or not hmac.compare_digest(
+                    supplied.encode("utf-8"), secret.encode("utf-8")
+                ):
                     raise ValueError("更新助手认证失败")
                 result = service.dispatch(request.get("action"), request.get("payload", {}))
                 body = {"ok": True, "result": result}

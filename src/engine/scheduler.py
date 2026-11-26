@@ -95,8 +95,8 @@ EXPIRY_WINDOW_SECONDS = 36 * 3600
 # 而漏掉一周内仍会过期的额度。7 天覆盖 CodeBuddy 一个完整的小包到期周期
 SECONDARY_EXPIRY_WINDOW_SECONDS = 7 * 86400
 # 采用上游 `Retry-After` 时刻时的上界：再长也最多冷却到 24h 后。上游给的
-# 恢复时刻可能是「本月配额用完」那类远期值，照单全收等于把号永久移出池子
-# （还会让统计里的「冷却剩余」显示成几个月）。
+# 恢复时刻可能是「本月配额用完」那类远期值，照单全收等于把号永久移出池子。
+# 本地风控退避已经超过24h时仍保留该策略，不能因上游提示反而提前恢复。
 RETRY_AT_MAX_SECONDS = 24 * 3600
 
 
@@ -205,8 +205,8 @@ def clamp_retry_at(retry_at: int | None, now: int, fallback: int) -> tuple[int, 
     - **下界**：该 ErrKind 的现有常量冷却。上游给 0 / 过去时刻 / 比本地策略
       还短的时刻都回落常量——`Retry-After: 0` 会让同一个号在冷却刚写下的
       瞬间又变可选，被反复打爆（上游越是限流越容易被轮询放大）。
-    - **上界**：`RETRY_AT_MAX_SECONDS`（24h）。上游报「下个月恢复」也不该
-      把一个号移出池子整整一个月。
+    - **上界**：`RETRY_AT_MAX_SECONDS`（24h），至少保留本地策略的截止时间。
+      上游报「下个月恢复」不会无限延长，也不能缩短已经升级的本地风控退避。
 
     返回值第二项供日志打「采用上游时刻 X（原常量 Y）」——只有真的采用了
     上游值才值得记一行，否则日志会被每个普通错误刷满。
@@ -214,12 +214,12 @@ def clamp_retry_at(retry_at: int | None, now: int, fallback: int) -> tuple[int, 
     constant = now + fallback
     if retry_at is None:
         return constant, False
-    upper = now + RETRY_AT_MAX_SECONDS
+    upper = max(constant, now + RETRY_AT_MAX_SECONDS)
     if retry_at <= constant:
         # 缺省 / 过去时刻 / 比本地常量还短：一律按常量（含 clamp 下界语义）
         return constant, False
     if retry_at >= upper:
-        return upper, True
+        return upper, upper > constant
     return retry_at, True
 
 
@@ -514,7 +514,7 @@ class Scheduler:
             # 限制会由上游自行解除；但**冷却时长按命中次数指数退避**（2h 起，
             # 翻倍封顶 7 天）：固定 2h 会让整批同源账号每 2h 被重试一遍，
             # 而重复撞击已经被封的账号正是上游判「自动化」的证据。
-            # 上游给 `Retry-After` 时仍夹在 [本次时长, 24h]。
+            # 上游提示最多延长到24h；本次本地退避更长时保持本地时长。
             level = max(candidate.err_count, 0)
             duration = min(RESTRICTED_COOLDOWN_SECONDS * (2 ** min(level, 8)),
                            RESTRICTED_COOLDOWN_MAX_SECONDS)

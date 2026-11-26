@@ -1,6 +1,15 @@
-# 2apis · v0.1.2
+# 2apis · v0.1.3
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.3 系统检查修复
+
+- CodeArts / OfficeAce 的到期元数据遇到非有限数值时归一为未知，单条和批量导入不再返回 500；正常秒、毫秒和 ISO8601 格式继续兼容。
+- 上游 Retry-After 不能缩短本地已有的长期冷却；短冷却仍按原 24 小时上界处理上游提示。
+- 设置中的整数项拒绝小数和不精确的大整数，科学计数法按实际数值保存；后台刷新同步未编辑项并保留真正的草稿。
+- 系统更新在页面关闭后完成时重新读取主机状态，避免迟到的旧响应覆盖当前页面；操作结果仍可在返回页面后查看。
+- 更新助手支持合法的非 ASCII 密钥，使用 UTF-8 字节进行恒时认证比较，避免配置正确却无法鉴权。
+- 自定义统计时间为空或无效时暂停所有相关查询和 CSV 导出，避免误发不限时间的全量统计，减轻小内存机器的数据库压力。
 
 ## v0.1.2 Miora 认证与并发修复
 
@@ -200,7 +209,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.2`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.3`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 
