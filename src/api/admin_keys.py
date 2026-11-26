@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 
@@ -63,9 +64,12 @@ def _parse_expires_at(raw: object) -> int | None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         raise InvalidRequest("expires_at must be a unix timestamp in seconds or null")
+    if isinstance(raw, float) and not math.isfinite(raw):
+        raise InvalidRequest("expires_at must be a finite unix timestamp")
     value = int(raw)
-    if value <= 0:
-        raise InvalidRequest("expires_at must be a positive unix timestamp")
+    # SQLite INTEGER 使用有符号64位；合法JSON大数不能留到驱动绑定时变成500。
+    if value <= 0 or value > 2**63 - 1:
+        raise InvalidRequest("expires_at must be a positive 64-bit unix timestamp")
     return value
 
 

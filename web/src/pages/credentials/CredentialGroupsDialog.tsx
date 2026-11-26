@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ApiError } from "../../api/client";
 import { createCredentialGroup, deleteCredentialGroup, updateCredentialGroup } from "../../api/credentialGroups";
 import type { Credential, CredentialGroup, Provider } from "../../api/types";
@@ -24,12 +24,19 @@ export function CredentialGroupsDialog({ provider, label, credentials, groups, l
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const close = () => { if (!working.current) onClose(); };
+  const editingGeneration = useRef(0);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; editingGeneration.current += 1; };
+  }, []);
+  const close = () => { if (!working.current) { editingGeneration.current += 1; onClose(); } };
   const dialogRef = useDialogFocus<HTMLDivElement>(close);
   const visible = groups?.filter((group) => group.provider === provider);
   const issue = credentialSelectionIssue(members, credentials, provider);
 
   const openEditor = (group: CredentialGroup | null) => {
+    editingGeneration.current += 1;
     if (group && !Array.isArray(group.credential_ids)) {
       setError("无法读取组成员，请重试分组列表后再编辑。");
       return;
@@ -64,10 +71,18 @@ export function CredentialGroupsDialog({ provider, label, credentials, groups, l
     });
   };
   const reloadEditor = async () => {
-    const latest = await onRetry();
-    const group = latest?.find((item) => item.id === editing?.id);
-    if (group) openEditor(group);
-    else setError("此分组已删除或暂时无法读取，请关闭编辑后重试。");
+    const generation = editingGeneration.current;
+    try {
+      const latest = await onRetry();
+      if (!mounted.current || editingGeneration.current !== generation) return;
+      const group = latest?.find((item) => item.id === editing?.id);
+      if (group) openEditor(group);
+      else setError("此分组已删除或暂时无法读取，请关闭编辑后重试。");
+    } catch (caught) {
+      if (mounted.current && editingGeneration.current === generation) {
+        setError(errorText(caught, "重新载入失败，请稍后重试。"));
+      }
+    }
   };
   return <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm" onClick={close}>
     <div ref={dialogRef} role="dialog" aria-modal="true" aria-label={`${label}账号分组`}
@@ -111,7 +126,9 @@ export function CredentialGroupsDialog({ provider, label, credentials, groups, l
           selectionHint="勾选同一渠道账号作为成员，暂停、禁用或过期账号仍可加入；不勾选会创建空组。"
           clearText="清空组成员" /></fieldset>
         <div className="flex justify-end gap-2">
-          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => { setEditorOpen(false); setError(""); setConflict(false); }}>取消编辑</Button>
+          <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => {
+            editingGeneration.current += 1; setEditorOpen(false); setEditing(null); setError(""); setConflict(false);
+          }}>取消编辑</Button>
           <Button type="submit" size="sm" variant="primary" disabled={busy || !name.trim() || Boolean(issue)}>保存分组</Button>
         </div>
       </form>}

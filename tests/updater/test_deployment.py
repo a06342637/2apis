@@ -151,7 +151,8 @@ def test_command_runner_uses_argv_and_never_logs_output(monkeypatch, tmp_path):
     calls = []
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
-        return SimpleNamespace(returncode=0, stdout=" success \n")
+        kwargs["stdout"].write(b" success \n")
+        return SimpleNamespace(returncode=0)
     monkeypatch.setattr("src.updater.deployment.subprocess.run", run)
     assert run_command(["git", "status"], cwd=tmp_path, timeout=5) == "success"
     assert "shell" not in calls[0][1] and calls[0][1]["env"]["GIT_TERMINAL_PROMPT"] == "0"

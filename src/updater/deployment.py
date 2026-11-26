@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
 from contextlib import closing
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ BUILDER_LIMITS = {
 }
 logger = logging.getLogger(__name__)
 LOGIN_COLUMNS = ("data_enc", "token_issued_at", "token_expires_at", "login_secret")
+MAX_COMMAND_STDOUT_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ class HostConfig:
     project: str = "2apis"
     service: str = "coding2api"
     source: str = "a06342637/2apis"
-    current_version: str = "0.1.0"
+    current_version: str = "0.1.1"
     current_commit: str = ""
     health_timeout: int = 180
     drain_timeout: int = 180
@@ -184,12 +186,19 @@ def verify_backup(directory: Path) -> None:
 def run_command(argv: list[str], *, cwd: Path | None = None, timeout: int = 1800) -> str:
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0", DOCKER_BUILDKIT="1")
-    result = subprocess.run(argv, cwd=cwd, env=env, timeout=timeout, capture_output=True,
-                            text=True, check=False)  # nosec B603 - 固定 argv，不使用 shell
-    if result.returncode:
-        # 不把命令输出发给管理台，Compose/构建输出可能含环境变量和私密配置。
-        raise RuntimeError(f"{argv[0]} 命令失败（退出码 {result.returncode}）")
-    return result.stdout.strip()
+    # 构建日志可能很大：写入自动清理的私有临时文件，禁止PIPE无界积累内存。
+    # stderr 不用于任何调用结果，直接丢弃；超时仍由 subprocess.run 杀死并回收进程。
+    with tempfile.TemporaryFile(mode="w+b") as output:
+        result = subprocess.run(argv, cwd=cwd, env=env, timeout=timeout, stdout=output,
+                                stderr=subprocess.DEVNULL, check=False)  # nosec B603
+        if result.returncode:
+            # 不把命令输出发给管理台，Compose/构建输出可能含环境变量和私密配置。
+            raise RuntimeError(f"{argv[0]} 命令失败（退出码 {result.returncode}）")
+        output.seek(0)
+        captured = output.read(MAX_COMMAND_STDOUT_BYTES + 1)
+        if len(captured) > MAX_COMMAND_STDOUT_BYTES:
+            raise RuntimeError(f"{argv[0]} 命令输出超过安全大小限制")
+        return captured.decode("utf-8", errors="replace").strip()
 
 
 class Deployment:

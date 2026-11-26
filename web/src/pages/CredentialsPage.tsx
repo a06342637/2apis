@@ -499,7 +499,10 @@ export function CredentialsPage() {
         groups={accountGroups} loading={accountGroupsQuery.isLoading}
         canWrite={canWrite && accountGroupsQuery.data?.is_operator === true}
         onClose={() => setManagingGroups(null)}
-        onRetry={async () => (await accountGroupsQuery.refetch()).data?.groups}
+        onRetry={async () => {
+          const result = await accountGroupsQuery.refetch();
+          return result.isError ? undefined : result.data?.groups;
+        }}
         onChanged={() => client.invalidateQueries({ queryKey: ["admin", session.username, "credential-groups"] })} />}
 
       <CredentialDialogs

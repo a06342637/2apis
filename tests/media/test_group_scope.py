@@ -12,6 +12,12 @@ from src.db.groups import CredentialGroupRepository
 from src.engine.scheduler import Candidate
 
 
+@pytest.fixture(autouse=True)
+def private_directory_boundary(monkeypatch):
+    # 组成员授权契约不测试平台 ACL；私有目录保护另有 Windows/POSIX 专用测试。
+    monkeypatch.setattr("src.db.conn.secure_dir", lambda *_args, **_kwargs: True)
+
+
 async def test_media_fresh_principal_resolves_real_group_changes_and_deletion(media_env, repo):
     env = media_env
     credentials, database = repo

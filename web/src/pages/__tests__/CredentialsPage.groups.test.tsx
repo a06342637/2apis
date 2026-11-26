@@ -109,4 +109,30 @@ describe("凭证页分组入口", () => {
     expect(screen.getByRole("button", { name: "重试分组列表" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "新建分组" })).not.toBeInTheDocument();
   });
+
+  it("冲突重新载入失败时保留当前草稿，不能把缓存旧版本当作新数据", async () => {
+    let reads = 0;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith("/api/credential-groups")) {
+        if (init?.method === "PUT") return jsonResponse({ error: { code: "conflict", message: "changed" } }, 409);
+        if (reads++) throw new Error("offline");
+        return jsonResponse({ groups: [{ id: "g1", provider: "miora", name: "Old version", created_at: 1,
+          updated_at: 10, member_count: 1, credential_ids: ["mi1"] }], is_operator: true });
+      }
+      if (url.startsWith("/api/credentials")) return jsonResponse({ credentials: ACCOUNTS, is_operator: true });
+      if (url === "/api/playground/models") return jsonResponse({ data: [] });
+      return jsonResponse({});
+    }));
+    renderPage(<CredentialsPage />);
+    await screen.findByTestId("credential-groups-miora");
+    await userEvent.click(screen.getByTestId("credential-groups-miora"));
+    await userEvent.click(await screen.findByTestId("edit-group-g1"));
+    fireEvent.change(screen.getByLabelText("分组名称"), { target: { value: "Local draft" } });
+    await userEvent.click(screen.getByRole("button", { name: "保存分组" }));
+    await userEvent.click(await screen.findByRole("button", { name: "重新载入此组" }));
+    await waitFor(() => expect(screen.getByText("账号分组加载失败。")).toBeInTheDocument());
+    expect(screen.getByLabelText("分组名称")).toHaveValue("Local draft");
+    expect(screen.getByRole("button", { name: "重新载入此组" })).toBeInTheDocument();
+  });
 });

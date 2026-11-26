@@ -9,6 +9,14 @@ from ...engine.sse import SSE_DONE, format_openai_frame
 from ...provider.base import ErrKind, Event, event_error_kind
 
 
+class ServicePaused(Exception):
+    """运营暂停的本地拒绝；对外文案固定，不回显内部处置原因。"""
+
+    def __init__(self, reason: str = "") -> None:
+        super().__init__("service temporarily paused by operator")
+        self.reason = reason
+
+
 class InvalidToolArguments(Exception):
     """上游给出的工具调用参数不是合法 JSON 对象（协议级失败）。
 

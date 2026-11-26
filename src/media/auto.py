@@ -147,6 +147,14 @@ class MediaAuto:
                     executed.add(call_id)
                     try:
                         arguments = json.loads(call["function"]["arguments"])
+                        if marker is not None:
+                            # 固定 size 的派生比例/分辨率优先；模型不能偷偷提升输出规格。
+                            if options.get("size") not in (None, "auto"):
+                                for key in ("aspect_ratio", "resolution"):
+                                    if key not in options:
+                                        arguments.pop(key, None)
+                            elif "aspect_ratio" in options or "resolution" in options:
+                                arguments.pop("size", None)
                         arguments = {**arguments, **(options if marker is not None else {})}
                         request = parse_media_request(arguments, internal[name])
                         job = await self.service.submit(

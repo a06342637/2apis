@@ -28,7 +28,7 @@ KEEPALIVE_SECONDS = 15.0
 JSON_KEEPALIVE_BYTES = b"\n"
 
 # 首帧宽限（秒）：先不发 200 头，等上游第一帧到达再决定状态码。
-# 只用于「未出帧就用尽」的请求级错误（400）；等不到就照常发头继续流，
+# 未出帧时可把无效请求改为 400、运营暂停改为 503；等不到则照常发头继续流，
 # **不能取消在途取帧任务**——取消会穿透关闭上游流，慢上下文首字 40–71s
 # 的请求会被误杀成空回复。
 STREAM_START_GRACE_SECONDS = 5.0
@@ -125,13 +125,14 @@ async def respond_with_stream_start(frames: AsyncIterator[bytes],
                                     terminal: dict[str, str],
                                     media_type: str = "text/event-stream",
                                     ) -> Response:
-    """拉首帧后再发响应头：请求级错误可在头阶段返回 400。
+    """拉首帧后再发响应头：无效请求返回 400，运营暂停返回 503。
 
     `terminal` 由 `Executor.stream(on_terminal=...)` 在整条回退链**未出帧就用尽**
     时写入 `{"code": ..., "message": ...}`。此前 200 头先发出，随后只能吐错误帧，
     SDK 把「内容风控 / 上下文超限 / 坏图 / 工具 schema 拒收」当成成功响应继续重试。
 
-    只改判 `invalid_request`：其余终态（`no_healthy_credential` 等）维持 200 错误帧，
+    改判 `invalid_request` 为 400、`service_paused` 为 503；
+    其余终态（`no_healthy_credential` 等）维持 200 错误帧，
     避免改掉既有 503 / 排队语义。宽限内无首帧 → 照旧发头，取帧任务保留。
     """
     iterator = ContextBoundIterator(frames)
@@ -155,11 +156,13 @@ async def respond_with_stream_start(frames: AsyncIterator[bytes],
     except StopAsyncIteration:
         await aclose_stream(iterator)          # 空流：保持原有 200 空 body
         return StreamingResponse(b"", media_type=media_type)
-    if terminal.get("code") == "invalid_request":
+    code = terminal.get("code", "")
+    status = {"invalid_request": 400, "service_paused": 503}.get(code)
+    if status is not None:
         await aclose_stream(iterator)
         return JSONResponse(
-            error_payload(terminal.get("message", ""), "invalid_request", 400),
-            status_code=400)
+            error_payload(terminal.get("message", ""), code, status),
+            status_code=status)
     return StreamingResponse(_first_then(first, iterator), media_type=media_type)
 
 

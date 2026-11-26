@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import time
@@ -19,6 +20,7 @@ from ..request_context import credential_scope
 from . import TaskReport
 from .account_shape import is_enterprise_account
 from .pacer import Pacer
+from .refresh import _wait_committed
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +311,27 @@ class CheckinTask:
         # 登录之前，保留「失败也不许重试」的原意。
         if self._pacer is not None:
             await self._pacer.wait_turn()
+        # 登录与刷新都是整份凭证写者：锁必须覆盖读、上游登录和落库。
+        # 等锁时若管理员切了账号或另一任务已刷新，不能拿旧快照登录并覆盖新票。
+        async with self._credentials.edit_lock(candidate.credential_id):
+            try:
+                latest = self._credentials.credential_data(candidate.credential_id)
+            except CredentialDecryptError:
+                logger.error("自动登录跳过 %s：凭证解密失败", candidate.credential_id)
+                return result, data
+            if latest != data:
+                return result, data
+            if self._login_days.get(done_key) == day:
+                return result, data
+            operation = asyncio.create_task(self._login_and_checkin(
+                provider, candidate, data, result, done_key, day))
+            # 停机取消也须等待上游已签发的票据同步落库，之后才释放编辑锁。
+            return await _wait_committed(operation)
+
+    async def _login_and_checkin(self, provider, candidate, data: dict,
+                                result: CheckinResult, done_key: str,
+                                day: str) -> tuple[CheckinResult, dict]:
+        """由 _try_autologin 的凭证编辑锁保护，登录与凭证写入不可被取消拆开。"""
         self._login_days[done_key] = day            # 失败也不许重试
         with credential_scope(candidate.credential_id):
             try:
@@ -326,10 +349,7 @@ class CheckinTask:
                 return result, data
         if refreshed is None:                       # 没带凭据（不该发生，兜底）
             return result, data
-        # 与预刷新/账号切换共用同一把编辑锁：整份覆写 data_enc，不能与别的
-        # 写者交错（否则后写者会用自己读到的旧快照覆盖新 token）。
-        async with self._credentials.edit_lock(candidate.credential_id):
-            self._credentials.save_credential_data(candidate.credential_id, refreshed)
+        self._credentials.save_credential_data(candidate.credential_id, refreshed)
         logger.info("autologin refreshed %s", candidate.credential_id)
         with credential_scope(candidate.credential_id):
             return await provider.checkin(refreshed), refreshed
