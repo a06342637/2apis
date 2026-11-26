@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
+from itertools import count
+
+import pytest
+
 from src.audit.actions import ACTION_CREDENTIAL_WEB_COOKIE
+from src.db import repo as repo_module
 
 
 def _add_qoder(app):
@@ -16,25 +22,57 @@ def _add_codebuddy(app):
         provider="codebuddy", credential_data={"bearer_token": "t"})
 
 
-def test_set_and_clear_web_cookie_round_trip(admin_client):
+@pytest.mark.parametrize(("cookie_value", "force_audit_uuid"), [
+    ("synthetic-cookie-secret-do-not-log-42", False),
+    ("abc", True),
+], ids=["synthetic-secret", "uuid-collision"])
+def test_set_and_clear_web_cookie_round_trip(admin_client, monkeypatch, caplog,
+                                             cookie_value, force_audit_uuid):
     app, client = admin_client
     credential_id = _add_qoder(app)
+    if force_audit_uuid:
+        original_id = repo_module._new_id
+        sequence = count(0x592)
+
+        def collision_id(prefix):
+            if prefix != "audit":
+                return original_id(prefix)
+            # 有效 v4 UUID，复现发布任务的合法 audit ID 恰好含短 Cookie 值。
+            fixed = uuid.UUID(f"faf97156abc54{next(sequence):03x}8000000000000000")
+            with monkeypatch.context() as patch:
+                patch.setattr(repo_module.uuid, "uuid4", lambda: fixed)
+                return original_id(prefix)
+
+        monkeypatch.setattr(repo_module, "_new_id", collision_id)
+    cookie = f"qoder_session_cookie={cookie_value}; other=1"
 
     response = client.put(f"/api/credentials/{credential_id}/web-cookie",
-                          json={"cookie": "  qoder_session_cookie=abc; other=1  "})
+                          json={"cookie": f"  {cookie}  "})
     assert response.status_code == 200 and response.json() == {"ok": True}
     # 落库的是 trim 后的值；其余凭证字段保持原样
     data = app.state.credentials.credential_data(credential_id)
-    assert data["web_cookie"] == "qoder_session_cookie=abc; other=1"
+    assert data["web_cookie"] == cookie
     assert data["access_token"] == "dt-1" and data["uid"] == "u-1"
     # 返回体不回显 Cookie
-    assert "abc" not in response.text
+    assert cookie_value not in response.text
 
     events = app.state.audit.query(action=ACTION_CREDENTIAL_WEB_COOKIE)
     assert len(events) == 1
     assert events[0]["target"] == credential_id
     assert events[0]["detail"] == "已设置"
-    assert "abc" not in str(events[0])
+    if force_audit_uuid:
+        assert events[0]["id"] == "audit_faf97156abc54592"
+    # id/target 是合法元数据，短 Cookie 值可能恰好出现在随机 UUID 中。
+    # 检查所有可承载审计内容的字段，并拒绝额外的凭据字段。
+    assert set(events[0]) == {"id", "ts", "actor", "action", "target", "detail", "ip", "ok"}
+    payload = {field: value for field, value in events[0].items() if field not in {"id", "target"}}
+    assert cookie_value not in str(payload)
+    assert cookie not in caplog.text
+    assert cookie not in str(app.state.services.log_buffer.snapshot())
+    if not force_audit_uuid:
+        # 长的非 hex 秘密不会与日志内合法请求/凭证 ID 碰撞，仍验证纯值泄漏。
+        assert cookie_value not in caplog.text
+        assert cookie_value not in str(app.state.services.log_buffer.snapshot())
 
     # 空串 = 清除，探测回退汇总口径
     cleared = client.put(f"/api/credentials/{credential_id}/web-cookie",

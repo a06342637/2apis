@@ -21,6 +21,8 @@ from src.provider.base import Quota
 from src.provider.codebuddy.checkin import CheckinResult
 from tests.helpers.constants import SECRET
 
+_PRIVATE_SENTINEL = "batch-synthetic-secret-do-not-echo-7360"
+
 
 class _StubProvider:
     """批量探测 / 签到桩：本用例只验证端点接线，绝不出网。"""
@@ -336,7 +338,7 @@ def test_batch_upstream_exception_is_contained(batch_app):
         endpoint = "https://e"
 
         async def probe_quota(self, _data):
-            raise RuntimeError("upstream leaked token abc123")
+            raise RuntimeError(f"upstream leaked token {_PRIVATE_SENTINEL}")
 
     app.state.executor._deps.providers["codebuddy"] = _Split()
     body = client.post("/api/credentials/batch",
@@ -345,7 +347,8 @@ def test_batch_upstream_exception_is_contained(batch_app):
     # 探测内部已把异常转成受控 reason，不会走到外层 except
     assert by_id[good]["ok"] is False
     assert by_id[good]["detail"]["reason"] == "unknown_error"
-    assert "abc123" not in str(body)
+    # 响应包含随机凭证 ID；非 hex 的长秘密避免把合法 ID 误判成泄漏。
+    assert _PRIVATE_SENTINEL not in str(body)
 
 def test_batch_non_upstream_exception_is_contained(batch_app):
     """非探测路径的意外异常（如 checkin 抛错）也逐条兜住，不整批 500。
@@ -363,7 +366,7 @@ def test_batch_non_upstream_exception_is_contained(batch_app):
         endpoint = "https://e"
 
         async def checkin(self, _data):
-            raise RuntimeError("upstream leaked token abc123")
+            raise RuntimeError(f"upstream leaked token {_PRIVATE_SENTINEL}")
 
     app.state.executor._deps.providers["codebuddy"] = _Boom()
     response = client.post("/api/credentials/batch",
@@ -374,7 +377,7 @@ def test_batch_non_upstream_exception_is_contained(batch_app):
     assert row["id"] == credential_id and row["ok"] is False
     # 失败原因可读，且不回显上游原文（可能带凭证片段）
     assert row["detail"]["message"] == "签到失败：unknown_error"
-    assert "abc123" not in response.text
+    assert _PRIVATE_SENTINEL not in response.text
 
 def test_batch_unexpected_exception_is_contained_per_item(batch_app):
     """非签到/非探测路径的意外异常逐条兜住：整批仍 200，不回显异常原文。"""
@@ -382,7 +385,7 @@ def test_batch_unexpected_exception_is_contained_per_item(batch_app):
     credential_id = _add(app)
 
     def boom(_credential_id: str) -> bool:
-        raise RuntimeError("db exploded, secret abc123")
+        raise RuntimeError(f"db exploded, secret {_PRIVATE_SENTINEL}")
 
     original = app.state.credentials.set_enabled
     app.state.credentials.set_enabled = boom
@@ -397,7 +400,7 @@ def test_batch_unexpected_exception_is_contained_per_item(batch_app):
     body = response.json()
     assert body["results"][0] == {"id": credential_id, "ok": False,
                                   "error": "action_failed"}
-    assert "abc123" not in response.text
+    assert _PRIVATE_SENTINEL not in response.text
 
 
 def test_batch_rejects_viewer(tmp_path):

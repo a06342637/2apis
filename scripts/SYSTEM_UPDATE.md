@@ -61,6 +61,13 @@ secret 与 socket 所在目录均不得对无关用户开放。
 并在 host-owned Compose 覆盖文件中保留这些挂载，不修改非 root 运行方式。
 两个变量留空时页面显示此部署未启用主机更新助手。
 
+systemd unit 必须保留 `RuntimeDirectoryPreserve=yes`：应用绑定挂载的是
+`/run/2apis-update` 的目录 inode。助手停止或重启时只允许替换目录内的 socket，
+不能删除并重建整个目录，否则宿主机 socket 正常、应用容器却仍看到已删除的旧目录。
+升级旧安装时重新安装 unit，执行 `systemctl daemon-reload` 后重启助手。
+若此前已出现「更新助手不可用」且容器内该目录为空，需用现有 Compose 配置重建
+应用容器一次，让挂载重新指向当前目录；之后助手停止、启动和重启无需重建应用。
+
 事务先 clone/fetch 验证固定 Git SHA，然后构建 `2apis-update:<commit>`；旧服务继续运行。
 构建后重新检查目标 main 与 CI，再停止并排空旧应用，备份代码、完整 data/secrets、
 `.env` 和全部 Compose 配置。主库用 VACUUM INTO 生成包含 WAL 已提交事务的独立快照，
