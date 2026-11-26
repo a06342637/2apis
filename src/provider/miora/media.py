@@ -18,13 +18,16 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from ..base import InvalidModelName, Model, UpstreamProtocolViolation, ensure_public_host
+from .access import model_access
 from .client import MAX_ACCOUNTS, MioraClient, MioraHTTPError
 from .credential import MioraCredential
+from .subscription import subscription_signature
 
 FILM_API = "/api/ai/film-studio"
 MEDIA_CATALOG_API = "/api/ai/public/cloud-agent/media-models"
 SESSION_TITLE = "2apis Film Studio"
 CATALOG_TTL = 300
+MAX_PUBLIC_TIER_MODELS = 512
 FILE_HOST = "sign.miorausercontent.com"
 ENDPOINTS = {"image": ("/v1/images/generations",), "video": ("/v1/videos",)}
 STATUSES = {
@@ -58,6 +61,9 @@ class MediaModel:
     name: str
     kind: str
     capabilities: dict
+    account_available: bool | None = None
+    required_account_tier: str | None = None
+    account_unavailable_reason: str | None = None
 
     def model(self) -> Model:
         return Model(
@@ -68,15 +74,19 @@ class MediaModel:
             supports_reasoning=False,
             gateway_endpoints=ENDPOINTS[self.kind],
             output_modalities=(self.kind,),
+            account_available=self.account_available,
+            required_account_tier=self.required_account_tier,
+            account_unavailable_reason=self.account_unavailable_reason,
         )
 
 
-def parse_catalog(data: Any) -> dict[str, MediaModel]:
+def parse_catalog(data: Any, *, include_unavailable: bool = False) -> dict[str, MediaModel]:
     if not isinstance(data, dict) or not isinstance(data.get("data"), list):
         raise UpstreamProtocolViolation("Miora 媒体模型目录格式异常")
     models: dict[str, MediaModel] = {}
     for row in data["data"]:
-        if not isinstance(row, dict) or not row.get("visible") or row.get("available") is False:
+        if (not isinstance(row, dict) or not row.get("visible")
+                or (not include_unavailable and row.get("available") is False)):
             continue
         kind, model_id = row.get("contentType"), _text(row.get("modelId") or row.get("modelKey"))
         caps = row.get("capabilities")
@@ -101,7 +111,8 @@ def parse_catalog(data: Any) -> dict[str, MediaModel]:
                 for variant in variants
                 if isinstance(variant, dict)
                 and _text(variant.get("modelId"))
-                and variant.get("available") is not False
+                and (include_unavailable
+                     or model_access(variant, row)["account_available"] is not False)
             ]
             if isinstance(variants, list)
             else []
@@ -122,11 +133,12 @@ def parse_catalog(data: Any) -> dict[str, MediaModel]:
             raw_id = _text(default["modelId"])
         elif isinstance(variants, list) and variants:
             continue
-        models[model_id] = MediaModel(model_id, raw_id, name, kind, caps)
+        models[model_id] = MediaModel(model_id, raw_id, name, kind, caps, **model_access(row))
         for variant in choices:
             variant_id = _text(variant["modelId"])
             models[variant_id] = MediaModel(
-                variant_id, variant_id, _text(variant.get("label")) or variant_id, kind, caps
+                variant_id, variant_id, _text(variant.get("label")) or variant_id, kind, caps,
+                **model_access(variant, row),
             )
     return models
 
@@ -291,6 +303,9 @@ def normalize_task(task: Any, *, session_id: str = "", task_id: str = "") -> dic
 class _Account:
     session_id: str = ""
     models: dict[str, MediaModel] = field(default_factory=dict)
+    display_models: dict[str, MediaModel] = field(default_factory=dict)
+    subscription_detail: dict | None = None
+    subscription_version: tuple | None = None
     catalog_at: float | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     users: int = 0
@@ -300,6 +315,39 @@ class MioraMediaClient:
     def __init__(self, client: MioraClient) -> None:
         self.client = client
         self._accounts: OrderedDict[str, _Account] = OrderedDict()
+        self._public_tiers: dict[str, str] = {}
+        self._public_tiers_at: float | None = None
+        self._public_tiers_lock = asyncio.Lock()
+
+    async def _minimum_tiers(self, credential: MioraCredential) -> dict[str, str]:
+        """匿名公共目录只补最低套餐，不替代已登录账号的实际可用性。"""
+        async with self._public_tiers_lock:
+            if (self._public_tiers_at is not None
+                    and time.monotonic() - self._public_tiers_at < CATALOG_TTL):
+                return self._public_tiers
+            try:
+                response = await self.client._request(
+                    credential, "GET", MEDIA_CATALOG_API, params={"lang": "zh-CN"},
+                    anonymous=True)
+                models = parse_catalog(response, include_unavailable=True)
+                self._public_tiers = {
+                    model.id: model.required_account_tier
+                    for model in list(models.values())[:MAX_PUBLIC_TIER_MODELS]
+                    if model.required_account_tier and model.required_account_tier != "free"
+                    and model.account_unavailable_reason == "tier_locked"}
+            except (httpx.HTTPError, MioraHTTPError, UpstreamProtocolViolation):
+                # 补标失败只保留旧公共证据；按 TTL 退避，实际账号目录不受影响。
+                pass
+            self._public_tiers_at = time.monotonic()
+            return self._public_tiers
+
+    def note_subscription(self, credential: MioraCredential, detail: dict) -> None:
+        account = self._account(credential)
+        version = subscription_signature(detail, now=int(time.time()))
+        if version != account.subscription_version:
+            account.catalog_at = None
+            account.subscription_version = version
+        account.subscription_detail = detail
 
     def _account(self, credential: MioraCredential) -> _Account:
         identity = credential.identity()
@@ -331,6 +379,8 @@ class MioraMediaClient:
     async def _catalog(
         self, credential: MioraCredential, account: _Account, *, force: bool = False
     ) -> dict[str, MediaModel]:
+        if account.subscription_detail is not None:
+            self.note_subscription(credential, account.subscription_detail)
         if (
             not force
             and account.catalog_at is not None
@@ -340,15 +390,23 @@ class MioraMediaClient:
         response = await self.client._request(
             credential, "GET", MEDIA_CATALOG_API, params={"lang": "zh-CN"}
         )
+        account.display_models = parse_catalog(response, include_unavailable=True)
+        # 生成时仍使用按本账号权限过滤的目录；展示项不能进入提交路径。
         account.models = parse_catalog(response)
         account.catalog_at = time.monotonic()
         return account.models
 
-    async def catalog(self, credential: MioraCredential, *, force: bool = False) -> list[Model]:
+    async def catalog(self, credential: MioraCredential, *, force: bool = False,
+                      include_unavailable: bool = False) -> list[Model]:
         async with self._using_account(credential) as account, account.lock:
+            models = await self._catalog(credential, account, force=force)
+            if include_unavailable:
+                tiers = await self._minimum_tiers(credential)
+                for model in account.display_models.values():
+                    model.required_account_tier = model.required_account_tier or tiers.get(model.id)
             return [
                 model.model()
-                for model in (await self._catalog(credential, account, force=force)).values()
+                for model in (account.display_models if include_unavailable else models).values()
             ]
 
     async def submit(

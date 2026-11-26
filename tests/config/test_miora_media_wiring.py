@@ -85,7 +85,7 @@ async def test_media_catalog_failure_is_visible_as_shared_directory_degradation(
         assert credential.uid == "u"
         return [Model(id="text")]
 
-    async def failure(credential):
+    async def failure(credential, *, include_unavailable=False):
         raise MioraHTTPError(503, b"directory temporarily unavailable")
 
     monkeypatch.setattr(provider.client, "fetch_models", text_models)
@@ -96,7 +96,7 @@ async def test_media_catalog_failure_is_visible_as_shared_directory_degradation(
         assert "保留文本" in services.model_list_failure_reason["miora"]
         assert set(services.model_list_cache["miora"]) == {"text"}
 
-        async def recovered(credential):
+        async def recovered(credential, *, include_unavailable=False):
             return [Model(id="image", gateway_endpoints=("/v1/images/generations",))]
 
         monkeypatch.setattr(provider.media_client, "catalog", recovered)

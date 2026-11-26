@@ -58,7 +58,7 @@ class MediaBoundary:
     def __init__(self):
         self.submissions = []
 
-    async def catalog(self, _credential, *, force=False):
+    async def catalog(self, _credential, *, force=False, include_unavailable=False):
         return [
             Model(id="gem-3.1", name="Nano Banana 2", supports_tool_call=False,
                   gateway_endpoints=("/v1/images/generations",), output_modalities=("image",)),

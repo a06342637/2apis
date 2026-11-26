@@ -1,5 +1,5 @@
 import { providerLabel } from "../api/providers";
-import type { Provider } from "../api/types";
+import type { BatchImportEntry, Provider } from "../api/types";
 
 /**
  * 「JSON 导入」输入解析：把用户粘贴的东西归一成 `{provider, credential}`。
@@ -320,4 +320,263 @@ export function parseCredentialInput(
 export function detectProvider(text: string): Provider | null {
   const parsed = parseCredentialInput(text, "codebuddy");
   return parsed.ok ? parsed.detected : null;
+}
+
+export interface ParsedBatchCredentials {
+  entries: BatchImportEntry[];
+  errors: { line: number; message: string }[];
+  /** 原样保留本地解析失败的记录，提交成功后仍能修正重试。 */
+  unparsed: string[];
+}
+
+const EMAIL_PREFIX = /^([A-Za-z0-9.!#$%&'*+/=?^_{}|~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,})(?:[ \t\r]+|$)/;
+
+function cleanAuthToken(value: string): string {
+  return value.trim().replace(/^["']|["']$/g, "").trim().replace(/^Bearer\s+/i, "").trim();
+}
+
+function completeBatchJwt(token: string): boolean {
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts.some((part) => !/^[A-Za-z0-9_-]+$/.test(part))) return false;
+  const claims = jwtClaims(token);
+  if (!claims || Array.isArray(claims)) return false;
+  try {
+    const header = JSON.parse(atob(parts[0].replace(/-/g, "+").replace(/_/g, "/")));
+    return typeof header === "object" && header !== null && !Array.isArray(header);
+  } catch {
+    return false;
+  }
+}
+
+function looksLikeBatchJwt(token: string): boolean {
+  return token.startsWith("eyJ") || providerFromToken(token) !== null;
+}
+
+function mioraBatchCredential(raw: Record<string, unknown>): {
+  credential?: Record<string, unknown>;
+  error?: string;
+} {
+  const auth = new Set<string>();
+  const refresh = new Set<string>();
+  const cookies: string[] = [];
+  for (const key of ["access_token", "authToken", "accessToken", "token", "raw"]) {
+    const value = raw[key];
+    if (typeof value !== "string" || !value.trim()) continue;
+    const token = cleanAuthToken(value);
+    if (token.includes("=") || /^cookie\s*:/i.test(token)) cookies.push(token);
+    else auth.add(token);
+  }
+  if (typeof raw.cookie === "string") cookies.push(raw.cookie);
+  for (const key of ["refresh_token", "refreshToken"]) {
+    if (typeof raw[key] === "string" && raw[key].trim()) refresh.add(raw[key].trim());
+  }
+  for (const cookie of cookies) {
+    for (const part of cookie.replace(/^cookie\s*:\s*/i, "").split(";")) {
+      const split = part.indexOf("=");
+      if (split < 0) continue;
+      const key = part.slice(0, split).trim().toLowerCase();
+      const value = part.slice(split + 1).trim().replace(/^["']|["']$/g, "").trim();
+      if (!value) continue;
+      if (key === "authtoken") auth.add(cleanAuthToken(value));
+      if (key === "refreshtoken") refresh.add(value);
+    }
+  }
+  if (!auth.size) return { error: "Miora 凭证缺少 authToken，不能拼接其它记录补齐" };
+  if (auth.size > 1 || refresh.size > 1) {
+    return { error: "同一条记录含多份不同票据，请按账号分开粘贴" };
+  }
+  const token = [...auth][0];
+  if (looksLikeBatchJwt(token) && !completeBatchJwt(token)) {
+    return { error: "JWT 不完整或格式错误，请复制完整 token，不要拆行" };
+  }
+  return {
+    credential: {
+      ...raw,
+      authToken: token,
+      ...(refresh.size ? { refreshToken: [...refresh][0] } : {}),
+    },
+  };
+}
+
+/** 只按完整JSON和独立行分界，绝不把相邻账号/换行JWT拼成一份凭证。 */
+export function parseBatchCredentialInput(
+  text: string,
+  fallback: Provider = "miora",
+): ParsedBatchCredentials {
+  const result: ParsedBatchCredentials = { entries: [], errors: [], unparsed: [] };
+  let position = 0;
+  let line = 1;
+  let pendingEmail: { value: string; line: number } | null = null;
+  let blockedContinuation = false;
+  const consume = (end: number) => {
+    for (; position < end; position++) if (text[position] === "\n") line++;
+  };
+  const reject = (at: number, message: string, source: string) => {
+    result.errors.push({ line: at, message });
+    result.unparsed.push(source);
+  };
+  const accept = (raw: unknown, at: number, email: string, source: string) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      reject(at, "必须是对象", source);
+      return;
+    }
+    const item = raw as Record<string, unknown>;
+    blockedContinuation = false;
+    let provider: string;
+    let credential: Record<string, unknown>;
+    if ("credential" in item) {
+      if (typeof item.provider !== "string" || !item.provider.trim()) {
+        reject(at, "缺少 provider", source);
+        return;
+      }
+      if (typeof item.credential !== "object" || item.credential === null
+          || Array.isArray(item.credential)) {
+        reject(at, "credential 必须是对象", source);
+        return;
+      }
+      provider = item.provider.trim();
+      credential = item.credential as Record<string, unknown>;
+    } else {
+      if (typeof item.refreshToken === "string"
+          && !["authToken", "access_token", "accessToken", "token", "cookie", "raw"]
+            .some((key) => typeof item[key] === "string" && item[key].trim())) {
+        reject(at, "只有 refreshToken，缺少当前账号的 authToken/accessToken", source);
+        return;
+      }
+      const parsed = parseCredentialInput(JSON.stringify(item), fallback);
+      if (!parsed.ok) {
+        reject(at, parsed.error, source);
+        return;
+      }
+      provider = parsed.provider;
+      credential = parsed.credential;
+    }
+    if (provider === "miora") {
+      const parsed = mioraBatchCredential(credential);
+      if (!parsed.credential) {
+        if (parsed.error?.startsWith("JWT ")) blockedContinuation = true;
+        reject(at, parsed.error!, source);
+        return;
+      }
+      credential = parsed.credential;
+    }
+    result.entries.push({
+      provider, credential,
+      nickname: email || (typeof item.nickname === "string"
+        ? (provider === "miora" ? item.nickname.trim() : item.nickname) : ""),
+      tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
+    });
+  };
+  while (position < text.length) {
+    let newlines = 0;
+    while (position < text.length && /\s/.test(text[position])) {
+      if (text[position] === "\n") newlines++;
+      consume(position + 1);
+    }
+    if (newlines > 1) blockedContinuation = false;
+    if (position >= text.length) break;
+    const recordLine = line;
+    const lineEnd = text.indexOf("\n", position);
+    const endOfLine = lineEnd < 0 ? text.length : lineEnd;
+    const prefix = EMAIL_PREFIX.exec(text.slice(position, endOfLine));
+    if (prefix) {
+      if (pendingEmail) reject(pendingEmail.line, "邮箱后缺少凭证", pendingEmail.value);
+      pendingEmail = { value: prefix[1], line: recordLine };
+      blockedContinuation = false;
+      consume(position + prefix[0].length);
+      if (!text.slice(position, endOfLine).trim()) {
+        consume(endOfLine);
+        continue;
+      }
+    }
+    const email = pendingEmail?.value ?? "";
+    const emailSource = email ? email + "\n" : "";
+    pendingEmail = null;
+    const start = position;
+    if (text[position] === "{" || text[position] === "[") {
+      blockedContinuation = false;
+      const root = text[position];
+      let depth = 0;
+      let quoted = false;
+      let escaped = false;
+      let previous = "";
+      let end = text.length;
+      for (let index = position; index < text.length; index++) {
+        const char = text[index];
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (char === "\\") escaped = true;
+          else if (char === '"') quoted = false;
+          continue;
+        }
+        if (char === "\n" && depth === 1 && previous !== ":") {
+          let next = index + 1;
+          while (/[ \t\r]/.test(text[next] ?? "")) next++;
+          const nextEnd = text.indexOf("\n", next);
+          const nextLine = text.slice(next, nextEnd < 0 ? text.length : nextEnd);
+          const nextToken = cleanAuthToken(nextLine);
+          if ((root === "{" && text[next] === "{") || EMAIL_PREFIX.test(nextLine)
+              || /^(?:cookie\s*:|authToken\s*=)/i.test(nextLine)
+              || (nextToken.startsWith("eyJ") && completeBatchJwt(nextToken))) {
+            end = index;
+            break;
+          }
+        }
+        if (char === '"') quoted = true;
+        else if (char === "{" || char === "[") depth++;
+        else if (char === "}" || char === "]") {
+          depth--;
+          if (!depth) { end = index + 1; break; }
+        }
+        if (!/\s/.test(char)) previous = char;
+      }
+      const source = text.slice(start, end);
+      consume(end);
+      let parsed: unknown;
+      try { parsed = JSON.parse(source); } catch {
+        reject(recordLine, "JSON 解析失败", emailSource + source);
+        continue;
+      }
+      if (Array.isArray(parsed)) {
+        if (email && parsed.length !== 1) {
+          reject(recordLine, "一个邮箱只能对应一条凭证，请为数组各条设置 nickname",
+            emailSource + source);
+        } else {
+          parsed.forEach((raw, index) => accept(raw, recordLine + index, email,
+            emailSource + JSON.stringify([raw])));
+        }
+      } else accept(parsed, recordLine, email, emailSource + source);
+      continue;
+    }
+    const source = text.slice(position, endOfLine).trim();
+    consume(endOfLine);
+    const token = cleanAuthToken(source);
+    const jwtLike = looksLikeBatchJwt(token);
+    if (jwtLike && !completeBatchJwt(token)) {
+      blockedContinuation = true;
+      reject(recordLine, "JWT 不完整或格式错误，请复制完整 token，不要拆行", emailSource + source);
+      continue;
+    }
+    const boundary = jwtLike || /^(?:cookie\s*:|authToken\s*=|curl\s)/i.test(source);
+    if (blockedContinuation && !boundary) {
+      reject(recordLine, "上一条 JWT 不完整，无法把续行当作新账号，请用空行分开",
+        emailSource + source);
+      continue;
+    }
+    if (boundary) blockedContinuation = false;
+    if ((!/^curl\s/i.test(source) && /[{}\[\]]/.test(source)) || /\\$/.test(source)) {
+      reject(recordLine, "凭证边界不清楚，请保持原始 token/Cookie 独立一行",
+        emailSource + source);
+      continue;
+    }
+    const parsed = parseCredentialInput(source, fallback);
+    if (!parsed.ok) {
+      reject(recordLine, parsed.error, emailSource + source);
+      continue;
+    }
+    accept({ provider: parsed.provider, credential: parsed.credential },
+      recordLine, email, emailSource + source);
+  }
+  if (pendingEmail) reject(pendingEmail.line, "邮箱后缺少凭证", pendingEmail.value);
+  return result;
 }

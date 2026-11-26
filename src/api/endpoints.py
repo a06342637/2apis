@@ -26,7 +26,7 @@ from ..runtime_settings import RuntimeSettings
 from .account_models import account_model_tables
 from .chat_media_gate import chat_account_tables, ensure_chat_endpoint, force_image_request
 from .deps import ApiKeyPrincipal, get_services, read_json_body
-from .miora_preflight import preflight_miora
+from .miora_preflight import miora_account_scope, preflight_miora
 from .streaming import respond_with_keepalive, respond_with_stream_start, with_keepalive
 
 
@@ -121,10 +121,15 @@ async def dispatch_compat(
     ensure_model_allowed(chat_request, principal, settings)
     execution_scope: dict[str, Any] = {}
     tables = None
-    if principal.credential_ids:
+    miora_ids = miora_account_scope(get_services(request), chat_request, binding)
+    await preflight_miora(get_services(request), chat_request, principal,
+                          provider_binding=binding or ("miora" if miora_ids else None),
+                          validate_only=True)
+    account_ids = principal.credential_ids or miora_ids
+    if account_ids:
         tables = await account_model_tables(get_services(request),
-                                            principal.credential_ids, binding)
-        execution_scope = {"credential_ids": principal.credential_ids,
+                                            account_ids, binding)
+        execution_scope = {"credential_ids": account_ids,
                            "credential_models": tables,
                            "credential_model_policy": (
                                principal.allowed_models, principal.user_allowed_models)}

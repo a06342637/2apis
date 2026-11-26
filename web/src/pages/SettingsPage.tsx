@@ -371,6 +371,7 @@ export function SettingsPage() {
       // 黑名单/默认模型改了要立刻反映到 Playground：那里自带列表缓存
       // （queryKey ["playground-models"]，TTL 内不会重取），不失效会显示旧列表。
       await client.invalidateQueries({ queryKey: ["playground-models"] });
+      await client.invalidateQueries({ queryKey: ["model-display"] });
     } catch (caught) {
       setError(errorText(caught, "保存失败，请稍后重试。"));
     } finally {
@@ -392,6 +393,8 @@ export function SettingsPage() {
         return next;
       });
       await refresh();
+      await client.invalidateQueries({ queryKey: ["playground-models"] });
+      await client.invalidateQueries({ queryKey: ["model-display"] });
     } catch (caught) {
       setError(errorText(caught, "恢复失败，请稍后重试。"));
     } finally {

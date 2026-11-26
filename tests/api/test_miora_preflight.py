@@ -176,7 +176,7 @@ def gateway(tmp_path, monkeypatch):
     provider = MioraProvider(client=boundary, pacer=Pacer(0, 0, allow_concurrent=True,
                                                        max_concurrency=1))
 
-    async def catalog(_credential, *, force=False):
+    async def catalog(_credential, *, force=False, include_unavailable=False):
         return []
 
     provider.media_client = SimpleNamespace(catalog=catalog)

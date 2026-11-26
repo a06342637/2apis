@@ -6,12 +6,14 @@ import hashlib
 import json
 import logging
 import time
+from dataclasses import replace
 from typing import Any
 
 from ..auth.access import model_allowed
 from ..db.crypto import CredentialDecryptError
 from ..model_alias import parse_model_aliases
 from ..provider.base import Model
+from ..provider.miora.subscription import subscription_signature
 from ..provider.naming import normalize_model_key
 from ..request_context import credential_scope
 from .deps import Services
@@ -25,20 +27,23 @@ MAX_ACCOUNT_MODEL_CACHES = 128
 def _forget(services: Services, account_id: str) -> None:
     services.credential_model_cache.pop(account_id, None)
     services.credential_model_versions.pop(account_id, None)
+    services.credential_model_display_cache.pop(account_id, None)
 
 
 def _remember(services: Services, account_id: str, entry: tuple[float, dict[str, Model]],
-               version: str) -> None:
+               version: str, display: dict[str, Model]) -> None:
     """按最近访问保留热目录，淘汰仅丢缓存，不改变 Key 的绑定集合。"""
     services.credential_model_cache.pop(account_id, None)
     services.credential_model_cache[account_id] = entry
     services.credential_model_versions[account_id] = version
+    services.credential_model_display_cache[account_id] = display
     while len(services.credential_model_cache) > MAX_ACCOUNT_MODEL_CACHES:
         _forget(services, next(iter(services.credential_model_cache)))
 
 
 async def account_model_tables(
-    services: Services, credential_ids: tuple[str, ...], provider_binding: str = ""
+    services: Services, credential_ids: tuple[str, ...], provider_binding: str = "", *,
+    include_unavailable: bool = False, force: bool = False,
 ) -> dict[str, dict[str, Model]]:
     """只拉选中且启用的账号；同账号并发拉取共用编辑锁和 5 分钟缓存。"""
     selected = set(credential_ids)
@@ -50,6 +55,7 @@ async def account_model_tables(
     # 当前请求保留已有128份引用，批量超过缓存上限时不让逐个淘汰引起全量重拉。
     cached = dict(services.credential_model_cache)
     versions = dict(services.credential_model_versions)
+    displays = dict(services.credential_model_display_cache)
     candidates = [candidate for candidate in current
                   if candidate.credential_id in selected
                   and candidate.enabled and not candidate.disabled
@@ -68,7 +74,11 @@ async def account_model_tables(
                 if data is None:
                     _forget(services, account_id)
                     continue
-                version = hashlib.sha256(json.dumps(data, sort_keys=True,
+                version_data = data
+                if candidate.provider == "miora":
+                    version_data = {"credential": data, "subscription": subscription_signature(
+                        services.credentials.quota_detail(account_id), now=int(time.time()))}
+                version = hashlib.sha256(json.dumps(version_data, sort_keys=True,
                     separators=(",", ":")).encode()).hexdigest()
             except Exception as error:  # noqa: BLE001 - 解密/读票失败不得使用旧账号目录
                 reason = ("凭证解密失败" if isinstance(error, CredentialDecryptError)
@@ -78,19 +88,25 @@ async def account_model_tables(
                 tables[account_id] = {}
                 continue
             same = previous_version == version
-            if previous is not None and same and now - previous[0] < ACCOUNT_MODEL_TTL_SECONDS:
-                _remember(services, account_id, previous, version)
-                tables[account_id] = previous[1]
+            previous_display = services.credential_model_display_cache.get(
+                account_id, displays.get(account_id, previous[1] if previous else {}))
+            if (not force and previous is not None and same
+                    and now - previous[0] < ACCOUNT_MODEL_TTL_SECONDS):
+                _remember(services, account_id, previous, version, previous_display)
+                tables[account_id] = previous_display if include_unavailable else previous[1]
                 continue
             try:
                 with credential_scope(account_id):
                     models = await services.registry[candidate.provider].list_models(data)
-                table = {model.id.lower(): model for model in models}
+                display = {model.id.lower(): model for model in models}
+                table = {lower: model for lower, model in display.items()
+                         if model.account_available is not False}
             except Exception as error:  # noqa: BLE001 - 单账号失败不能扩大账号范围
                 logger.warning("绑定账号目录拉取失败 %s: %s", account_id, type(error).__name__)
                 table = previous[1] if previous is not None and same else {}
-            _remember(services, account_id, (now, table), version)
-            tables[account_id] = table
+                display = previous_display if previous is not None and same else {}
+            _remember(services, account_id, (now, table), version, display)
+            tables[account_id] = display if include_unavailable else table
     return tables
 
 
@@ -109,8 +125,20 @@ def account_provider_tables(
         for lower, model in table.items():
             spec = row["allowed_models"]
             if model_allowed(normalize_model_key(_model_label(model)), spec):
-                target[lower] = model
+                target[lower] = (
+                    merge_account_model(target[lower], model) if lower in target else model)
     return combined
+
+
+def merge_account_model(first: Model, second: Model) -> Model:
+    """任一允许账号可用即可用，未知不能覆盖明确的拒绝；VIP要求仍保留。"""
+    states = (first.account_available, second.account_available)
+    available = True if True in states else False if False in states else None
+    return replace(first, account_available=available,
+                   required_account_tier=(
+                       first.required_account_tier or second.required_account_tier),
+                   account_unavailable_reason=None if available is True else (
+                       first.account_unavailable_reason or second.account_unavailable_reason))
 
 
 def restricted_entries(

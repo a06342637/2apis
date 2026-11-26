@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     quota_cycle_end  INTEGER,                      -- 最早到期 epoch；渠道无此信息为 NULL
     quota_expiry_ladder TEXT,                      -- 到期阶梯 JSON [[epoch, 剩余积分]]；无到期信息为 NULL
     quota_packages   TEXT,                      -- 额度包明细 JSON [{"name","total","used","end","expiring"}]，仅展示
+    quota_detail     TEXT,                      -- 匿名化额度/订阅补充信息 JSON，仅展示，不参与调度权限
     web_cookie_state TEXT,                      -- 网页明细源状态：NULL=未配置/未知，ok=正常，expired=会话失效（仅提示）
     -- 账号密码状态（仅小浣熊按需登录用）：NULL=未配置，1=已保存。
     -- 只存「有没有」，账号密码本身在 data_enc 里（导出时被剔除），

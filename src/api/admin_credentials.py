@@ -14,6 +14,9 @@ import json
 import logging
 import math
 import time
+from collections.abc import Callable
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, Depends
@@ -87,11 +90,24 @@ LOGIN_PASSWORD_MAX_LENGTH = 128
 # 不参与归一化（同档内按数值稳定排序）。
 WEIGHT_MIN = -1000
 WEIGHT_MAX = 1000
+MAX_SQLITE_INTEGER = 2**63 - 1
 
 # 批量的在途并发上限。后台任务用 Pacer 严格串行化上游请求，但那是跨任务
 # 节流；批量端点由操作员手动触发，若完全串行则 50 个号要等几分钟才返回。
 # 折中：限制同时在途的凭证数，既不打爆上游，也不至于让请求长时间挂住。
 BATCH_CONCURRENCY = 4
+
+
+def _miora_batch_nickname_factory() -> Callable[[], str]:
+    stamp = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
+    sequence = 0
+
+    def next_name() -> str:
+        nonlocal sequence
+        sequence += 1
+        return f"{stamp}-{sequence:03d}"
+
+    return next_name
 
 # 批量动作 → 审计动作。探测 / 签到是只读语义（与单条端点一致，不写审计），
 # 只有真正改动凭证状态的 toggle / revive 落一条汇总流水。
@@ -110,9 +126,16 @@ def _optional_limit(payload: dict, key: str, *, integer: bool = False):
     value = payload[key]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise InvalidRequest(f"{key} must be a number")
-    if not math.isfinite(value):
+    if isinstance(value, float) and not math.isfinite(value):
         raise InvalidRequest(f"{key} must be finite")
-    number = int(value) if integer else float(value)
+    if value <= 0:
+        return None
+    if integer and value > MAX_SQLITE_INTEGER:
+        raise InvalidRequest(f"{key} must fit a signed 64-bit integer")
+    try:
+        number = int(value) if integer else float(value)
+    except OverflowError as error:
+        raise InvalidRequest(f"{key} must fit a finite number") from error
     return number if number > 0 else None
 
 
@@ -129,8 +152,10 @@ def _per_model_limits(payload: dict) -> dict[str, int]:
         if not name:
             continue
         if isinstance(cap, bool) or not isinstance(cap, (int, float)) \
-                or not math.isfinite(cap):
+                or (isinstance(cap, float) and not math.isfinite(cap)):
             raise InvalidRequest(f"per_model_tokens[{name}] must be a number")
+        if cap > MAX_SQLITE_INTEGER:
+            raise InvalidRequest(f"per_model_tokens[{name}] must fit a signed 64-bit integer")
         cap_int = int(cap)
         if cap_int > 0:
             out[name] = cap_int
@@ -157,8 +182,8 @@ def _expected_version(payload: dict) -> int | None:
     raw = payload.get("expected_updated_at")
     if raw is None:
         return None
-    if isinstance(raw, bool) or not isinstance(raw, int) or raw < 0:
-        raise InvalidRequest("expected_updated_at must be a non-negative integer")
+    if isinstance(raw, bool) or not isinstance(raw, int) or not 0 <= raw <= MAX_SQLITE_INTEGER:
+        raise InvalidRequest("expected_updated_at must be a non-negative signed 64-bit integer")
     return raw
 
 
@@ -385,7 +410,8 @@ def create_router(services: Services) -> APIRouter:
         return provider_id, credential_data, tags
 
     async def register_import(provider_id: str, credential_data: dict, tags: list[str],
-                              nickname: str, principal) -> dict:
+                              nickname: str, principal, *,
+                              new_nickname: Callable[[], str] | None = None) -> dict:
         """落库 + 审计 + 探测入队；返回凭证 id、ToS 风险与是否就地合并。
 
         `MANUAL_MERGE_PROVIDERS`（灵犀 / 小浣熊）没有 OAuth 轨道，手工导入就是
@@ -403,7 +429,8 @@ def create_router(services: Services) -> APIRouter:
             # 手工会话导入与 OAuth 登录共用渠道锁和凭证编辑锁，不能覆盖正在续期的票。
             credential_id, merged = await save_login_credential(
                 services, provider_id=provider_id, credential_data=credential_data,
-                nickname=nickname, added_by=principal.username, tags=tags)
+                nickname=nickname, added_by=principal.username, tags=tags,
+                new_nickname=new_nickname, merge_identical=new_nickname is not None)
         if not merged and provider_id == "zen" and credential_data.get("api_key"):
             # zen 是单槽渠道（一条虚拟凭证代表整条上游）：带 Key 导入不是
             # 「再加一条号」，而是把这条虚拟凭证从匿名档换成付费档。否则会
@@ -477,6 +504,7 @@ def create_router(services: Services) -> APIRouter:
         skipped: list[dict] = []
         failed: list[dict] = []
         seen: set[str] = set()
+        new_miora_name = _miora_batch_nickname_factory()
         for index, item in enumerate(items):
             if not isinstance(item, dict):
                 failed.append({"index": index, "reason": "entry must be an object"})
@@ -490,13 +518,17 @@ def create_router(services: Services) -> APIRouter:
                 f"{provider_id}:"
                 + json.dumps(credential_data, sort_keys=True, ensure_ascii=False)
             )
-            if fingerprint in seen or credentials.has_same_credential(
-                    provider_id, credential_data):
+            nickname = str(item.get("nickname") or "")
+            if provider_id == "miora":
+                nickname = nickname.strip()
+            if fingerprint in seen or (credentials.has_same_credential(
+                    provider_id, credential_data) and not (provider_id == "miora" and nickname)):
                 skipped.append({"index": index, "reason": "duplicate"})
                 continue
             seen.add(fingerprint)
             row = await register_import(provider_id, credential_data, tags,
-                                        str(item.get("nickname") or ""), principal)
+                nickname, principal,
+                new_nickname=new_miora_name if provider_id == "miora" else None)
             created.append({"index": index, **row})
         logger.info("管理员 %s 批量导入：成功 %d，跳过 %d，失败 %d",
                     principal.username, len(created), len(skipped), len(failed))
@@ -568,8 +600,11 @@ def create_router(services: Services) -> APIRouter:
         # 显式传（含空串 = 清空）才写。
         allowed_models: str | None = None
         if "allowed_models" in payload:
+            model_policy = payload.get("allowed_models")
+            if model_policy is not None and not isinstance(model_policy, str):
+                raise InvalidRequest("allowed_models must be text or null")
             try:
-                allowed_models = normalize_allowed_models(payload.get("allowed_models"))
+                allowed_models = normalize_allowed_models(model_policy)
             except ValueError as error:
                 raise InvalidRequest(str(error)) from error
         limits = {
@@ -580,22 +615,24 @@ def create_router(services: Services) -> APIRouter:
         }
         # 先做版本比对写入（模型白名单与凭证行同一条 UPDATE，天然原子）；
         # 冲突时一行都不改，直接把当前快照回给客户端。
-        version = credentials.apply_credential_edit(
-            credential_id, allowed_models=allowed_models,
-            expected_updated_at=expected)
-        if version is None:
-            record = services.limits.get(credential_id)
-            current = credentials.edit_snapshot(credential_id)
-            content = error_payload(
-                "凭证已被他人修改，请刷新后重试", "credential_conflict", 409)
-            content["current"] = {
-                "id": credential_id,
-                "updated_at": current.get("updated_at", 0),
-                "allowed_models": current.get("allowed_models", ""),
-                "limits": record.as_dict() if record is not None else None,
-            }
-            return JSONResponse(status_code=409, content=content)
-        services.limits.set(credential_id, updated_by=principal.username, **limits)
+        # 两个仓储共用数据库事务，后续限额写入失败也不能留下半次白名单/版本编辑。
+        with services.limits.transaction():
+            version = credentials.apply_credential_edit(
+                credential_id, allowed_models=allowed_models,
+                expected_updated_at=expected)
+            if version is None:
+                record = services.limits.get(credential_id)
+                current = credentials.edit_snapshot(credential_id)
+                content = error_payload(
+                    "凭证已被他人修改，请刷新后重试", "credential_conflict", 409)
+                content["current"] = {
+                    "id": credential_id,
+                    "updated_at": current.get("updated_at", 0),
+                    "allowed_models": current.get("allowed_models", ""),
+                    "limits": record.as_dict() if record is not None else None,
+                }
+                return JSONResponse(status_code=409, content=content)
+            services.limits.set(credential_id, updated_by=principal.username, **limits)
         services.limit_guard.invalidate()
         detail = _limits_detail(limits)
         if allowed_models is not None:

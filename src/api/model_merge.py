@@ -77,7 +77,8 @@ logger = logging.getLogger(__name__)
 _META_FIELDS = ("name", "credit_rate", "max_input_tokens", "max_output_tokens",
                 "supports_images", "supports_tool_call",
                 "supports_reasoning", "default_effort",
-                "gateway_endpoints", "output_modalities")
+                "gateway_endpoints", "output_modalities", "required_account_tier",
+                "account_available", "account_unavailable_reason")
 
 # OpenRouter 风格别名 → 本仓字段（同值双发，内部模型不变）。OpenRouter 生态的
 # 客户端（Claude Code 的 auto-compact 窗口、各家 SDK 的 max_completion_tokens）
@@ -588,7 +589,8 @@ def _entry_response(entry: dict[str, Any],
         detail: dict[str, Any] = {"raw_id": entry["raw_ids"][pid]}
         if meta["credit_rate"] is not None:
             detail["credit_rate"] = meta["credit_rate"]
-        for field in ("gateway_endpoints", "output_modalities"):
+        for field in ("gateway_endpoints", "output_modalities", "required_account_tier",
+                      "account_available", "account_unavailable_reason"):
             if meta.get(field) is not None:
                 detail[field] = meta[field]
         by_provider[pid] = detail
@@ -610,7 +612,8 @@ def _entry_response(entry: dict[str, Any],
 
 
 def _visible(models_by_lower: dict[str, Model],
-             patterns: tuple[str, ...]) -> dict[str, Model]:
+             patterns: tuple[str, ...], *, include_unavailable: bool = False) -> dict[str, Model]:
     """按当前黑名单过滤一个上游的模型表（缓存里存的是未过滤的原始表）。"""
     return {lower: model for lower, model in models_by_lower.items()
-            if not _blocked(model, patterns)}
+            if not _blocked(model, patterns)
+            and (include_unavailable or model.account_available is not False)}

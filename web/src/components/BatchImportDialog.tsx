@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { FileUp, TriangleAlert, Upload } from "lucide-react";
 import { api, ApiError } from "../api/client";
-import type { BatchImportEntry, BatchImportResult } from "../api/types";
+import type { BatchImportEntry, BatchImportResult, Provider } from "../api/types";
+import { providerLabel } from "../api/providers";
+import { IMPORT_PROVIDERS, parseBatchCredentialInput } from "../lib/credentialImport";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { Button, Notice } from "../ui";
 
@@ -10,66 +12,17 @@ type ParseError = { line: number; message: string };
 /**
  * 批量导入文本 → 条目 + 逐行错误。
  *
- * 两种写法都收：
- * - JSON 数组：`[{provider, credential, nickname?, tags?}, …]`
- * - JSONL：一行一个对象（脚本导出/手工粘贴都常见）
+ * 接受 JSON 数组 / JSONL / 相邻完整 JSON、独立行 Cookie / token，
+ * 邮箱可放在凭证前或上一行作为昵称。
  *
  * 解析与校验分开：某一行坏了只记该行，其余照常导入（后端也是同一口径）。
  * 行号从 1 开始，数组模式下用元素序号。
  */
-export function parseBatchText(text: string): {
+export function parseBatchText(text: string, fallback: Provider = "miora"): {
   entries: BatchImportEntry[];
   errors: ParseError[];
 } {
-  const trimmed = text.trim();
-  if (!trimmed) return { entries: [], errors: [] };
-  const entries: BatchImportEntry[] = [];
-  const errors: ParseError[] = [];
-  const accept = (raw: unknown, line: number) => {
-    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-      errors.push({ line, message: "必须是对象" });
-      return;
-    }
-    const item = raw as Record<string, unknown>;
-    if (typeof item.provider !== "string" || !item.provider.trim()) {
-      errors.push({ line, message: "缺少 provider" });
-      return;
-    }
-    if (typeof item.credential !== "object" || item.credential === null
-        || Array.isArray(item.credential)) {
-      errors.push({ line, message: "credential 必须是对象" });
-      return;
-    }
-    entries.push({
-      provider: item.provider.trim(),
-      credential: item.credential,
-      nickname: typeof item.nickname === "string" ? item.nickname : "",
-      tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
-    });
-  };
-
-  if (trimmed.startsWith("[")) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      return { entries: [], errors: [{ line: 1, message: "JSON 解析失败" }] };
-    }
-    if (!Array.isArray(parsed)) {
-      return { entries: [], errors: [{ line: 1, message: "顶层必须是数组" }] };
-    }
-    parsed.forEach((raw, index) => accept(raw, index + 1));
-    return { entries, errors };
-  }
-
-  trimmed.split(/\r?\n/).forEach((line, index) => {
-    if (!line.trim()) return;
-    try {
-      accept(JSON.parse(line), index + 1);
-    } catch {
-      errors.push({ line: index + 1, message: "JSON 解析失败" });
-    }
-  });
+  const { entries, errors } = parseBatchCredentialInput(text, fallback);
   return { entries, errors };
 }
 
@@ -86,10 +39,11 @@ export function BatchImportDialog({
   const dialogRef = useDialogFocus<HTMLDivElement>(onClose);
   const fileRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
+  const [fallback, setFallback] = useState<Provider>("miora");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BatchImportResult | null>(null);
-  const parsed = useMemo(() => parseBatchText(text), [text]);
+  const parsed = useMemo(() => parseBatchCredentialInput(text, fallback), [text, fallback]);
 
   const readFile = async (file: File | undefined) => {
     if (!file) return;
@@ -116,10 +70,14 @@ export function BatchImportDialog({
       if (response.created.length) {
         onImported(`批量导入完成：成功 ${response.created.length} 条`);
       }
-      if (response.failed.length) {
+      if (response.failed.length || parsed.unparsed.length) {
         // 失败行回填成 JSONL：用户可以改完直接再提交，不用重新粘贴全部
-        setText(response.failed.map(({ index }) => JSON.stringify(parsed.entries[index])).join("\n"));
-      } else if (response.skipped.length && !response.created.length) {
+        setText([
+          ...response.failed.map(({ index }) => JSON.stringify(parsed.entries[index])),
+          ...parsed.unparsed,
+        ].join("\n"));
+      }
+      if (response.skipped.length && !response.created.length && !response.failed.length) {
         onNotice(`全部为重复凭证（${response.skipped.length} 条），未新增`);
       }
     } catch (caught) {
@@ -137,7 +95,7 @@ export function BatchImportDialog({
         aria-modal="true"
         aria-label="批量导入凭证"
         data-testid="batch-import-dialog"
-        className="w-full max-w-2xl space-y-3 rounded-xl border border-border bg-card p-5 shadow-xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-2xl space-y-3 overflow-y-auto overscroll-contain rounded-xl border border-border bg-card p-5 shadow-xl"
       >
         <div className="flex items-center gap-2">
           <Upload className="size-4 text-muted-foreground" />
@@ -145,10 +103,27 @@ export function BatchImportDialog({
           <span className="ml-auto text-xs text-muted-foreground">最多 100 条</span>
         </div>
         <p className="text-xs text-muted-foreground">
-          粘贴 JSON 数组或逐行 JSON（JSONL），每条形如
-          <code className="mx-1">{"{provider, credential, nickname?, tags?}"}</code>。
-          同渠道内容完全相同的凭证会自动跳过。
+          粘贴多份 JSON（可换行）、一行一个 Cookie 或完整 token，也支持 JSON 数组/JSONL。
+          邮箱放在凭证前或上一行作为昵称。新 Miora 账号未填昵称时按北京时间自动编号，
+          重新导入保留旧昵称；同批重复凭证会跳过。
         </p>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          原始 token 默认渠道
+          <select
+            data-testid="batch-provider"
+            aria-label="原始 token 默认渠道"
+            autoComplete="off"
+            value={fallback}
+            disabled={pending}
+            onChange={(event) => setFallback(event.target.value as Provider)}
+            className="rounded border border-border bg-background px-2 py-1 text-foreground"
+          >
+            {IMPORT_PROVIDERS.map((provider) => (
+              <option key={provider} value={provider}>{providerLabel(provider)}</option>
+            ))}
+          </select>
+          <span>JSON/Cookie 的明确渠道优先</span>
+        </label>
 
         <div className="flex items-center gap-2">
           <input
@@ -163,6 +138,7 @@ export function BatchImportDialog({
             size="sm"
             variant="ghost"
             data-testid="batch-pick-file"
+            disabled={pending}
             onClick={() => fileRef.current?.click()}
           >
             <FileUp className="size-4" /> 选择文件
@@ -174,6 +150,10 @@ export function BatchImportDialog({
         </div>
 
         <textarea
+          name="credential-batch-text"
+          data-lpignore="true"
+          data-1p-ignore="true"
+          data-bwignore="true"
           data-testid="batch-text"
           value={text}
           onChange={(event) => {
@@ -181,16 +161,29 @@ export function BatchImportDialog({
             setResult(null);
           }}
           rows={8}
+          disabled={pending}
+          autoComplete="off"
           spellCheck={false}
-          placeholder={'{"provider":"codebuddy","credential":{"bearer_token":"…"}}'}
+          placeholder={'mail@example.com {"authToken":"TOKEN","refreshToken":"REFRESH"}\n{"authToken":"ANOTHER_TOKEN","refreshToken":"ANOTHER_REFRESH"}'}
           className="w-full resize-y rounded-md border border-border bg-background p-2 font-mono text-xs"
         />
+        {parsed.entries.length > 0 && (
+          <div data-testid="batch-preview" className="text-xs text-muted-foreground">
+            {parsed.entries.slice(0, 5).map((entry, index) => (
+              <div key={index}>
+                {index + 1}. {providerLabel(entry.provider as Provider)} ·{" "}
+                {entry.nickname || (entry.provider === "miora" ? "新增时自动编号" : "未设置昵称")}
+              </div>
+            ))}
+          </div>
+        )}
+        {parsed.entries.length > 100 && <Notice tone="warn">一次最多导入 100 条，请分批粘贴。</Notice>}
 
         {parsed.errors.length > 0 && (
           <div data-testid="batch-parse-errors" className="text-xs">
             <Notice tone="warn">
-              {parsed.errors.slice(0, 5).map((item) => (
-                <div key={item.line} className="inline-flex items-center gap-1.5">
+              {parsed.errors.slice(0, 5).map((item, index) => (
+                <div key={item.line + "-" + index} className="inline-flex items-center gap-1.5">
                   <TriangleAlert className="size-3" />第 {item.line} 行：{item.message}
                 </div>
               ))}
@@ -222,7 +215,7 @@ export function BatchImportDialog({
             variant="default"
             data-testid="batch-submit"
             onClick={() => void submit()}
-            disabled={pending || parsed.entries.length === 0}
+            disabled={pending || parsed.entries.length === 0 || parsed.entries.length > 100}
           >
             {pending ? "导入中…" : `导入 ${parsed.entries.length} 条`}
           </Button>

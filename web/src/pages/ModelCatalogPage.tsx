@@ -8,6 +8,9 @@ import {
   Trophy,
 } from "lucide-react";
 import { useSessionContext } from "../Layout";
+import { useDisplayModels } from "../api/modelDisplay";
+import { groupModelsByProvider } from "../components/ModelPicker";
+import { MioraAccessCatalog } from "./models/MioraAccessCatalog";
 import {
   useBlockModel,
   useModelCatalogPage,
@@ -363,6 +366,9 @@ function ProbePanel({
  */
 export function ModelCatalogPage() {
   const session = useSessionContext();
+  const displayModels = useDisplayModels(session.username);
+  const mioraModels = groupModelsByProvider(Array.isArray(displayModels.data?.data)
+    ? displayModels.data.data : []).get("miora") ?? [];
   const { sort, order, toggle } = useSort("id", "asc",
     { context: "desc", max_output: "desc", input: "desc", output: "desc",
       cache_read: "desc", cache_write: "desc", intelligence: "desc" });
@@ -530,6 +536,8 @@ export function ModelCatalogPage() {
         description="OpenRouter 模型目录：统计页「成本（估算）」的刊例价来源（输入 / 输出 / 缓存读，USD / 百万 token）与上下文、模态、知识截止等元数据；「能力分」来自 Artificial Analysis。"
         icon={<Boxes className="size-5" />}
       />
+
+      <MioraAccessCatalog models={mioraModels} />
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-3">
         <Metric

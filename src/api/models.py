@@ -49,7 +49,8 @@ from ..engine.reasoning import parse_effort_map
 from ..error_text import error_text
 from ..model_alias import parse_model_aliases
 from ..pricing import PriceTable
-from ..provider.base import Model
+from ..provider.base import Model, UpstreamProtocolViolation
+from ..provider.miora.subscription import subscription_signature
 from ..provider.naming import normalize_model_key
 from .account_models import account_model_tables, account_provider_tables, restricted_entries
 from .deps import ApiKeyPrincipal, Services, api_key_user_anthropic
@@ -114,7 +115,8 @@ def credential_providers(services: Services) -> set[str]:
             for row in services.credentials.candidates(selectable_only=True)}
 
 
-def merged_entries(services: Services, connected: set[str]) -> list[dict[str, Any]]:
+def merged_entries(services: Services, connected: set[str], *,
+                   include_unavailable: bool = False) -> list[dict[str, Any]]:
     """按当前缓存表合并出全部条目（归一键 → 定稿后按 `_sort_key` 排序）。
 
     只看 `services.model_list_cache`，不看「本次拉到了什么」：这样缓存兜底、
@@ -134,7 +136,7 @@ def merged_entries(services: Services, connected: set[str]) -> list[dict[str, An
     grouped: dict[str, dict[str, Any]] = {}   # 归一键 → {providers, meta, raw_ids, ...}
     for provider_id, table in services.model_list_cache.items():
         if provider_id in connected and table:
-            visible = _visible(table, patterns)
+            visible = _visible(table, patterns, include_unavailable=include_unavailable)
             if probed_out:
                 visible = {lower: model for lower, model in visible.items()
                            if (provider_id, lower) not in probed_out}
@@ -245,7 +247,8 @@ def publish_aliases(services: Services, connected: set[str]) -> None:
     _publish(services, merged_entries(services, connected), connected)
 
 
-async def _refresh_provider(services: Services, provider_id: str, provider: Any) -> None:
+async def _refresh_provider(services: Services, provider_id: str, provider: Any, *,
+                            force_accounts: bool = True, fail_closed: bool = False) -> None:
     """拉一条渠道的模型表：成功更新缓存并落盘，失败保留旧缓存（兜底）。
 
     缓存里存**未过滤**的原始表：过滤在每个出口现做，否则黑名单热更后缓存里
@@ -254,10 +257,16 @@ async def _refresh_provider(services: Services, provider_id: str, provider: Any)
     # 用该上游的一个可用凭证拉取（凭证有归属，模型列表是账号级的）
     # selectable_only：硬禁用/用户关闭的凭证取不到数据，只会白失败
     candidates = services.credentials.candidates([provider_id], selectable_only=True)
+    account_version = None
+    if provider_id == "miora":
+        account_version = _miora_account_version(services)
+        if fail_closed:
+            # 账号/套餐变化后旧池目录不能当新权限兜底，失败保留负缓存节奏。
+            services.model_list_cache.pop(provider_id, None)
     try:
         credential_data = (
             services.credentials.credential_data(candidates[0].credential_id)
-            if candidates else {}
+            if candidates and provider_id != "miora" else {}
         )
     except CredentialDecryptError:
         # 解不开（APP_SECRET 换过 / 密文损坏）→ 本上游暂时拉不了清单，但
@@ -268,7 +277,15 @@ async def _refresh_provider(services: Services, provider_id: str, provider: Any)
                       has_cache=bool(services.model_list_cache.get(provider_id)))
         return
     try:
-        models = await provider.list_models(credential_data)
+        if provider_id == "miora":
+            catalogs = await account_model_tables(
+                services, tuple(row.credential_id for row in candidates), provider_id,
+                include_unavailable=True, force=force_accounts)
+            if catalogs and not any(catalogs.values()):
+                raise UpstreamProtocolViolation("Miora 账号目录均暂不可用")
+            models = list(account_provider_tables(services, catalogs).get(provider_id, {}).values())
+        else:
+            models = await provider.list_models(credential_data)
     except Exception as error:  # noqa: BLE001 - 单上游失败不影响其他
         # 失败也记时间戳（负缓存）：TTL 内不再重试，有缓存用缓存、无缓存跳过。
         # 连续失败按 `_needs_refresh` 的退避拉长下一次尝试；日志只在**首次**
@@ -276,6 +293,8 @@ async def _refresh_provider(services: Services, provider_id: str, provider: Any)
         # 只会淹没真问题，连续次数仍留在消息里供排查。
         _note_failure(services, provider_id, str(error),
                       has_cache=bool(services.model_list_cache.get(provider_id)))
+        if account_version is not None:
+            services.model_list_account_versions[provider_id] = account_version
         return
     # 渠道自己能拉、但本次回的是**静态兜底表**（TRAE / CodeBuddy 在内部吞异常
     # 后照常返回）：按失败记账并标记降级，否则管理台与 `/metrics` 看不到
@@ -288,6 +307,8 @@ async def _refresh_provider(services: Services, provider_id: str, provider: Any)
         services.model_list_failure_reason.pop(provider_id, None)
     services.model_list_degraded[provider_id] = degraded
     services.model_list_cache[provider_id] = {model.id.lower(): model for model in models}
+    if account_version is not None:
+        services.model_list_account_versions[provider_id] = account_version
     services.model_list_fetched_at[provider_id] = time.monotonic()
     await _persist_catalog(services)
 
@@ -533,6 +554,16 @@ async def _revalidated_providers(services: Services) -> set[str]:
     必须一致，否则会出现「列表里有、单查 404」的错觉。
     """
     connected = credential_providers(services)
+    if "miora" in connected:
+        version = _miora_account_version(services)
+        if services.model_list_account_versions.get("miora") != version:
+            async with _refresh_lock():
+                # 同时到达的多个模型列表请求只做一次权限更新。
+                version = _miora_account_version(services)
+                if services.model_list_account_versions.get("miora") != version:
+                    await _refresh_provider(services, "miora", services.registry["miora"],
+                                            force_accounts=False, fail_closed=True)
+                    publish_aliases(services, connected)
     stale = {provider_id for provider_id in connected
              if _needs_refresh(services, provider_id, now=time.monotonic())}
     if any(not services.model_list_cache.get(provider_id) for provider_id in stale):
@@ -541,6 +572,13 @@ async def _revalidated_providers(services: Services) -> set[str]:
     elif stale:
         _schedule_refresh(services, connected, stale)
     return connected
+
+
+def _miora_account_version(services: Services) -> tuple:
+    rows = services.credentials.candidates(["miora"], selectable_only=True)
+    return tuple((row.credential_id, subscription_signature(
+        services.credentials.quota_detail(row.credential_id), now=int(time.time())))
+        for row in sorted(rows, key=lambda row: row.credential_id))
 
 
 def _benchmarks_of(request: Request | None) -> BenchmarkTable | None:
@@ -588,6 +626,20 @@ async def serve_models(services: Services, allowed_models: str = "",
                            _benchmarks_of(request), _prices_of(request),
                            _efforts_of(services),
                            user_allowed_models=user_allowed_models)
+
+
+async def serve_display_models(services: Services, request: Request,
+                              user_allowed_models: str = "") -> dict:
+    """认证管理台的完整目录，定稿仅用于显示，绝不 publish 执行别名。"""
+    from ..auth.access import model_allowed
+
+    connected = await _revalidated_providers(services)
+    entries = merged_entries(services, connected, include_unavailable=True)
+    _build_aliases(entries, parse_model_aliases(
+        str(getattr(services.settings, "model_aliases", ""))))
+    return {"object": "list", "data": [
+        _entry_response(entry, _benchmarks_of(request), _prices_of(request), _efforts_of(services))
+        for entry in entries if model_allowed(entry["id"], user_allowed_models)]}
 
 
 async def serve_model(services: Services, model_id: str, allowed_models: str = "",

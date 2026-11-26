@@ -118,7 +118,7 @@ async def test_media_catalog_failure_preserves_text_and_clears_degraded_on_recov
 ):
     provider = MioraProvider(client=Client())
 
-    async def fail(credential):
+    async def fail(credential, *, include_unavailable=False):
         raise failure
 
     monkeypatch.setattr(provider.media_client, "catalog", fail)
@@ -128,7 +128,7 @@ async def test_media_catalog_failure_preserves_text_and_clears_degraded_on_recov
     assert provider.media_catalog_error and "保留文本" in provider.media_catalog_error
     assert "保留文本" in caplog.text
 
-    async def recover(credential):
+    async def recover(credential, *, include_unavailable=False):
         return [Model(id="gem-3.1", gateway_endpoints=("/v1/images/generations",))]
 
     monkeypatch.setattr(provider.media_client, "catalog", recover)

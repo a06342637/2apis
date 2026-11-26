@@ -804,6 +804,8 @@ class Quota:
     web_cookie_state: str | None = None
     probed_at: int | None = None
     probe_failed: bool = False
+    # 匿名化的展示补充信息；不进入健康度、调度或模型权限判断。
+    detail: dict[str, Any] | None = None
 
 
 UNKNOWN: int | None = None
@@ -951,6 +953,10 @@ class Model:
     # 媒体目录与对话目录共用模型列表；端点明确实际支持的调用方式。
     gateway_endpoints: tuple[str, ...] | None = None
     output_modalities: tuple[str, ...] | None = None
+    # 账号权限来自上游目录，与消耗倍率独立；None 表示上游未声明。
+    required_account_tier: str | None = None
+    account_available: bool | None = None
+    account_unavailable_reason: str | None = None
 
 
 class AuthFlow(StrEnum):

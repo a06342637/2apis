@@ -13,6 +13,7 @@ import {
 import { safeHttpUrl } from "../lib/safeUrl";
 import { loginSuccessNotice } from "../lib/upstreamLogin";
 import { errorText } from "../lib/errors";
+import { copyText } from "../lib/clipboard";
 import { Button, Field, Input, Notice, Select, Tabs, Textarea } from "../ui";
 import { CredentialLoginLink } from "./CredentialLoginLink";
 
@@ -61,6 +62,8 @@ const IMPORT_TEMPLATES: Partial<Record<Provider, string>> = {
 };
 
 function MioraImportHelp() {
+  const [copyLabel, setCopyLabel] = useState("点击代码复制");
+  const command = 'copy(JSON.stringify({authToken:localStorage.getItem("authToken"),refreshToken:localStorage.getItem("refreshToken")},null,2))';
   return (
     <div className="space-y-2 text-xs text-muted-foreground" data-testid="miora-import-help">
       <p>
@@ -69,9 +72,12 @@ function MioraImportHelp() {
         ，登录后按 F12 → Console，运行下面命令并粘贴复制出的 JSON。
         带 refreshToken 可预刷新登录态；只导入 Cookie / token 时到期需重新导入。
       </p>
-      <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded border border-border p-2">
-        {`copy(JSON.stringify({authToken:localStorage.getItem("authToken"),refreshToken:localStorage.getItem("refreshToken")},null,2))`}
-      </pre>
+      <button type="button" data-testid="miora-copy-command" aria-label="复制 Miora 凭证获取命令"
+        className="block w-full cursor-copy rounded border border-border p-2 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        onClick={async () => setCopyLabel(await copyText(command) ? "已复制" : "复制失败，请选中代码手动复制")}>
+        <code className="block select-text whitespace-pre-wrap break-all">{command}</code>
+        <span className="mt-1 block text-[11px] text-primary" role="status">{copyLabel}</span>
+      </button>
       <p>
         多账号请分别登录、逐个导入，或使用「批量导入」。同一账号重登会更新已有凭证。
         模型列表由上游动态加载，可在 Playground 选择或用 <code>模型名@miora</code> 指定渠道。
@@ -79,6 +85,9 @@ function MioraImportHelp() {
     </div>
   );
 }
+
+const IMPORT_DETAILS_CLASS = "rounded border border-border p-3";
+const IMPORT_SUMMARY_CLASS = "cursor-pointer text-xs font-medium";
 
 type TabValue = "login" | "import";
 
@@ -406,7 +415,7 @@ export function AddCredentialDialog({
             <Plus className="size-4 text-muted-foreground" />
             添加凭证
           </h2>
-          <Button
+          <Button type="button"
             size="icon"
             variant="ghost"
             aria-label="关闭"
@@ -429,7 +438,8 @@ export function AddCredentialDialog({
         />
 
         {tab === "login" ? (
-          <div className="mt-4 space-y-4" data-testid="add-credential-login">
+          <form autoComplete="off" name="upstream-credential-entry" onSubmit={(event) => event.preventDefault()}
+            className="mt-4 space-y-4" data-testid="add-credential-login">
             <div className="flex flex-wrap items-center gap-3">
               {LOGIN_PROVIDERS.map((item) => {
                 const pending = loginProviders.includes(item);
@@ -438,7 +448,7 @@ export function AddCredentialDialog({
                     <span className="text-xs text-muted-foreground">
                       {PROVIDER_LABEL[item]} 登录中…
                     </span>
-                    <Button
+                    <Button type="button"
                       size="sm"
                       variant="danger"
                       data-testid={`cancel-login-${item}`}
@@ -449,7 +459,7 @@ export function AddCredentialDialog({
                   </span>
                 ) : (
                   <span key={item} className="inline-flex items-center gap-1">
-                    <Button
+                    <Button type="button"
                       size="sm"
                       variant="primary"
                       data-testid={`start-login-${item}`}
@@ -461,7 +471,7 @@ export function AddCredentialDialog({
                     {item === "officeace" && (
                       // 华为云会话按浏览器走：不先登出，云端会直接放行现有账号，
                       // 用户点「新增」却始终只有同一条凭证。
-                      <Button
+                      <Button type="button"
                         size="sm"
                         variant="ghost"
                         data-testid="switch-login-officeace"
@@ -497,7 +507,7 @@ export function AddCredentialDialog({
                   />
                 </Field>
                 <div className="flex items-center gap-2">
-                  <Button
+                  <Button type="button"
                     size="sm"
                     variant="primary"
                     data-testid="paste-callback-submit"
@@ -506,7 +516,7 @@ export function AddCredentialDialog({
                   >
                     完成登录
                   </Button>
-                  <Button
+                  <Button type="button"
                     size="sm"
                     variant="danger"
                     data-testid="paste-callback-cancel"
@@ -517,9 +527,11 @@ export function AddCredentialDialog({
                 </div>
               </div>
             )}
-            <div className="border-t border-border pt-3" data-testid="miora-login-entry">
+            <details className={IMPORT_DETAILS_CLASS} data-testid="miora-login-entry">
+              <summary className={IMPORT_SUMMARY_CLASS} data-testid="miora-login-summary">Miora · 登录与添加账号</summary>
+              <div className="mt-3 space-y-2">
               <MioraImportHelp />
-              <Button
+              <Button type="button"
                 className="mt-2"
                 size="sm"
                 variant="primary"
@@ -538,7 +550,8 @@ export function AddCredentialDialog({
               >
                 添加 Miora 账号
               </Button>
-            </div>
+              </div>
+            </details>
             {/* [CUSTOM] 远程/无弹窗授权入口；原绿色登录按钮保持在上方。 */}
             <div className="space-y-2" data-testid="credential-login-links">
               {LOGIN_PROVIDERS.map(provider => <CredentialLoginLink key={provider}
@@ -546,9 +559,10 @@ export function AddCredentialDialog({
                 disabled={busy || loginProviders.includes(provider) || pasteProvider === provider}
                 onNotice={onNotice} onImported={onImported} />)}
             </div>
-            <details className="border-t border-border pt-3" data-testid="manual-raccoon">
-              <summary className="mb-2 cursor-pointer text-xs font-medium"
+            <details className={IMPORT_DETAILS_CLASS} data-testid="manual-raccoon">
+              <summary className={IMPORT_SUMMARY_CLASS}
                 data-testid="manual-raccoon-summary">小浣熊 · 手工添加</summary>
+              <div className="mt-3 space-y-2">
               <div className="mb-2 text-xs text-muted-foreground">
                 小浣熊没有 OAuth 登录轨道，凭据是网页会话 JWT：在浏览器 DevTools →
                 Application → Cookies 里复制 <code>xhx_token</code> 的值，粘到下方。
@@ -562,7 +576,7 @@ export function AddCredentialDialog({
                     onChange={(event) => setRaccoonToken(event.target.value)}
                   />
                 </div>
-                <Button
+                <Button type="button"
                   size="sm"
                   variant="primary"
                   data-testid="add-raccoon"
@@ -587,10 +601,12 @@ export function AddCredentialDialog({
                   添加小浣熊
                 </Button>
               </div>
+              </div>
             </details>
-            <details className="border-t border-border pt-3" data-testid="manual-lingxi">
-              <summary className="mb-2 cursor-pointer text-xs font-medium"
+            <details className={IMPORT_DETAILS_CLASS} data-testid="manual-lingxi">
+              <summary className={IMPORT_SUMMARY_CLASS}
                 data-testid="manual-lingxi-summary">灵犀 · 手工添加</summary>
+              <div className="mt-3 space-y-2">
               <div className="mb-2 text-xs text-muted-foreground">
                 灵犀没有 OAuth 登录轨道，凭据是 WPS 账号 cookie：在浏览器打开
                 lingxi.kdocs.cn 登录后，DevTools → Application → Cookies 里复制整段
@@ -605,7 +621,7 @@ export function AddCredentialDialog({
                     onChange={(event) => setLingxiCookie(event.target.value)}
                   />
                 </div>
-                <Button
+                <Button type="button"
                   size="sm"
                   variant="primary"
                   data-testid="add-lingxi"
@@ -630,10 +646,12 @@ export function AddCredentialDialog({
                   添加灵犀
                 </Button>
               </div>
+              </div>
             </details>
-            <details className="border-t border-border pt-3" data-testid="manual-free">
-              <summary className="mb-2 cursor-pointer text-xs font-medium"
+            <details className={IMPORT_DETAILS_CLASS} data-testid="manual-free">
+              <summary className={IMPORT_SUMMARY_CLASS}
                 data-testid="manual-free-summary">OpenCode Zen / Kilo · 手工添加</summary>
+              <div className="mt-3 space-y-2">
               <div className="mb-2 text-xs text-muted-foreground">
                 OpenCode Zen / Kilo 免费层无需凭证/登录，删除其虚拟凭证后点下方按钮补回
                 （永久停用请改用「暂停」）。Zen 若已充值，可粘贴 Console 的 API Key
@@ -652,7 +670,7 @@ export function AddCredentialDialog({
                 </Field>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Button
+                <Button type="button"
                   size="sm"
                   variant="default"
                   data-testid="add-zen"
@@ -682,7 +700,7 @@ export function AddCredentialDialog({
                       : "OpenCode Zen 已添加"
                     : "添加 OpenCode Zen"}
                 </Button>
-                <Button
+                <Button type="button"
                   size="sm"
                   variant="default"
                   data-testid="add-kilo"
@@ -702,10 +720,12 @@ export function AddCredentialDialog({
                   {hasKilo ? "Kilo 已添加" : "添加 Kilo"}
                 </Button>
               </div>
+              </div>
             </details>
-          </div>
+          </form>
         ) : (
-          <form onSubmit={submitImport} className="mt-4 space-y-3" data-testid="add-credential-import">
+          <form autoComplete="off" name="upstream-json-import" onSubmit={submitImport}
+            className="mt-4 space-y-3" data-testid="add-credential-import">
             <div className="flex flex-wrap gap-3">
               <div className="w-40">
                 <Field label="渠道" htmlFor="import-provider-select">
@@ -745,7 +765,10 @@ export function AddCredentialDialog({
                 </Field>
               </div>
             </div>
-            {effectiveProvider === "miora" && <MioraImportHelp />}
+            {effectiveProvider === "miora" && <details className={IMPORT_DETAILS_CLASS} data-testid="miora-json-help">
+              <summary className={IMPORT_SUMMARY_CLASS}>Miora · 获取登录凭证</summary>
+              <div className="mt-3"><MioraImportHelp /></div>
+            </details>}
             {effectiveProvider === "lingxi" && lingxiCount > 0 && (
               <div data-testid="import-lingxi-warning">
                 <Notice tone="warn">

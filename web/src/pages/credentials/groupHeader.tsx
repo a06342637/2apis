@@ -11,6 +11,7 @@ import {
   Sparkles,
   Timer,
   ToggleLeft,
+  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ReactNode } from "react";
@@ -29,10 +30,39 @@ import { rateLabel } from "../../components/ModelPicker";
 import type { ProviderModel } from "../../components/ModelPicker";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { MioraCapabilities, MioraOfficialMediaModels } from "../../components/MioraCapabilities";
-import { LongTextTip } from "../../components/Tip";
 import { Checkbox, TableCell, TableRow } from "../../ui";
 import { QuotaRing } from "./cells";
 import { supportsCheckin } from "./helpers";
+import { ModelListPopup, ModelListPopupClose } from "./ModelListPopup";
+import type { AccountSection } from "./accountSections";
+import { sortProviderModelsByAccess } from "../../lib/modelAccess";
+
+/** 渠道下的固定二级账号组，选择仍交给页面的去重集合。 */
+export function CredentialAccountGroupHeader({ section, providerLabel, collapsed, canWrite, busy, selected,
+  onToggle, onSelect }: {
+  section: AccountSection; providerLabel: string; collapsed: boolean; canWrite: boolean; busy: boolean;
+  selected: Set<string>; onToggle: () => void; onSelect: (ids: string[], checked: boolean) => void;
+}) {
+  const ids = section.items.map((item) => item.id);
+  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+  return <TableRow data-testid={`account-group-${section.key}`}>
+    <TableCell colSpan={canWrite ? 7 : 5} className="bg-muted/20 px-2 py-0">
+      <div className="flex items-center gap-2">
+        {canWrite && section.selectable && <Checkbox checked={allSelected} disabled={busy || ids.length === 0}
+          aria-label={`全选 ${providerLabel} / ${section.name} 的账号`} data-testid={`account-group-select-${section.key}`}
+          onCheckedChange={(checked) => onSelect(ids, checked === true)} />}
+        <button type="button" aria-expanded={!collapsed} data-testid={`account-group-toggle-${section.key}`}
+          onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 rounded py-2 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+          <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} aria-hidden />
+          <span className="min-w-0 break-all font-semibold">{section.name}</span>
+          <span className="shrink-0 text-muted-foreground tabular-nums">
+            {section.membershipKnown && section.items.length !== section.memberCount ? `${section.items.length} / ${section.memberCount}` : section.memberCount} 个账号
+          </span>
+        </button>
+      </div>
+    </TableCell>
+  </TableRow>;
+}
 
 /**
  * 组头状态分布的图标：与行内状态徽章的语义色同源，图形本身也表意
@@ -96,8 +126,19 @@ export function CredentialGroupHeader({
   // 剩余到期时间——实测「1.5天」被读成倒计时（积分今天到期却显示 1.5 天）。
   const primaryWindowLabel = `${formatDuration(expiryWindow)}窗口内到期`;
   const gatewayGroupOrder = ["chat", "image", "video", "unconnected"];
-  const displayedModels = group.provider === "miora" ? [...groupModels].sort((left, right) =>
-    gatewayGroupOrder.indexOf(left.gatewayGroup ?? "chat") - gatewayGroupOrder.indexOf(right.gatewayGroup ?? "chat")) : groupModels;
+  const accessGroup = (model: ProviderModel) => model.access?.vip ? "vip"
+    : model.access?.available === false ? "unavailable" : "normal";
+  const accessGroupLabels = { normal: "常用 · 当前账号可用", vip: "VIP 模型（需要对应套餐）", unavailable: "暂不可用模型" };
+  const displayedModels = group.provider === "miora"
+    ? (["normal", "vip", "unavailable"] as const).flatMap((access) => gatewayGroupOrder.flatMap((category) =>
+      sortProviderModelsByAccess(groupModels.filter((model) => accessGroup(model) === access
+        && (model.gatewayGroup ?? "chat") === category))))
+    : sortProviderModelsByAccess(groupModels);
+  const hasAccessInfo = groupModels.some((model) => model.access !== undefined);
+  const availableModels = groupModels.filter((model) => model.access?.available === true).length;
+  const vipLockedModels = groupModels.filter((model) => model.access?.vip && model.access.available === false).length;
+  const otherLockedModels = groupModels.filter((model) => !model.access?.vip && model.access?.available === false).length;
+  const unknownModels = groupModels.filter((model) => model.access?.available === undefined).length;
   const secondaryWindowLabel = `${formatDuration(expirySecondaryWindow)}窗口内到期`;
   // 到期积分按本组那本账取：CodeArts（credits）的到期阶梯与其余渠道（pool）
   // 同源，直接对通用字段求和即可；免费层无额度接口，恒无到期积分。
@@ -358,11 +399,10 @@ export function CredentialGroupHeader({
                                   **必须在折叠按钮外面**：它自己是个可聚焦按钮（键盘能
                                   打开清单），按钮套按钮会让 HTML 解析直接拆掉外层结构。
 
-                                  触屏没有 hover，点击又会被 Radix 的 pointerdown 关掉，
-                                  所以移动端打不开清单（与页面其它 hover 明细同一限制）；
-                                  真要在手机上看，需要换成 Popover（点击开合）。 */}
+                                  悬浮或聚焦预览，点击或 Enter 固定打开；触屏可点击，
+                                  整个弹层按视口限高，模型列表与详情都可以滚动查看。 */}
                               {groupModels.length > 0 && (
-                                <LongTextTip
+                                <ModelListPopup label={group.label}
                                   className={group.provider === "miora"
                                     ? "w-96 max-w-[min(90vw,24rem)] p-0"
                                     : "w-80 max-w-[min(90vw,20rem)] p-0"}
@@ -370,22 +410,31 @@ export function CredentialGroupHeader({
                                     <div data-testid={`group-${group.key}-models`}>
                                       {/* 头部：渠道身份 + 条数，吸顶不随清单滚走——
                                           几十条模型滚到中段时仍知道「这是哪个渠道的清单」 */}
-                                      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                                      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-panel-raised px-3 py-2">
                                         <ProviderIcon provider={group.provider} size={14} />
                                         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
                                           {group.label}
                                         </span>
                                         <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-                                          {groupModels.length} 个模型
+                                          {hasAccessInfo ? `${availableModels} 已确认可用 / ` : ""}{groupModels.length} 个模型
                                         </span>
+                                        <ModelListPopupClose aria-label="关闭模型清单"
+                                          className="shrink-0 rounded p-1 hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
+                                          <X className="size-3.5" aria-hidden />
+                                        </ModelListPopupClose>
                                       </div>
+                                      {hasAccessInfo && <p data-testid={`group-${group.key}-model-availability`}
+                                        className="border-b border-border px-3 py-2 text-[11px] leading-snug text-muted-foreground">
+                                        已确认可用 {availableModels}；需 VIP 且当前不可用 {vipLockedModels}；暂不可用 {otherLockedModels}
+                                        {unknownModels > 0 ? `；权限待确认 ${unknownModels}` : ""}。
+                                      </p>}
                                       {group.provider === "miora" && (
                                         <div className="border-b border-border bg-muted/30 px-3 py-2">
                                           <MioraCapabilities compact />
                                         </div>
                                       )}
-                                      {/* 清单：限高内滚（不把弹层顶出视口），行间细分隔线 */}
-                                      <ul className="max-h-64 divide-y divide-border/60 overflow-y-auto">
+                                      {/* 清单与用途说明、官网详情在同一弹层滚动，避免多层限高漏掉其它内容。 */}
+                                      <ul className="divide-y divide-border/60">
                                         {displayedModels.map((model, index) => (
                                           <li
                                             key={model.id}
@@ -393,9 +442,16 @@ export function CredentialGroupHeader({
                                             className="px-3 py-1.5"
                                           >
                                             {group.provider === "miora" && (index === 0 ||
+                                              accessGroup(model) !== accessGroup(displayedModels[index - 1])) && (
+                                              <p data-testid="model-access-section" className="mb-2 text-xs font-semibold text-foreground">
+                                                {accessGroupLabels[accessGroup(model)]}
+                                              </p>
+                                            )}
+                                            {group.provider === "miora" && (index === 0 ||
+                                              accessGroup(model) !== accessGroup(displayedModels[index - 1]) ||
                                               model.gatewayGroup !== displayedModels[index - 1].gatewayGroup) && (
                                               <p data-testid="miora-model-section" className="mb-1 text-xs font-semibold text-foreground">
-                                                {MIORA_MODEL_GROUP_LABELS[model.gatewayGroup ?? "chat"]}
+                                                {MIORA_MODEL_GROUP_LABELS[model.gatewayGroup ?? "chat"].split(" · ")[0]}
                                               </p>
                                             )}
                                             <div className="flex items-baseline justify-between gap-3">
@@ -422,6 +478,14 @@ export function CredentialGroupHeader({
                                               {model.rate === undefined ? "—" : rateLabel(model.rate)}
                                             </span>
                                             </div>
+                                            {model.access && <div data-testid="model-account-access" className="mt-1 text-[11px] leading-snug">
+                                              <span className={cn("rounded px-1 py-0.5 font-medium",
+                                                model.access.available === false ? "bg-warn/12 text-warn-ink"
+                                                  : model.access.vip ? "bg-muted text-foreground" : "bg-ok/12 text-ok-ink")}>
+                                                {model.access.label}{model.access.vip && model.access.available === false ? " · 当前账号不可用" : ""}
+                                              </span>
+                                              <p className="mt-1 text-muted-foreground">{model.access.description}</p>
+                                            </div>}
                                             {model.purpose && (
                                               <div data-testid="model-purpose" className="mt-1 text-[11px] leading-snug text-muted-foreground">
                                                 <p>{model.purpose.label}</p>
@@ -458,7 +522,7 @@ export function CredentialGroupHeader({
                                     <span className="min-w-0">
                                       <span className="block text-[11px] leading-tight text-muted-foreground">模型</span>
                                       <span className="block truncate text-xs leading-tight font-medium tabular-nums text-foreground">
-                                        {groupModels.length} 个
+                                        {hasAccessInfo ? `${availableModels} 可用 / ` : ""}{groupModels.length} 个
                                         {rateText !== null && (
                                           <span className="ml-1 font-normal text-muted-foreground">
                                             · {rateText}
@@ -467,7 +531,7 @@ export function CredentialGroupHeader({
                                       </span>
                                     </span>
                                   </button>
-                                </LongTextTip>
+                                </ModelListPopup>
                               )}
                               {groupAction && <span className="shrink-0 pr-3">{groupAction}</span>}
                             </span>

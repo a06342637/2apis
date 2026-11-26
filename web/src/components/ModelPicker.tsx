@@ -6,6 +6,7 @@ import { aliasTitle, isCustomAlias } from "../api/modelExtras";
 import { providerChartColor, providerLabel, providerRank } from "../api/providers";
 import { isChatModel, mioraModelGroup, modelPurpose } from "../lib/modelCapabilities";
 import type { ModelPurpose } from "../lib/modelCapabilities";
+import { modelAccess, type ModelAccess } from "../lib/modelAccess";
 import { ProviderIcon } from "./ProviderIcon";
 import { Badge, Input } from "../ui";
 
@@ -157,6 +158,7 @@ export interface ProviderModel {
   purpose?: ModelPurpose;
   rawId?: string;
   gatewayGroup?: ReturnType<typeof mioraModelGroup>;
+  access?: ModelAccess;
 }
 
 /**
@@ -184,6 +186,12 @@ export function groupModelsByProvider(models: ModelInfo[]): Map<string, Provider
           gatewayGroup: mioraModelGroup(item),
         } : {}),
       };
+        const access = modelAccess(item, provider);
+        if (access.available !== undefined || access.requiredTier !== undefined
+          || item.by_provider?.[provider]?.account_unavailable_reason !== undefined
+          || (item.providers.length === 1 && item.account_unavailable_reason !== undefined)) {
+          entry.access = access;
+        }
       const bucket = grouped.get(provider);
       if (bucket) bucket.push(entry);
       else grouped.set(provider, [entry]);

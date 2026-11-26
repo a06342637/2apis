@@ -49,6 +49,14 @@ export interface ModelCooldown {
   reason: string;
 }
 
+export interface MioraSubscription {
+  tier: "free" | "basic" | "standard" | "pro" | null;
+  status: "unknown" | "free" | "active" | "expired";
+  vip: boolean | null;
+  expires_at: number | null;
+  probed_at: number;
+}
+
 export interface Credential {
   id: string;
   provider: Provider;
@@ -77,6 +85,8 @@ export interface Credential {
   quota_expiry_ladder: [number, number][] | null;
   /** 额度包明细（含包名，仅供展示）；未探测或上游未提供时为 null */
   quota_packages: QuotaPackage[] | null;
+  /** 仅展示，模型权限仍按官方账号目录；旧库/未探测时缺省或 null。 */
+  quota_detail?: { miora_subscription?: MioraSubscription } | null;
   /** 网页明细源状态：null=未配置/未知，ok=正常，expired=网页会话失效（仅提示） */
   web_cookie_state: "ok" | "expired" | null;
   /**
@@ -757,11 +767,17 @@ export interface ModelInfo {
   gateway_endpoints?: string[];
   /** 实际生成模态，如 text/image/video，与图像输入能力分开。 */
   output_modalities?: string[];
+    /** 上游明确的最低账号套餐，与消耗倍率独立；未声明则缺省。 */
+    required_account_tier?: string;
+    /** 当前允许账号池中任一账号可用；false 的展示项不能用于调用。 */
+    account_available?: boolean;
+    account_unavailable_reason?: string;
   /** 上游为该模型配置的默认推理档位（字符串，如 `high` / `medium`；无则为空串/缺失） */
   default_effort?: string;
   /** 多渠道模型才有：按渠道给出倍率与**该渠道实际请求的 key**（raw key 永不改动） */
   by_provider?: Record<string, { credit_rate?: number; raw_id?: string;
-    gateway_endpoints?: string[]; output_modalities?: string[] }>;
+      gateway_endpoints?: string[]; output_modalities?: string[];
+      required_account_tier?: string; account_available?: boolean; account_unavailable_reason?: string }>;
   /** 能力分（Artificial Analysis 指数）：匹配不到该模型的第三方成绩时整个字段缺失 */
   benchmarks?: ModelBenchmarks;
 }

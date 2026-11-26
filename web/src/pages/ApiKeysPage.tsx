@@ -1,4 +1,4 @@
-import { Gauge, KeyRound, Pencil, Plus, Share2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Gauge, KeyRound, Pencil, Plus, Share2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { type ApiKeyWindow, updateApiKey, USAGE_WINDOWS, USAGE_WINDOW_LABELS } from "../api/apiKeys";
@@ -420,28 +420,40 @@ function ApiKeysContent() {
           />
         ) : (
           <>
-          <Table data-testid="keys-table" cards>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">管理访问范围、配额和客户端接入。</p>
+            <div className="flex items-center gap-2">
+              <label htmlFor="keys-sort" className="text-xs text-muted-foreground">排序</label>
+              <Select id="keys-sort" data-testid="keys-sort" value={sort}
+                      className="h-8 w-28 text-xs" onChange={(event) => toggleSort(event.target.value)}>
+                <option value="created_at">创建时间</option>
+                <option value="name">名称</option>
+                <option value="provider_binding">渠道</option>
+                <option value="expires_at">到期时间</option>
+                <option value="last_used_at">最近使用</option>
+              </Select>
+              <Button size="sm" variant="ghost" data-testid="keys-sort-direction"
+                      aria-label={order === "asc" ? "当前升序，切换为降序" : "当前降序，切换为升序"}
+                      onClick={() => toggleSort(sort)}>
+                {order === "asc" ? <ArrowUp className="size-3.5" /> : <ArrowDown className="size-3.5" />}
+                {order === "asc" ? "升序" : "降序"}
+              </Button>
+            </div>
+          </div>
+          <Table data-testid="keys-table" cards className="table-fixed">
             <TableHeader>
               <TableRow>
-                <SortableHead label="名称" columnKey="name" active={sort === "name"}
-                              direction={order} onToggle={toggleSort} testId="sort-name" />
-                <TableHead>Key</TableHead>
-                <SortableHead label="渠道" columnKey="provider_binding"
+                <SortableHead label="名称 / Key" columnKey="name" active={sort === "name"}
+                              direction={order} onToggle={toggleSort} testId="sort-name" className="md:w-[23%]" />
+                <SortableHead label="渠道与范围" columnKey="provider_binding"
                               active={sort === "provider_binding"} direction={order}
-                              onToggle={toggleSort} testId="sort-provider_binding" />
-                <TableHead>账号范围</TableHead>
-                <SortableHead label="到期" columnKey="expires_at" active={sort === "expires_at"}
-                              direction={order} onToggle={toggleSort} testId="sort-expires_at" />
-                <SortableHead label="最后使用" columnKey="last_used_at"
-                              active={sort === "last_used_at"} direction={order}
-                              onToggle={toggleSort} testId="sort-last_used_at" />
-                <TableHead>来源 IP</TableHead>
-                <TableHead>模型白名单</TableHead>
-                <TableHead>配额</TableHead>
-                <TableHead>用量 · {USAGE_WINDOW_LABELS[usageWindow]}</TableHead>
-                <SortableHead label="创建时间" columnKey="created_at" active={sort === "created_at"}
-                              direction={order} onToggle={toggleSort} testId="sort-created_at" />
-                <TableHead className="text-right">操作</TableHead>
+                              onToggle={toggleSort} testId="sort-provider_binding" className="md:w-[20%]" />
+                <TableHead className="md:w-[27%]">权限与配额</TableHead>
+                <TableHead aria-sort={["created_at", "expires_at", "last_used_at"].includes(sort)
+                  ? order === "asc" ? "ascending" : "descending" : "none"}>
+                  用量 · {USAGE_WINDOW_LABELS[usageWindow]}
+                </TableHead>
+                <TableHead className="text-right md:w-36">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

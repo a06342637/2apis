@@ -47,6 +47,7 @@ import { Badge, Button, Checkbox, TableCell, TableHead, TableRow } from "../../u
 import type { Actions } from "./actions";
 import { ModelCooldownList, PackageLadder, TokenExpiry } from "./cells";
 import { supportsActivity, supportsCheckin, supportsGrowth } from "./helpers";
+import { mioraAccountPlan } from "./mioraAccountPlan";
 
 /**
  * 列头行：**迁移到每个展开的渠道组内部**，不再是全局表头。
@@ -125,6 +126,7 @@ export function Row({
   showGrowth,
   busy,
   selected,
+  grouped = false,
   onSelect,
   confirming,
   creditsOpen,
@@ -142,6 +144,8 @@ export function Row({
   showGrowth: boolean;
   busy: boolean;
   selected: boolean;
+  /** 仅真实二级自建组内账号缩进选择格，未分组和旧渠道行沿用原位置。 */
+  grouped?: boolean;
   onSelect: (credentialId: string, checked: boolean) => void;
   confirming: boolean;
   creditsOpen: boolean;
@@ -173,6 +177,7 @@ export function Row({
   const cooldown = cooldownRemaining(credential.cooling_until, now);
   const tokenExpiry = tokenExpiryView(
     credential.token_expires_at, tokenWarning, now, credential.token_issued_at);
+  const plan = mioraAccountPlan(credential, now);
 
   // 抽屉由调用方渲染成**独立的下一行**（见 TableBody）：塞进本行的最后一个单元格
   // 只会挤在「操作」列里——同行内的 colSpan 不生效，整行高度会被拉坏。
@@ -181,7 +186,7 @@ export function Row({
       {/* 选择格：与 ColumnHeaderRow 的空表头一一对应（列数恒定）。
           checkbox 只负责勾选，不触发任何行级动作——误点空白处不应产生副作用。 */}
       {canWrite && (
-        <TableCell label="选择" className="w-8">
+        <TableCell label="选择" className={`w-8${grouped ? " pl-7" : ""}`}>
           <Checkbox
             checked={selected}
             disabled={busy}
@@ -201,6 +206,9 @@ export function Row({
           >
             {credential.nickname || credential.id.slice(0, 12)}
           </span>
+          {plan && <span data-testid={`miora-plan-${credential.id}`} className="shrink-0" title={plan.description}>
+            <Badge tone={plan.tone}>{plan.label}</Badge>
+          </span>}
           {credential.pinned === 1 && <Badge tone="accent">已指定</Badge>}
           {credential.limits && (
             <span data-testid={`limits-badge-${credential.id}`}>

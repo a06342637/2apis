@@ -55,13 +55,17 @@ class MioraProvider:
         return await self.client.refresh_token(self.credential_from(credential_data))
 
     async def probe_quota(self, credential_data: dict) -> Quota:
-        return await self.client.probe_quota(self.credential_from(credential_data))
+        credential = self.credential_from(credential_data)
+        quota = await self.client.probe_quota(credential)
+        if quota.detail is not None:
+            self.media_client.note_subscription(credential, quota.detail)
+        return quota
 
     async def list_models(self, credential_data: dict) -> list[Model]:
         credential = self.credential_from(credential_data)
         text_models = await self.client.fetch_models(credential)
         try:
-            media_models = await self.media_client.catalog(credential)
+            media_models = await self.media_client.catalog(credential, include_unavailable=True)
         except (httpx.HTTPError, MioraHTTPError, UpstreamProtocolViolation) as failure:
             self.media_catalog_error = "Miora 媒体目录暂不可用，已保留文本模型目录"
             logger.warning("%s (%s)", self.media_catalog_error, type(failure).__name__)

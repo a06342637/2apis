@@ -1,6 +1,20 @@
-# 2apis · v0.1.3
+# 2apis · v0.1.4
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.4 账号目录与界面修复
+
+- 模型清单改为支持悬浮预览、点击固定与键盘操作的弹层，整层按视口限高并滚动，短窗口和窄屏不会遮住内容。
+- API Key 列表按 Key、渠道与范围、权限与配额、用量和操作五组排版；窄屏使用卡片，保留原有排序、密码查看和全部操作。
+- 所有渠道的自定义账号组在凭证页作为二级折叠区域显示；跨组重复成员共用选中状态，未归组账号单列，空组仍可查看。只读用户没有成员权限时显示组名与数量，不猜测成员归属。
+- 添加凭证的 Miora 和手工入口统一折叠样式；两处 Miora 获取凭证的代码均可点击复制，失败时提示手动复制。
+- 普通输入默认关闭自动填充并声明独立字段名，搜索使用 search 类型，凭证输入归属独立表单；登录页保留用户名/当前密码语义。
+- Miora 目录明确标注真实套餐要求，常用模型排在 VIP 模型前。收费倍率不用于判断 VIP；当前账号不可用的模型不会进入客户端默认目录或执行账号缓存。
+- 导入与额度探测会读取 Miora 会员状态，账号显示普通、VIP、已到期或未知；普通账号可使用无需 VIP 的模型，可能消耗赠送积分。查询失败显示未知并保留成功获取的余额，套餐变化或到期会刷新相关模型目录；实际选号始终以各账号官网目录权限为准。
+- 分组勾选放在组名前，组内账号勾选缩进，主次层级更清楚。数据库自动幂等升级至 schema 43，新增匿名化套餐信息列，旧版余额维护不会清除已有套餐信息。
+- 管理台可通过 `GET /api/playground/models?include_unavailable=true` 查看含锁定项的完整目录，默认接口和 `/v1/models` 仍仅返回当前账号范围可用模型；匿名公开目录只补套餐标识，不替代账号实际权限。
+- 限额和版本号拒绝非法大数，模型策略只接受文本或 null；白名单、版本与限额统一事务，保存失败整体回滚。
+- Miora 批量导入支持多份 JSON、Cookie、完整 token 与同一行/上一行邮箱前缀；邮箱作为昵称，未命名的新账号按北京时间生成 `YYYYMMDD-HHMMSS-001` 序号名。重导保留已有自定义昵称，逐条报告失败并保留重试文本；批量窗口在短屏内独立滚动。
 
 ## v0.1.3 系统检查修复
 
@@ -209,7 +223,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.3`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.4`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

@@ -111,7 +111,8 @@ SCHEMA_NAME = "schema.sql"
 # 40：api_keys 新增 credential_ids；默认 [] 沿用全池，非空是严格账号范围。
 # 41：api_keys 新增 key_enc，明文仅密码复核后回显，旧摘要行保持 NULL。
 # 42：正式账号分组+成员表；api_keys新增group_ids，默认 [] 保持原作用域。
-SCHEMA_VERSION = 42
+# 43：credentials 新增 quota_detail；订阅展示补充信息，老库 NULL 表示未知。
+SCHEMA_VERSION = 43
 
 # (表, 列定义)：历史库升级时逐条补列
 _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
@@ -132,6 +133,7 @@ _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
     # 额度包明细（展示用，含包名）：与选号指标 quota_expiry_ladder 分开，
     # 避免为管理台展示改动调度排序行为
     ("credentials", "quota_packages TEXT"),
+    ("credentials", "quota_detail TEXT"),
     ("credentials", "web_cookie_state TEXT"),  # 网页明细源状态：NULL/ok/expired
     # 调度权重：NULL/0 = 默认；正数越大越优先（管理员显式偏好，见 Scheduler.select）
     ("credentials", "routing_weight INTEGER"),
