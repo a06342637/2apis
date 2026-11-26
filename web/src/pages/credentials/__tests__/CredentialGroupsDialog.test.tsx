@@ -147,4 +147,17 @@ describe("渠道账号分组", () => {
     await click("保存分组");
     expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).credential_ids).toEqual([]);
   });
+
+  it("冲突重新载入的晚到结果不能重新打开已取消的编辑", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ error: { code: "conflict", message: "changed" } }, 409)));
+    let finish!: (groups: CredentialGroup[]) => void;
+    const pending = new Promise<CredentialGroup[]>((done) => { finish = done; });
+    setup({ onRetry: () => pending });
+    fireEvent.click(screen.getByTestId("edit-group-g1"));
+    await click("保存分组");
+    fireEvent.click(screen.getByRole("button", { name: "重新载入此组" }));
+    fireEvent.click(screen.getByRole("button", { name: "取消编辑" }));
+    await act(async () => finish([{ ...GROUP, name: "Latest" }]));
+    expect(screen.queryByLabelText("分组名称")).not.toBeInTheDocument();
+  });
 });

@@ -54,7 +54,9 @@ export function useApiKeys(username?: string, sort?: string, order?: string,
     // window 进 query key：切档位就是换数据集，不重新取数会显示上一档的用量
     queryKey: adminKey(username, "api-keys", sort, order, limit, offset, window),
     queryFn: () => listApiKeys({ sort, order, limit, offset, window }),
-    placeholderData: keepPreviousData,
+    // 排序/翻页复用同一用户的数据；身份变化不能短暂显示前一个用户的 Key。
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === (username ?? "anonymous") ? previous : undefined,
   });
 }
 
@@ -303,13 +305,16 @@ export function useStatsEvents(username?: string, since?: number, until?: number
                                before?: number, limit?: number, sort?: string,
                                order?: string, offset?: number,
                                filters?: StatsEventFilters & { ok?: number },
-                               enabled = true) {
+                               enabled = true, viewer?: string) {
   const provider = filters?.provider;
   const model = filters?.model;
   const credentialId = filters?.credential_id;
   const ok = filters?.ok;
+  const owner = viewer ?? username;
   return useQuery({
-    queryKey: adminKey(username, "stats-events", since, until, before, limit, sort, order,
+    // viewer 是鉴权用户，username 是钻取目标；二者不能混成匿名缓存。
+    queryKey: adminKey(owner, "stats-events", ...(viewer === undefined ? [] : [username]),
+                       since, until, before, limit, sort, order,
                        offset, provider, model, credentialId, ok),
     queryFn: () => api.statsEvents(username, since, until, before, limit, sort, order,
                                    offset,
@@ -317,7 +322,8 @@ export function useStatsEvents(username?: string, since?: number, until?: number
                                    // 钻取）；client 会把对象整体展开进 query，故额外属性生效
                                    { provider, model, credential_id: credentialId,
                                      ok } as StatsEventFilters),
-    placeholderData: keepPreviousData,
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === (owner ?? "anonymous") ? previous : undefined,
     enabled,
   });
 }
@@ -361,8 +367,10 @@ export function useStatsEventStream(options: {
       // 同 `useStatsEvents`：`ok` 由 client 展开进 query，类型层面额外属性
       { provider, model, credential_id: credentialId, ok } as StatsEventFilters);
     const source = new EventSource(url);
+    let active = true;
     setStatus("live");
     source.onmessage = (event: MessageEvent<string>) => {
+      if (!active) return;
       try {
         handler.current(JSON.parse(event.data) as UsageEventRow);
       } catch {
@@ -370,10 +378,14 @@ export function useStatsEventStream(options: {
       }
     };
     source.onerror = () => {
+      if (!active) return;
       // readyState=CLOSED 说明浏览器放弃重连（如 401/429）：标成错误
       setStatus(source.readyState === EventSource.CLOSED ? "error" : "live");
     };
     return () => {
+      active = false;
+      source.onmessage = null;
+      source.onerror = null;
       source.close();
     };
   }, [enabled, username, provider, model, credentialId, ok]);

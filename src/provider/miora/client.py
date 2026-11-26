@@ -13,7 +13,7 @@ import math
 import time
 import uuid
 from collections import OrderedDict
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -40,6 +40,7 @@ from ..lazy_clients import LazyClients
 from .acp import AcpConnection, AcpHTTPError
 from .credential import MioraCredential
 from .events import classify_status, parse_update
+from .live import CredentialReader, current_credential
 from .tools import MioraToolRequestError, parse_response, prepare_prompt
 
 API = "/api/ai"
@@ -160,6 +161,8 @@ class MioraClient(LazyClients):
         self._short_client = short_client
         self._accounts: OrderedDict[str, _Account] = OrderedDict()
         self._identity_locks: dict[str, asyncio.Lock] = {}
+        self.reload_credential: CredentialReader | None = None
+        self.before_inference: Callable[[], None] | None = None
 
     def _account(self, credential: MioraCredential) -> _Account:
         identity = credential.identity()
@@ -205,6 +208,7 @@ class MioraClient(LazyClients):
     async def _request(self, credential: MioraCredential, method: str,
                        path: str, *, body: dict | None = None, params: dict | None = None,
                        timeout: float | None = None) -> Any:
+        credential = current_credential(credential, self.reload_credential)
         response = await self._short.request(
             method, f"{self.host}{path}", headers=self._headers(credential),
             json=body, params=params,
@@ -368,10 +372,16 @@ class MioraClient(LazyClients):
             if selected is None:
                 raise InvalidModelName("Miora 不提供指定模型")
             # tier/effort 属于运行时全局设置，整轮按账号串行；不同账号仍并行。
-            async with account.lock, aclosing(self._stream_session(
-                    credential, account, payload, prompt, selected)) as stream:
-                async for event in stream:
-                    yield event
+            async with account.lock:
+                if self.before_inference is not None:
+                    self.before_inference()
+                current = current_credential(credential, self.reload_credential)
+                if current.project_id != credential.project_id:
+                    raise InvalidModelName("Miora project changed while this request was queued")
+                async with aclosing(self._stream_session(
+                        current, account, payload, prompt, selected)) as stream:
+                    async for event in stream:
+                        yield event
 
     async def _stream_session(self, credential: MioraCredential, account: _Account,
                               payload: dict, prompt: list[dict],

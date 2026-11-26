@@ -44,6 +44,11 @@ import { TrendChartPanel } from "./stats/TrendChartPanel";
 
 export function StatsPage() {
   const session = useSessionContext();
+  return <StatsContent key={session.username} />;
+}
+
+function StatsContent() {
+  const session = useSessionContext();
   // 默认最近 24 小时：「这个池子现在怎么样」是打开用量统计的第一问题，
   // 7 天会把当天的波动摊平（与凭证池页的实时气质一致）。
   const [range, setRange] = useState("24h");
@@ -113,7 +118,7 @@ export function StatsPage() {
     eventSort.sort, eventSort.order, eventOffset,
     { provider: drill.provider, model: drill.model,
       credential_id: drill.credential_id, ok: drill.ok },
-    rangeReady);
+    rangeReady, session.username);
   const eventRows = events.data?.events ?? [];
   // 实时流：只保留最近 50 条（新→旧）。缓冲由前端自己管：页面长时间开着时
   // 不无限增长，且「刚发生的」永远在最上面。
@@ -185,12 +190,14 @@ export function StatsPage() {
    */
   const applyDrill = (next: PageDrill) => {
     setDrill((prev) => ({ ...prev, ...next }));
+    setLiveRows([]);
     setPageIndex(0);
     setCursors([undefined]);
   };
 
   const clearDrill = () => {
     setDrill({});
+    setLiveRows([]);
     setPageIndex(0);
     setCursors([undefined]);
   };

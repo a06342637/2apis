@@ -56,6 +56,12 @@ export {
 
 export function ApiKeysPage() {
   const session = useSessionContext();
+  // 有效会话换用户也需清除弹窗明文/草稿，不能只依赖退出或 401。
+  return <ApiKeysContent key={session.username} />;
+}
+
+function ApiKeysContent() {
+  const session = useSessionContext();
   const accountsQuery = useCredentials(session.username);
   const accounts = !accountsQuery.isError && Array.isArray(accountsQuery.data?.credentials)
     ? accountsQuery.data.credentials : undefined;
@@ -65,7 +71,7 @@ export function ApiKeysPage() {
   // 列表用量窗口（今日 / 近 7 天 / 近 30 天）：切档 = 换数据集，回第一页
   const [usageWindow, setUsageWindow] = useState<ApiKeyWindow>("today");
   const { data, isLoading, isError, error: queryError, refetch, isFetching } = useApiKeys(
-    undefined, sort, order, pageSize, page * pageSize, usageWindow);
+    session.username, sort, order, pageSize, page * pageSize, usageWindow);
   const client = useQueryClient();
   // 换排序 = 换数据集：回到第一页，避免停在越界页码上（空白）
   const toggleSort = (columnKey: string) => {
@@ -92,6 +98,8 @@ export function ApiKeysPage() {
   // 列表行「改配额」对话框：整体替换一把 Key 的配额
   const [editingQuota, setEditingQuota] = useState<ApiKey | null>(null);
   const [quotaDraft, setQuotaDraft] = useState<KeyQuota>({ ...EMPTY_QUOTA });
+  const [savingQuota, setSavingQuota] = useState(false);
+  const quotaSavingRef = useRef(false);
   // 列表行「编辑」对话框：按字段改名称 / 渠道绑定 / 两个白名单 / 到期时间
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);
   const [editName, setEditName] = useState("");
@@ -103,6 +111,20 @@ export function ApiKeysPage() {
   const [editModels, setEditModels] = useState("");
   const [editExpiresAt, setEditExpiresAt] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const editSavingRef = useRef(false);
+  const mounted = useRef(false);
+  const createGeneration = useRef(0);
+  const quotaGeneration = useRef(0);
+  const editGeneration = useRef(0);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      createGeneration.current += 1;
+      quotaGeneration.current += 1;
+      editGeneration.current += 1;
+    };
+  }, []);
   const [created, setCreated] = useState<ApiKeyCreated | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +170,7 @@ export function ApiKeysPage() {
       return;
     }
     creatingRef.current = true;
+    const generation = createGeneration.current;
     setCreating(true);
     setError(null);
     try {
@@ -164,49 +187,63 @@ export function ApiKeysPage() {
         // 也让「没配配额」与「显式传空配额」在日志里可区分。
         ...(quotaPayload ? { quota: quotaPayload } : {}),
       });
-      setCreated(result);
-      setName("");
-      setBinding("");
-      setCredentialIds([]);
-      setGroupIds([]);
-      setScopeMode("all");
-      setAllowedIps("");
-      setAllowedModels("");
-      setExpiresAt("");
-      setQuota({ ...EMPTY_QUOTA });
-      setCopied(false);
+      if (mounted.current && createGeneration.current === generation) {
+        setCreated(result);
+        setName("");
+        setBinding("");
+        setCredentialIds([]);
+        setGroupIds([]);
+        setScopeMode("all");
+        setAllowedIps("");
+        setAllowedModels("");
+        setExpiresAt("");
+        setQuota({ ...EMPTY_QUOTA });
+        setCopied(false);
+      }
       await client.invalidateQueries({ queryKey: ["admin"] });
     } catch (caught) {
       // 用 errorText 取后端受控文案（渠道绑定冲突、白名单格式错等都说得出
       // 具体哪里不对）；只有非受控异常才回落通用兜底。裸 catch{} 会把后端
       // 已经写好的原因丢掉，用户只能对着「创建失败」猜。
-      setError(errorText(caught,
-        "创建失败：请检查渠道绑定、模型白名单、IP 白名单与到期时间格式（配额须为非负数字）"));
+      if (mounted.current && createGeneration.current === generation) {
+        setError(errorText(caught,
+          "创建失败：请检查渠道绑定、模型白名单、IP 白名单与到期时间格式（配额须为非负数字）"));
+      }
     } finally {
       creatingRef.current = false;
-      setCreating(false);
+      if (mounted.current) setCreating(false);
     }
   };
 
   const openQuotaEditor = (key: ApiKey) => {
+    quotaGeneration.current += 1;
     setEditingQuota(key);
     setQuotaDraft(quotaOf(key));
     setError(null);
   };
 
   const saveQuota = async () => {
-    if (!editingQuota) return;
+    if (!editingQuota || quotaSavingRef.current) return;
+    quotaSavingRef.current = true;
+    const generation = quotaGeneration.current;
+    setSavingQuota(true);
     setError(null);
     try {
       await setApiKeyQuota(editingQuota.id, quotaDraft);
-      setEditingQuota(null);
+      if (mounted.current && quotaGeneration.current === generation) setEditingQuota(null);
       await client.invalidateQueries({ queryKey: ["admin"] });
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : "保存配额失败");
+      if (mounted.current && quotaGeneration.current === generation) {
+        setError(errorText(failure, "保存配额失败，请稍后重试。"));
+      }
+    } finally {
+      quotaSavingRef.current = false;
+      if (mounted.current) setSavingQuota(false);
     }
   };
 
   const openEdit = (key: ApiKey) => {
+    editGeneration.current += 1;
     setEditingKey(key);
     setEditName(key.name);
     setEditBinding(key.provider_binding);
@@ -220,17 +257,20 @@ export function ApiKeysPage() {
   };
 
   const closeEdit = () => {
+    editGeneration.current += 1;
     setEditingKey(null);
     setError(null);
   };
 
   const saveEdit = async () => {
     // 保存中早退：PUT 是幂等的，但连点会叠出多条「值相同」的审计判定
-    if (!editingKey || savingEdit) return;
+    if (!editingKey || editSavingRef.current) return;
     if (editScopeIssue) {
       setError(editScopeIssue);
       return;
     }
+    editSavingRef.current = true;
+    const generation = editGeneration.current;
     setSavingEdit(true);
     setError(null);
     try {
@@ -246,12 +286,15 @@ export function ApiKeysPage() {
         allowed_models: editModels.trim(),
         expires_at: parseExpiresAt(editExpiresAt),
       });
-      setEditingKey(null);
+      if (mounted.current && editGeneration.current === generation) setEditingKey(null);
       await client.invalidateQueries({ queryKey: ["admin"] });
     } catch (caught) {
-      setError(errorText(caught, "保存失败：请检查渠道绑定、模型白名单与 IP 白名单格式"));
+      if (mounted.current && editGeneration.current === generation) {
+        setError(errorText(caught, "保存失败：请检查渠道绑定、模型白名单与 IP 白名单格式"));
+      }
     } finally {
-      setSavingEdit(false);
+      editSavingRef.current = false;
+      if (mounted.current) setSavingEdit(false);
     }
   };
 
@@ -269,13 +312,16 @@ export function ApiKeysPage() {
 
   const copy = async () => {
     if (!created) return;
+    const generation = createGeneration.current;
     const ok = await copyText(created.api_key);
+    if (!mounted.current || createGeneration.current !== generation) return;
     setCopied(ok);
     // 复制的是一次性明文 Key，失败必须说清楚，否则关掉就再也拿不回来
     setCopyFailed(!ok);
   };
 
   const closeCreate = () => {
+    createGeneration.current += 1;
     setCreateOpen(false);
     setError(null);
     // 明文 Key 只应存在于创建确认弹窗的生命周期内（L3）：关闭即从 state 抹掉，
@@ -294,7 +340,11 @@ export function ApiKeysPage() {
   };
   const importDialogRef = useDialogFocus<HTMLDivElement>(closeImport, importing !== null);
 
-  const closeQuota = () => setEditingQuota(null);
+  const closeQuota = () => {
+    quotaGeneration.current += 1;
+    setEditingQuota(null);
+    setError(null);
+  };
   // 配额对话框也要焦点管理与 Esc 关闭（MASTER §6「对话框焦点管理与 Esc 关闭」）：
   // 此前只有「创建」「导入」两个对话框接了 useDialogFocus，配额这个漏了。
   const quotaDialogRef = useDialogFocus<HTMLDivElement>(closeQuota, editingQuota !== null);
@@ -570,7 +620,7 @@ export function ApiKeysPage() {
       {editingQuota && (
         <div
           className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4 backdrop-blur-sm"
-          onClick={() => setEditingQuota(null)}
+          onClick={closeQuota}
         >
           <div
             role="dialog"
@@ -591,7 +641,7 @@ export function ApiKeysPage() {
                 variant="ghost"
                 aria-label="关闭"
                 data-testid="key-quota-close"
-                onClick={() => setEditingQuota(null)}
+                onClick={closeQuota}
               >
                 <X className="size-4" />
               </Button>
@@ -610,11 +660,11 @@ export function ApiKeysPage() {
                 )}
               </div>
               <div className="flex justify-end gap-2">
-                <Button variant="ghost" onClick={() => setEditingQuota(null)}>
+                <Button variant="ghost" onClick={closeQuota}>
                   取消
                 </Button>
-                <Button variant="primary" data-testid="key-quota-save" onClick={() => void saveQuota()}>
-                  保存
+                <Button variant="primary" data-testid="key-quota-save" disabled={savingQuota} onClick={() => void saveQuota()}>
+                  {savingQuota ? "保存中…" : "保存"}
                 </Button>
               </div>
             </div>

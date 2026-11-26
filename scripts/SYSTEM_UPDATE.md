@@ -43,7 +43,7 @@ secret 与 socket 所在目录均不得对无关用户开放。
   "project": "2apis",
   "service": "coding2api",
   "source": "a06342637/2apis",
-  "current_version": "0.1.0",
+  "current_version": "0.1.1",
   "current_commit": "填写当前部署的完整40位commit",
   "health_timeout": 180,
   "drain_timeout": 180

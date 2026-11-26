@@ -19,7 +19,7 @@ import httpx
 from starlette.requests import ClientDisconnect
 
 from ..auth.access import model_allowed
-from ..compat.openai.errors import UpstreamStreamError, stream_error_frame
+from ..compat.openai.errors import ServicePaused, UpstreamStreamError, stream_error_frame
 from ..compat.openai.request import ChatRequest, InvalidRequest
 from ..compat.openai.response import (
     StreamTranslator,
@@ -1184,7 +1184,7 @@ class Executor:
         静默断开，客户端无法区分"空回复"与"服务出错"。
 
         `on_terminal(code, message)` 在**整条链未出帧就用尽**、即将产出终帧时
-        回调一次：出口据此在响应头发出前把「请求级错误」改判为 400（见
+        回调一次：出口据此在响应头发出前把无效请求改判为 400、运营暂停为 503（见
         `api/streaming.respond_with_stream_start`）。默认 None 时行为逐字节不变。
         """
         inner = ContextBoundIterator(self.stream(request, username=username,
@@ -1193,11 +1193,18 @@ class Executor:
                             credential_ids=credential_ids, credential_models=credential_models,
                             credential_model_policy=credential_model_policy,
                             on_terminal=on_terminal))
+        emitted = False
         try:
             async for frame in inner:
+                emitted = True
                 yield frame
         except (GeneratorExit, asyncio.CancelledError):
             raise                          # 客户端断开：已由 stream() 记账
+        except (ServicePaused, InvalidRequest) as error:
+            code = "service_paused" if isinstance(error, ServicePaused) else "invalid_request"
+            if not emitted and on_terminal is not None:
+                on_terminal(code, str(error))
+            yield _stream_error_frame(translator, str(error), code)
         except Exception as error:  # noqa: BLE001 - 流已开始，只能以错误帧收尾
             logger.exception("流式响应失败: %s", error)
             yield _stream_error_frame(translator, "internal server error", "internal_error")

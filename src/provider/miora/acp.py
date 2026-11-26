@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from anyio import CancelScope
 
 from ...engine.sse import iter_frames
 from ..base import (
@@ -99,18 +100,21 @@ class AcpConnection:
             raise UpstreamProtocolViolation("Miora ACP 建链超时") from error
         finally:
             if not entered and response is not None:
-                await self._context.__aexit__(None, None, None)
+                with CancelScope(shield=True):
+                    await self._context.__aexit__(None, None, None)
 
     async def __aexit__(self, exc_type, exc, traceback) -> None:
-        if self._reader is not None:
-            self._reader.cancel()
-            with suppress(asyncio.CancelledError):
-                await self._reader
-        if self._context is not None:
-            await self._context.__aexit__(exc_type, exc, traceback)
-        if "Acp-Connection-Id" in self.headers:
-            with suppress(httpx.HTTPError):
-                await self.client.delete(self.endpoint, headers=self.headers, timeout=5)
+        # ASGI scope 会重复取消 await；先关闭本地流和远端连接再归还账号名额。
+        with CancelScope(shield=True):
+            if self._reader is not None:
+                self._reader.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._reader
+            if self._context is not None:
+                await self._context.__aexit__(exc_type, exc, traceback)
+            if "Acp-Connection-Id" in self.headers:
+                with suppress(httpx.HTTPError):
+                    await self.client.delete(self.endpoint, headers=self.headers, timeout=5)
 
     async def _read(self, response: httpx.Response) -> None:
         try:

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from ..api.deps import ApiKeyPrincipal
+from ..api.deps import ApiKeyPrincipal, _ensure_not_paused
 from ..api.model_merge import _blocked, _build_aliases, _merge_provider
 from ..auth.access import model_allowed
 from ..auth.api_key import key_expired
@@ -287,6 +287,11 @@ class MediaService:
         fields = ("session_id", "task_id", "status", "progress", "files", "error")
         return self.store.save({**job, **{key: result[key] for key in fields if key in result}})
 
+    def ensure_enabled(self) -> None:
+        _ensure_not_paused(self.services)
+        if not getattr(self.settings, "media_enabled", True):
+            raise InvalidRequest("media generation is disabled")
+
     async def submit(
         self,
         principal: ApiKeyPrincipal,
@@ -296,8 +301,7 @@ class MediaService:
         already_paced: bool = False,
         idempotency_key: str | None = None,
     ) -> dict:
-        if not getattr(self.settings, "media_enabled", True):
-            raise InvalidRequest("media generation is disabled")
+        self.ensure_enabled()
         request = dict(request)
         digest = self.request_digest(request)
         job_id = (
@@ -334,8 +338,11 @@ class MediaService:
                 task_id="",
                 request_digest=digest,
             )
+            submitted = False
 
             async def generate():
+                nonlocal submitted
+                self.ensure_enabled()
                 candidate = self._candidate(principal, account_id, request["public_model"])
                 available, _aliases, _canonical = await self.describe(
                     principal, account_id, request["kind"], force=True
@@ -354,7 +361,9 @@ class MediaService:
                         raise InvalidRequest("Miora account concurrency limit reached")
                     inflight.acquire(account_id)
                 try:
+                    self.ensure_enabled()
                     try:
+                        submitted = True
                         result = await self.client.submit(
                             credential,
                             request["kind"],
@@ -393,21 +402,29 @@ class MediaService:
                     if inflight is not None:
                         inflight.release(account_id)
 
-            with credential_scope(account_id):
-                if already_paced:
-                    fresh = self.fresh_principal(principal)
-                    moment = time.time()
-                    self.services.key_quota._check_daily(fresh.key_id, fresh.quota, moment, "key")
-                    self.services.user_quota._check_daily(
-                        fresh.username, fresh.user_quota, moment, "user"
-                    )
-                    return await generate()
-                data = self.services.credentials.credential_data(account_id)
-                if data is None:
-                    raise InvalidRequest("Miora credential no longer exists")
-                credential = self.provider.credential_from(data)
-                async with paced(self.provider.pacer, credential.identity()):
-                    return await generate()
+            try:
+                with credential_scope(account_id):
+                    if already_paced:
+                        fresh = self.fresh_principal(principal)
+                        moment = time.time()
+                        self.services.key_quota._check_daily(
+                            fresh.key_id, fresh.quota, moment, "key")
+                        self.services.user_quota._check_daily(
+                            fresh.username, fresh.user_quota, moment, "user"
+                        )
+                        return await generate()
+                    data = self.services.credentials.credential_data(account_id)
+                    if data is None:
+                        raise InvalidRequest("Miora credential no longer exists")
+                    credential = self.provider.credential_from(data)
+                    async with paced(self.provider.pacer, credential.identity()):
+                        return await generate()
+            except BaseException:
+                # 等待/前置授权阶段尚未发起提交，恢复后可安全复用原幂等键。
+                # 一旦进入 client.submit，失去响应或取消仍保留意图，不能重放付费任务。
+                if not submitted:
+                    self.store.path(job_id).unlink(missing_ok=True)
+                raise
 
     def owned(self, job_id: str, principal: ApiKeyPrincipal) -> dict:
         job = self.store.load(job_id)

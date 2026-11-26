@@ -30,6 +30,7 @@ from ..auth.rbac import (
 )
 from ..auth.session import SESSION_COOKIE, verify_session_token
 from ..auth.throttle import LoginThrottle
+from ..compat.openai.errors import ServicePaused
 from ..compat.openai.request import InvalidRequest
 from ..config import Settings
 from ..db.key_usage import KeyUsageRepository
@@ -256,19 +257,6 @@ class ApiKeyPrincipal:
     credential_ids: tuple[str, ...] = ()  # 空 = 全池；非空集合在任何重试中都不放宽
     quota: KeyQuota = field(default_factory=KeyQuota)  # 该 Key 的配额（全关=不受限）
     group_ids: tuple[str, ...] = ()  # 组身份保留；credential_ids是本请求解析的成员快照
-
-
-class ServicePaused(Exception):
-    """全站暂停（kill switch，`gateway_paused`）：/v1 一律 503。
-
-    管理台走会话鉴权、不经过这里，因此**暂停期间运维仍能进去关掉它**。
-    对外只回受控文案，不回显运维写的原因（可能含事故编号等内部信息）；
-    原因进服务端日志。
-    """
-
-    def __init__(self, reason: str = "") -> None:
-        super().__init__("service temporarily paused by operator")
-        self.reason = reason
 
 
 def _ensure_not_paused(services: Services) -> None:

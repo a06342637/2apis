@@ -79,6 +79,7 @@ CONCURRENCY_LONG_WINDOW_MAX_SECONDS = 30 * 60
 # 冷却治不了——升到封顶档，别让剩余号逐个白撞。窗口用 90s：burst 三号常在同秒
 # 触发，90s 足够捕获整波又不至于把后续偶发打满误判成整组限流。
 CONCURRENCY_BURST_WINDOW_SECONDS = 90
+MAX_CONCURRENCY_BURST_RECORDS = 4096
 # 「该后端无此模型」（11102）负缓存：6h 起，翻倍封顶 24h
 BLOCKED_BASE_SECONDS = 6 * 3600
 BLOCKED_MAX_SECONDS = 24 * 3600
@@ -324,7 +325,7 @@ class Scheduler:
         # 整组并发打满的检测状态（进程内，重启即清——429 是瞬态，丢了无害）：
         # (provider, model) → (首中时刻, 已命中的凭证集合)。只在 CONCURRENCY
         # 命中时写，见 `_concurrency_burst`。
-        self._concurrency_bursts: dict[tuple[str, str], tuple[int, set[str]]] = {}
+        self._concurrency_bursts: OrderedDict[tuple[str, str], tuple[int, set[str]]] = OrderedDict()
         self._round_robin_tick = 0
         self._round_robin_last: OrderedDict[tuple[str, str], int] = OrderedDict()
 
@@ -445,10 +446,19 @@ class Scheduler:
         窗口过期或未见过则作为新一轮起点（False）。同一凭证重复命中不算
         整组信号（那是它自己的命中链，走 `concurrency_cooldown_duration`）。
         """
+        # 动态/强制模型名会持续产生新键；按首次命中的顺序回收已过窗口的状态。
+        # 满容量时保留活跃探测序列，新模型仍走本凭证冷却，不挤掉已有整组信号。
+        while self._concurrency_bursts:
+            started, _seen = next(iter(self._concurrency_bursts.values()))
+            if now - started <= CONCURRENCY_BURST_WINDOW_SECONDS:
+                break
+            self._concurrency_bursts.popitem(last=False)
         key = (provider, model)
         state = self._concurrency_bursts.get(key)
         if state is None or now - state[0] > CONCURRENCY_BURST_WINDOW_SECONDS:
-            self._concurrency_bursts[key] = (now, {credential_id})
+            self._concurrency_bursts.pop(key, None)
+            if len(self._concurrency_bursts) < MAX_CONCURRENCY_BURST_RECORDS:
+                self._concurrency_bursts[key] = (now, {credential_id})
             return False
         seen = state[1]
         if credential_id in seen:

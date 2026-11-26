@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPage } from "../StatsPage";
 import { mockFetch, MockEventSource, renderPage, settle, userEvent } from "@/test-utils";
@@ -99,6 +99,31 @@ describe("StatsPage 实时明细", () => {
     });
     expect(first.closed).toBe(true);
     expect(MockEventSource.last().url).toContain("provider=");
+  });
+
+  it("切换钻取条件时移除旧范围的实时行", async () => {
+    mockFetch(routes);
+    renderPage(<StatsPage />, ADMIN);
+    await settle();
+    await userEvent.click(screen.getByTestId("events-live-toggle"));
+    const first = MockEventSource.last();
+    await act(async () => first.emit({ ...EVENTS_PAGE1.events[0], model: "old-unfiltered-model" }));
+    await screen.findByText("old-unfiltered-model");
+    await userEvent.click(screen.getAllByRole("button", { name: /查看 .* 的请求明细/ })[0]);
+    expect(screen.queryByText("old-unfiltered-model")).not.toBeInTheDocument();
+  });
+
+  it("已经关闭的旧筛选连接的排队消息不进入新范围", async () => {
+    mockFetch(routes);
+    renderPage(<StatsPage />, ADMIN);
+    await settle();
+    await userEvent.click(screen.getByTestId("events-live-toggle"));
+    const first = MockEventSource.last();
+    const queued = first.onmessage!;
+    await userEvent.click(screen.getAllByRole("button", { name: /查看 .* 的请求明细/ })[0]);
+    expect(first.closed).toBe(true);
+    await act(async () => queued({ data: JSON.stringify({ ...EVENTS_PAGE1.events[0], model: "stale-sse-model" }) } as MessageEvent<string>));
+    expect(screen.queryByText("stale-sse-model")).not.toBeInTheDocument();
   });
 
   it("断线时提示重连/断开，关掉开关即断开连接", async () => {

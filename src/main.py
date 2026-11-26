@@ -56,7 +56,7 @@ from .api.context import (
     build_context_compressor,
     build_prefix_observer,
 )
-from .api.deps import Services
+from .api.deps import Services, _ensure_not_paused
 from .auth.throttle import LoginThrottle
 from .benchmarks import (
     BenchmarkTable,
@@ -67,6 +67,7 @@ from .benchmarks import (
     load_catalog_snapshot,
     save_catalog,
 )
+from .compat.openai.request import InvalidRequest
 from .config import (
     Settings,
     load_settings,
@@ -152,6 +153,7 @@ from .provider.qoder.events import detect_realm_from_domain
 from .provider.raccoon.client import RaccoonClient, RaccoonProvider
 from .provider.trae.client import TraeClient, TraeProvider
 from .provider.zen.client import ZenClient, ZenProvider
+from .request_context import get_credential_id
 from .runtime_settings import load_runtime_settings
 from .stats.collector import StatsCollector
 from .stats.live import LiveEventHub
@@ -1066,6 +1068,27 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     )
     app.state.services = services
     if isinstance(registry.get("miora"), MioraProvider):
+        miora_provider = registry["miora"]
+
+        def reload_miora_credential():
+            return credentials.credential_data(get_credential_id() or "")
+
+        def guard_miora_inference():
+            # 仅推理检查暂停；模型探测与票据维护仍可处理暂停账号。
+            _ensure_not_paused(services)
+            credential_id = get_credential_id()
+            if credential_id and not any(
+                candidate.credential_id == credential_id
+                for candidate in credentials.candidates(
+                    providers=("miora",), selectable_only=True)
+            ):
+                raise InvalidRequest("Miora account was paused or removed while queued")
+
+        miora_provider.reload_credential = reload_miora_credential
+        miora_provider.before_inference = guard_miora_inference
+        if isinstance(miora_provider.client, MioraClient):
+            miora_provider.client.reload_credential = reload_miora_credential
+            miora_provider.client.before_inference = guard_miora_inference
         services.media = MediaService(services, stats=stats_collector)
         registry["miora"].media_auto = MediaAuto(services.media)
         registry["miora"].media_client = services.media.client

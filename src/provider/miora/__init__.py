@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import aclosing
 from dataclasses import dataclass, field
 from typing import Any
@@ -15,6 +15,7 @@ from ..base import ErrKind, Event, Model, Quota, UpstreamProtocolViolation
 from .client import MioraClient, MioraHTTPError
 from .credential import MioraCredential
 from .events import classify_status
+from .live import CredentialReader, current_credential
 from .media import MioraMediaClient
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,8 @@ class MioraProvider:
     media_catalog_error: str | None = field(default=None, init=False)
     pacer: Any | None = None
     media_auto: Any | None = None
+    reload_credential: CredentialReader | None = None
+    before_inference: Callable[[], None] | None = None
     id: str = "miora"
 
     def __post_init__(self) -> None:
@@ -74,13 +77,20 @@ class MioraProvider:
     ) -> AsyncIterator[Event]:
         credential = MioraCredential.from_import(credential_data)
         # 先同步关闭内层 ACP 流，再归还节流名额，客户端断开不依赖 asyncgen GC。
-        inner = (self.media_auto.stream_chat(credential, payload, model,
-                                            self.client.stream_chat)
-                 if self.media_auto is not None
-                 else self.client.stream_chat(credential, payload, model))
-        async with paced(self.pacer, credential.identity()), aclosing(inner) as stream:
-            async for event in stream:
-                yield event
+        async with paced(self.pacer, credential.identity()):
+            if self.before_inference is not None:
+                self.before_inference()
+            credential = current_credential(credential, self.reload_credential)
+            if isinstance(self.client, MioraClient):
+                self.client.reload_credential = self.reload_credential
+                self.client.before_inference = self.before_inference
+            inner = (self.media_auto.stream_chat(credential, payload, model,
+                                                self.client.stream_chat)
+                     if self.media_auto is not None
+                     else self.client.stream_chat(credential, payload, model))
+            async with aclosing(inner) as stream:
+                async for event in stream:
+                    yield event
 
     async def aclose(self) -> None:
         await self.client.aclose()
