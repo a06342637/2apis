@@ -48,6 +48,12 @@ def test_epoch_from_iso_rejects_non_string_and_bad_value():
     ("bad", 0),
     (None, 0),
     (1.5, 1),
+    (float("inf"), 0),
+    (float("-inf"), 0),
+    (float("nan"), 0),
+    (-1, 0),
+    (2**63, 0),
+    ("9223372036854775808", 0),
 ])
 def test_expiration_from_raw(raw, expected):
     got = expiration_from_raw(raw)

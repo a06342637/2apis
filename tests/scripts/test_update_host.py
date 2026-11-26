@@ -10,7 +10,7 @@ from tests.updater.conftest import host as host
 
 
 @pytest.mark.parametrize("mode", ["success", "path", "length", "secret", "type", "structure",
-                                 "bad-action", "upstream"])
+                                 "bad-action", "upstream", "unicode", "unicode-wrong"])
 def test_socket_request_validation(mode):
     seen = []
     def dispatch(action, payload):
@@ -20,12 +20,14 @@ def test_socket_request_validation(mode):
         if mode == "upstream":
             raise OSError("private error")
         return {"enabled": True}
-    secret = "s" * 32
+    secret = "秘" * 32 if mode.startswith("unicode") else "s" * 32
     handler = update_host.handler_for(SimpleNamespace(dispatch=dispatch), secret)
     instance = handler.__new__(handler)
     payload = {"secret": secret, "action": "status"}
     if mode == "secret":
         payload["secret"] = "wrong"
+    if mode == "unicode-wrong":
+        payload["secret"] = "错" * 32
     if mode == "type":
         payload["secret"] = 1
     if mode == "structure":
@@ -41,7 +43,7 @@ def test_socket_request_validation(mode):
     instance.log_message("must not log secret")
     instance.do_POST()
     response = json.loads(instance.wfile.getvalue())
-    assert response["ok"] == (mode == "success")
+    assert response["ok"] == (mode in {"success", "unicode"})
     assert secret not in json.dumps(response) and "private error" not in json.dumps(response)
     if mode == "bad-action":
         assert response["error"] == "CI 未通过"

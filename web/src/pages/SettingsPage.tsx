@@ -48,8 +48,7 @@ function toInputValue(setting: RuntimeSetting): string {
 
 function toSubmitValue(setting: RuntimeSetting, raw: string): unknown {
   if (setting.kind === "bool") return raw === "true";
-  if (setting.kind === "int") return Number.parseInt(raw, 10);
-  if (setting.kind === "float") return Number.parseFloat(raw);
+  if (setting.kind === "int" || setting.kind === "float") return Number(raw);
   return raw;
 }
 
@@ -58,7 +57,8 @@ function isSubmittable(setting: RuntimeSetting, raw: string): boolean {
   if (setting.kind === "str") return raw.trim() !== "";
   if (setting.kind === "bool") return raw === "true" || raw === "false";
   const parsed = Number(raw);
-  return raw.trim() !== "" && Number.isFinite(parsed);
+  return raw.trim() !== "" && Number.isFinite(parsed)
+    && (setting.kind !== "int" || Number.isSafeInteger(parsed));
 }
 
 /** 一行配置：左侧文案 + 输入控件 + 来源标记，右侧恢复默认。 */
@@ -282,12 +282,14 @@ export function SettingsPage() {
   const tasks = useMemo(() => tasksQuery.data?.tasks ?? [], [tasksQuery.data]);
   const serverTime = tasksQuery.data?.server_time ?? Date.now() / 1000;
 
-  // 服务端刷新后，未保存的草稿要保留；已被保存的项则回到服务端值。
+  // 只存实际编辑过的草稿，未编辑项始终读取最新服务端值。
+  // 刷新后已与服务端一致或已移除的草稿可以清理。
   useEffect(() => {
     setDrafts((previous) => {
       const next: Record<string, string> = {};
       for (const setting of settings) {
-        next[setting.key] = previous[setting.key] ?? toInputValue(setting);
+        const draft = previous[setting.key];
+        if (draft !== undefined && draft !== toInputValue(setting)) next[setting.key] = draft;
       }
       return next;
     });
@@ -403,7 +405,12 @@ export function SettingsPage() {
       setting={setting}
       draft={drafts[setting.key] ?? toInputValue(setting)}
       disabled={busy}
-      onChange={(value) => setDrafts((previous) => ({ ...previous, [setting.key]: value }))}
+      onChange={(value) => setDrafts((previous) => {
+        const next = { ...previous };
+        if (value === toInputValue(setting)) delete next[setting.key];
+        else next[setting.key] = value;
+        return next;
+      })}
       onReset={() => void reset(setting)}
     />
   );
@@ -501,7 +508,7 @@ export function SettingsPage() {
         {invalid.length > 0 && (
           <div className="mb-3" data-testid="settings-invalid" role="alert">
             <Notice tone="danger">
-              有 {invalid.length} 项填写不合法（不能为空或非数字），请先修正。
+              有 {invalid.length} 项填写不合法（不能为空、数值必须有效，整数项须为整数），请先修正。
             </Notice>
           </div>
         )}

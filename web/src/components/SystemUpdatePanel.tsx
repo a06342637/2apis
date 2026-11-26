@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { systemUpdates, type SystemUpdateStatus } from "../api/systemUpdates";
 import { errorText } from "../lib/errors";
@@ -12,10 +12,19 @@ export function SystemUpdatePanel() {
   const client = useQueryClient();
   const [source, setSource] = useState("");
   const [force, setForce] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const mutation = useMutation({
     mutationFn: (work: () => Promise<SystemUpdateStatus>) => work(),
     onMutate: () => client.cancelQueries({ queryKey: KEY }),
-    onSuccess: (data) => client.setQueryData(KEY, data),
+    onSuccess: (data) => {
+      if (mounted.current) client.setQueryData(KEY, data);
+      // 页面切走后操作仍可能完成；读取当前主机状态，避免旧响应覆盖新页面。
+      else void client.invalidateQueries({ queryKey: KEY });
+    },
   });
   const query = useQuery({ queryKey: KEY,
     queryFn: ({ signal }) => systemUpdates.status(signal),

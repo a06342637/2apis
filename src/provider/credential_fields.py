@@ -40,7 +40,8 @@ def expiration_from_raw(raw: Any) -> int:
     if isinstance(raw, bool):
         return 0
     if isinstance(raw, (int, float)):
-        return normalize_epoch(int(raw))
+        # 在转 int 前让共享归一器拒绝 NaN/Infinity，避免导入/刷新抛 500。
+        return normalize_epoch(raw)
     if isinstance(raw, str) and raw.strip():
         text = raw.strip()
         try:

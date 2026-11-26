@@ -23,6 +23,7 @@ import {
 } from "./constants";
 
 interface EventsPanelProps {
+  rangeReady: boolean;
   totalRequests: number | undefined;
   live: boolean;
   toggleLive: (value: boolean) => void;
@@ -48,7 +49,7 @@ interface EventsPanelProps {
 
 export function EventsPanel(props: EventsPanelProps) {
   const {
-    totalRequests, live, toggleLive, isOperator, exporting, exportCsv, exportNotice,
+    rangeReady, totalRequests, live, toggleLive, isOperator, exporting, exportCsv, exportNotice,
     drillLabels, clearDrill, liveStatus, liveRows, isError, isFetching, eventRows,
     eventSort, toggleEventSort, pageIndex, pageSize, hasNextPage, changePageSize,
     onPageChange,
@@ -66,7 +67,7 @@ export function EventsPanel(props: EventsPanelProps) {
         {/* 导出限 admin/operator：整份明细落盘比翻页浏览的暴露面大 */}
         {isOperator && (
           <Button size="sm" variant="ghost" data-testid="events-export"
-                  disabled={exporting} onClick={exportCsv}>
+                  disabled={exporting || !rangeReady} onClick={exportCsv}>
             <Download className="size-3.5" />
             {exporting ? "导出中…" : "导出 CSV"}
           </Button>
