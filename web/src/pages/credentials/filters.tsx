@@ -1,4 +1,4 @@
-import { Search } from "lucide-react";
+import { Download, Search } from "lucide-react";
 import { DEFAULT_FILTERS, ANY } from "../../lib/credentialList";
 import type { CountedOption, CredentialFilters, GroupSort } from "../../lib/credentialList";
 import { Button, Input, Select } from "../../ui";
@@ -129,11 +129,13 @@ export function BatchActionBar({
   selectedCount,
   busy,
   onRun,
+  onExport,
   onClear,
 }: {
   selectedCount: number;
   busy: boolean;
   onRun: (button: BatchButton) => void;
+  onExport: () => void;
   onClear: () => void;
 }) {
   return (
@@ -156,6 +158,15 @@ export function BatchActionBar({
                     {button.verb}
                   </Button>
                 ))}
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={busy}
+                  data-testid="batch-export"
+                  onClick={onExport}
+                >
+                  <Download className="size-3.5" /> 导出凭证
+                </Button>
                 <Button
                   size="sm"
                   variant="ghost"

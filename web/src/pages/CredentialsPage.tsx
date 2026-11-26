@@ -37,6 +37,7 @@ import type { BatchButton } from "./credentials/helpers";
 import { CredentialTable } from "./credentials/table";
 import { CredentialGroupsDialog } from "./credentials/CredentialGroupsDialog";
 import { withAccountGroupProviders } from "./credentials/accountSections";
+import { downloadCredentialExport } from "./credentials/export";
 
 /**
  * 凭证管理页：页面主体只负责取数、筛选/展开/选中状态与动作编排。
@@ -61,6 +62,7 @@ export function CredentialsPage() {
   const accountGroups = accountGroupsQuery.isError ? undefined : accountGroupsQuery.data?.groups;
   const [managingGroups, setManagingGroups] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
+  const exportInFlight = useRef(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // 添加凭证对话框（登录渠道 / JSON 导入 / 免费层补回都收在里面）
   // `?new=1`：首启向导的深链，进来直接开新增对话框，随后把参数清掉
@@ -319,6 +321,26 @@ export function CredentialsPage() {
     }
   };
 
+  // 只导出点击时仍在筛选结果内的选中项。导出是读取现有凭证，成功后保留选择，
+  // 不刷新列表或触发上游票据更新；ref 同步锁住连续点击，state 同时禁用批量按钮。
+  const exportSelected = async () => {
+    if (busy || exportInFlight.current) return;
+    const ids = [...new Set(selectedIds.map((credential) => credential.id))];
+    if (!ids.length) return;
+    exportInFlight.current = true;
+    setBusy(true);
+    try {
+      const { blob } = await api.exportCredentials(ids);
+      downloadCredentialExport(blob);
+      showNotice(`已导出 ${ids.length} 个凭证 JSON（含明文令牌，请妥善保管）`);
+    } catch (caught) {
+      showError(errorText(caught, "导出凭证失败"));
+    } finally {
+      exportInFlight.current = false;
+      setBusy(false);
+    }
+  };
+
   /** 勾选 / 取消勾选一条；用于行内 checkbox 与组头「全选本渠道」。 */
   const toggleSelected = (credentialId: string, checked: boolean) => {
     setSelected((previous) => {
@@ -467,6 +489,7 @@ export function CredentialsPage() {
                 selectedCount={selectedIds.length}
                 busy={busy}
                 onRun={(button) => void runBatch(button)}
+                onExport={() => void exportSelected()}
                 onClear={() => setSelected(new Set())}
               />
             )}
