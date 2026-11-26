@@ -10,7 +10,7 @@ import asyncio
 import math
 import time
 from collections import OrderedDict
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -293,6 +293,7 @@ class _Account:
     models: dict[str, MediaModel] = field(default_factory=dict)
     catalog_at: float | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
 
 
 class MioraMediaClient:
@@ -305,12 +306,27 @@ class MioraMediaClient:
         if identity not in self._accounts:
             self._accounts[identity] = _Account()
         self._accounts.move_to_end(identity)
+        self._trim_accounts(keep=identity)
+        return self._accounts[identity]
+
+    def _trim_accounts(self, *, keep: str = "") -> None:
         for key, account in list(self._accounts.items()):
             if len(self._accounts) <= MAX_ACCOUNTS:
                 break
-            if key != identity and not account.lock.locked():
+            if key != keep and account.users == 0 and not account.lock.locked():
                 self._accounts.pop(key)
-        return self._accounts[identity]
+
+    @asynccontextmanager
+    async def _using_account(self, credential: MioraCredential):
+        account = self._account(credential)
+        # 包含等锁与已唤醒但尚未恢复的调用，不能仅按 lock.locked() 判断闲置。
+        account.users += 1
+        self._trim_accounts()
+        try:
+            yield account
+        finally:
+            account.users -= 1
+            self._trim_accounts()
 
     async def _catalog(
         self, credential: MioraCredential, account: _Account, *, force: bool = False
@@ -329,8 +345,7 @@ class MioraMediaClient:
         return account.models
 
     async def catalog(self, credential: MioraCredential, *, force: bool = False) -> list[Model]:
-        account = self._account(credential)
-        async with account.lock:
+        async with self._using_account(credential) as account, account.lock:
             return [
                 model.model()
                 for model in (await self._catalog(credential, account, force=force)).values()
@@ -339,8 +354,7 @@ class MioraMediaClient:
     async def submit(
         self, credential: MioraCredential, kind: str, model: str, prompt: str, **options: Any
     ) -> dict:
-        account = self._account(credential)
-        async with account.lock:
+        async with self._using_account(credential) as account, account.lock:
             catalogue = await self._catalog(credential, account)
             choice = catalogue.get(model)
             if choice is None or choice.kind != kind:

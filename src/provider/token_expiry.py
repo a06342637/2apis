@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from typing import Any
 
 # 凭证 JSON 里可能出现 access token 的键名（顺序即优先级）。
@@ -40,10 +41,16 @@ _ISSUED_ONLY_KEYS: tuple[str, ...] = ("refresh_token",)
 
 # 上游可能返回毫秒时间戳；超过该阈值（≈ 公元 33658 年）视为毫秒。
 _MILLISECOND_THRESHOLD = 1_000_000_000_000
+_MAX_SQLITE_INTEGER = 2**63 - 1
 
 
-def normalize_epoch(value: int) -> int:
-    """毫秒时间戳归一到秒；>1e12 视为毫秒。"""
+def normalize_epoch(value: int | float) -> int:
+    """有效时间归一到秒；非有限、非正或超SQLite整数范围时返回未知0。"""
+    if isinstance(value, float) and not math.isfinite(value):
+        return 0
+    value = int(value)
+    if value <= 0 or value > _MAX_SQLITE_INTEGER:
+        return 0
     return value // 1000 if value > _MILLISECOND_THRESHOLD else value
 
 
@@ -52,8 +59,7 @@ def _claim(payload: dict[str, Any], key: str) -> int:
     value = payload.get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0
-    value = normalize_epoch(int(value))
-    return value if value > 0 else 0
+    return normalize_epoch(value)
 
 
 def jwt_times(token: str) -> tuple[int, int]:
@@ -75,7 +81,7 @@ def jwt_times(token: str) -> tuple[int, int]:
     try:
         # binascii.Error 继承自 ValueError，JSONDecodeError 亦然
         payload = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return 0, 0
     if not isinstance(payload, dict):
         return 0, 0
@@ -99,7 +105,7 @@ def credential_expiry(data: dict[str, Any]) -> int:
         raw = data.get(key)
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             continue
-        value = normalize_epoch(int(raw))
+        value = normalize_epoch(raw)
         if value > 0:
             return value
     for key in _TOKEN_KEYS:

@@ -1,6 +1,14 @@
-# 2apis · v0.1.1
+# 2apis · v0.1.2
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.2 Miora 认证与并发修复
+
+- 已知账号刷新时，必须由新 access token 自身的 JWT `sub` 证明仍属同一账号；不同身份或无法解析新身份时提示重新登录，不覆盖原账号票据。
+- 预刷新取得编辑锁后按账号重新检查维护资格，认证已失效或账号已删除时跳过重复请求；用户软暂停仍继续刷新。
+- 深层异常 JWT 和非有限/超出数据库范围的时间元数据安全回落为未知，避免导入或保存凭证时出现 500；有效秒与毫秒时间保持原解析规则。
+- Miora 媒体缓存保留正在使用和等待锁的账号引用，避免缓存淘汰后同一账号出现两把锁；文本推理取得账号锁后重读模型映射，目录已删除的模型不再推理。
+- Miora 导入支持 `accessToken` 别名和原始 Bearer JWT，并按精确 issuer 自动识别；手选渠道覆盖导出包装中的 provider，切换 Miora 会填入正确默认模板并保留手写凭证。
 
 ## v0.1.1 修复
 
@@ -192,7 +200,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.1`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.2`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

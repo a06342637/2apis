@@ -89,7 +89,8 @@ function providerFromObject(value: Record<string, unknown>): Provider | null {
   const has = (key: string) => Object.prototype.hasOwnProperty.call(value, key);
   // Miora 同样用 refreshToken，必须先认 authToken，避免误入 TRAE 池。
   if (has("authToken")) return "miora";
-  const token = value.access_token ?? value.token;
+  const token = [value.access_token, value.accessToken, value.token]
+    .find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
   if (typeof token === "string" && providerFromToken(token) === "miora") return "miora";
   if (has("accessToken") || has("refreshToken")) return "trae";
   if (has("access_key_id") || has("secret_access_key")) return "codearts";
@@ -274,10 +275,11 @@ export function parseCredentialInput(
     const nested = object.credential;
     if (typeof nested === "object" && nested !== null && !Array.isArray(nested)) {
       const declared = object.provider;
-      const declaredProvider =
-        typeof declared === "string" && IMPORT_PROVIDERS.includes(declared as Provider)
+      const declaredProvider = detect
+        ? typeof declared === "string" && IMPORT_PROVIDERS.includes(declared as Provider)
           ? (declared as Provider)
-          : providerFromObject(object);
+          : providerFromObject(object)
+        : null;
       return {
         ok: true,
         provider: declaredProvider ?? fallback,
@@ -301,10 +303,11 @@ export function parseCredentialInput(
     return wrapRaw(detected ?? fallback, { cookie: cookieText, token: null }, detected !== null);
   }
 
-  // 裸 token
-  if (looksLikeToken(trimmed)) {
-    const detected = detect ? providerFromToken(trimmed) : null;
-    return wrapRaw(detected ?? fallback, { cookie: null, token: trimmed }, detected !== null);
+  // 裸 token / 复制的 Bearer 值
+  const token = trimmed.replace(/^Bearer\s+/i, "").trim();
+  if (looksLikeToken(token)) {
+    const detected = detect ? providerFromToken(token) : null;
+    return wrapRaw(detected ?? fallback, { cookie: null, token }, detected !== null);
   }
 
   return {

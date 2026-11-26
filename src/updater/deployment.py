@@ -49,7 +49,7 @@ class HostConfig:
     project: str = "2apis"
     service: str = "coding2api"
     source: str = "a06342637/2apis"
-    current_version: str = "0.1.1"
+    current_version: str = "0.1.2"
     current_commit: str = ""
     health_timeout: int = 180
     drain_timeout: int = 180

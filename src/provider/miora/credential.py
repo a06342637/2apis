@@ -27,7 +27,7 @@ def jwt_subject(token: str) -> str:
         payload = json.loads(
             base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)).decode("utf-8")
         )
-    except (ValueError, UnicodeDecodeError):
+    except (ValueError, UnicodeDecodeError, RecursionError):
         return ""
     return text_field(payload, "sub") if isinstance(payload, dict) else ""
 
@@ -65,11 +65,8 @@ class MioraCredential:
         token = token_from_input(
             text_field(raw, "access_token", "authToken", "accessToken", "token", "cookie", "raw")
         )
-        try:
-            # 刷新响应只给新 JWT；旧记录的 expires_at 不可压住新票的 exp。
-            expiry = jwt_expiry(token) or credential_expiry({**raw, "access_token": token})
-        except (ValueError, OverflowError):
-            expiry = 0
+        # 公共时间解析已将无效元数据归一为未知0；新JWT的exp优先于旧记录的expires_at。
+        expiry = jwt_expiry(token) or credential_expiry({**raw, "access_token": token})
         return cls(
             access_token=token,
             refresh_token=text_field(raw, "refresh_token", "refreshToken"),

@@ -93,6 +93,11 @@ class RefreshTask:
                 if data is None:
                     report.skipped += 1
                     continue
+                # 同一坏刷新票的前一个等待者可能刚标硬禁用；锁前快照不能再消费它。
+                # 只查该账号当前的维护资格，软暂停仍保持登录态。
+                if not self._credentials.maintenance_allowed(candidate.credential_id):
+                    report.skipped += 1
+                    continue
                 # 等锁期间可能已被另一轮续期或手工登录更新，不能再消费一张新刷新票。
                 if not _needs_refresh(provider, data, self.skew_seconds, current):
                     report.skipped += 1
