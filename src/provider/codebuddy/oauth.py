@@ -12,6 +12,7 @@ state 的所有权与消费语义（AGENTS.md）：一旦取消或消费便不�
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,12 +20,13 @@ import httpx
 
 from ...provider.auth_state import AuthStateStore as AuthStateStoreBase
 from ...provider.base import AuthFlow, AuthResult, AuthSession
-from ...provider.proxy import build_client
 from .credential import CodeBuddyCredential, validate_domain
 from .events import UpstreamProtocolViolation
 from .headers import EP_AUTH_STATE, EP_AUTH_TOKEN, EP_LOGIN_ACCOUNT, auth_start_headers, host_of
+from .routing import build_codebuddy_client
 
 AUTH_STATE_TTL_SECONDS = 600
+AUTH_START_TIMEOUT_SECONDS = 15.0
 PENDING_CODE = 11217          # 等待用户完成登录
 ACCOUNT_PENDING_CODE = 12151  # 等待账号信息准备完成
 
@@ -86,7 +88,7 @@ class CodeBuddyOAuth:
     @property
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = build_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
+            self._client = build_codebuddy_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
         return self._client
 
     async def aclose(self) -> None:
@@ -96,8 +98,14 @@ class CodeBuddyOAuth:
     async def start(self, username: str) -> AuthSession:
         """申请 auth state。校验通过前不登记 state、不让前端导航。"""
         headers = auth_start_headers(host_of(self.endpoint))
-        response = await self._http.post(
-            f"{self.endpoint}{EP_AUTH_STATE}?platform=CLI", json={}, headers=headers)
+        try:
+            async with asyncio.timeout(AUTH_START_TIMEOUT_SECONDS):
+                response = await self._http.post(
+                    f"{self.endpoint}{EP_AUTH_STATE}?platform=CLI", json={}, headers=headers,
+                    timeout=httpx.Timeout(15.0, connect=8.0))
+        except TimeoutError as error:
+            # 整个申请有上限；保留传输超时分类，不登记不完整的登录 state。
+            raise httpx.ReadTimeout("授权服务未在限定时间内响应") from error
         if response.status_code != 200:
             raise UpstreamProtocolViolation("auth service unavailable")
         body = response.json()

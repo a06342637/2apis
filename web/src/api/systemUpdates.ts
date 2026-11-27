@@ -10,6 +10,9 @@ export interface UpdateJob {
   error: string;
   started_at: number;
   finished_at: number | null;
+  step?: string | null;
+  step_started_at?: number | null;
+  heartbeat_at?: number | null;
 }
 export interface SystemUpdateStatus {
   enabled: boolean;
@@ -20,6 +23,7 @@ export interface SystemUpdateStatus {
   update_available?: boolean;
   dirty?: boolean;
   job?: UpdateJob | null;
+  server_time?: number;
 }
 
 export const systemUpdates = {

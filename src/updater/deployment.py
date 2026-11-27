@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
@@ -202,10 +203,12 @@ def run_command(argv: list[str], *, cwd: Path | None = None, timeout: int = 1800
 
 
 class Deployment:
-    def __init__(self, config: HostConfig, run=run_command, sleep=time.sleep):
+    def __init__(self, config: HostConfig, run=run_command, sleep=time.sleep,
+                 progress: Callable[[int, str], None] | None = None):
         self.config = config
         self.run = run
         self.sleep = sleep
+        self.progress = progress or (lambda _percent, _message: None)
         self.override = config.state_dir / "active-image.json"
 
     def compose(self, *args: str) -> str:
@@ -232,12 +235,15 @@ class Deployment:
     def build(self, source: str, commit: str, stage: Path) -> str:
         source, commit = validate_source(source), validate_commit(commit)
         git = ["git", "-c", f"core.hooksPath={os.devnull}", "-c", "protocol.file.allow=never"]
+        self.progress(10, "正在连接 GitHub 并获取源码")
         self.run([*git, "clone", "--no-checkout", "--filter=blob:none", "--",
                   f"https://github.com/{source}.git", str(stage)])
+        self.progress(14, "正在获取本次更新的固定提交")
         self.run([*git, "fetch", "--depth=1", "origin", commit], cwd=stage)
         actual = self.run([*git, "rev-parse", "FETCH_HEAD"], cwd=stage)
         if actual != commit:
             raise ValueError("Git 获取的提交与固定更新目标不一致")
+        self.progress(18, "提交校验通过，正在准备构建源码")
         self.run([*git, "checkout", "--detach", "--force", commit], cwd=stage)
         # 不跟随仓库里的符号链接；Docker build 的上下文来自固定提交。
         code_manifest(stage)
@@ -246,9 +252,12 @@ class Deployment:
         builder = f"apis-update-{self.config.project}"
         failed = True
         try:
+            self.progress(22, "正在启动并校验受限构建器")
             self._prepare_builder(builder)
+            self.progress(25, "正在构建前端及后端镜像；此步骤可能需要数分钟，旧服务继续运行")
             self.run(["docker", "buildx", "build", "--builder", builder, "--load",
                       "--tag", image, str(stage)], timeout=3600)
+            self.progress(40, "镜像构建完成，正在收尾并释放构建器资源")
             failed = False
         finally:
             self._stop_builder(builder, failed=failed)

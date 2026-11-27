@@ -44,6 +44,7 @@ from .headers import (
     host_of,
 )
 from .model_access_store import ModelAccessStore
+from .routing import build_codebuddy_client
 from .tools import CodeBuddyTools
 
 # 写超时覆盖的是上传请求体阶段，不是首字等待：大上下文请求体可达数 MB，
@@ -292,6 +293,9 @@ def conversation_seed(payload: dict[str, Any]) -> str | None:
 
 
 class CodeBuddyClient(LazyClients):
+    def _build_http_client(self, timeout: httpx.Timeout, proxy: str | None) -> httpx.AsyncClient:
+        return build_codebuddy_client(timeout=timeout, proxy=proxy)
+
     def __init__(
         self,
         *,

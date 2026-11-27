@@ -77,10 +77,19 @@ systemd unit 必须保留 `RuntimeDirectoryPreserve=yes`：应用绑定挂载的
 切换失败时停止新服务，校验备份，恢复原代码、数据库、文件属主、密钥与 Compose 配置，
 使用原镜像 ID 重建并等待 healthy。构建或 CI 失败不会停止旧服务。主机锁阻止多个 helper
 实例，服务内锁阻止并发更新。进度和日志持久化，页面刷新和应用重启后继续展示。
+从 v0.1.7 起，独立助手记录获取固定提交、准备源码、启动/校验构建器、镜像构建及收尾
+等步骤；长步骤每 15 秒记录一次等待报告，等待报告不表示构建完成，也不推进百分比。
+页面显示总耗时、当前步骤耗时、最近同步和活动时间，日志最多保留 300 条。
+只发布固定步骤说明，不展示 Docker/Git 原始输出或部署密钥。
+应用升级不会自动替换独立 `/opt/2apis-update-helper` 副本；需在没有运行中更新时，
+由主机管理员同步该副本的 `src/updater/` 并重启 `2apis-update.service`，保留原配置、
+状态、secret 和 socket 父目录。仅更新应用时，页面兼容旧助手并保留原有阶段日志。
 helper 重启时自动恢复未完成事务；若备份损坏或原服务无法 healthy，则锁定后续更新，
 保留全部备份与失败信息，等待主机管理员检查。不会自动清理历史备份或镜像。
 
 管理员 API：GET `/api/system-updates`；POST `/api/system-updates/check`；
 PUT `/api/system-updates/source` 传 `{ "source": "owner/repo" }`；
 POST `/api/system-updates/start` 传 `{ "commit": "完整SHA", "force": false }`。
-状态端点包含版本、提交、CI、dirty 与持久化 job/progress/logs，不下发主机私密路径或镜像回滚信息。
+状态端点包含版本、提交、CI、dirty 与持久化 job/progress/logs；v0.1.7 增加可选
+job.step、job.step_started_at、job.heartbeat_at 和 server_time，用于计时及活动显示。
+不下发主机私密路径或镜像回滚信息。

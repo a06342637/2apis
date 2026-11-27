@@ -1,6 +1,16 @@
-# 2apis · v0.1.6
+# 2apis · v0.1.7
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.7 更新活动日志
+
+- 更新页显示总耗时、当前步骤耗时、最近同步和最近活动报告，耗时按秒刷新；构建阶段明确说明百分比代表阶段完成情况。
+- 主机助手记录连接仓库、获取固定提交、准备源码、校验构建器、构建镜像及构建收尾。长步骤每 15 秒追加等待报告，不把等待心跳当作构建已完成。
+- 活动日志和步骤时间由主机保存，刷新页面可恢复；最多保留 300 条，旧任务迟到报告不能写入新任务。仅显示固定步骤说明，不公开命令输出、密钥或部署配置。
+- 日志自动跟随最新内容，手动滚动阅读旧日志时保持位置，可点击「查看最新日志」恢复。旧版主机助手没有活动字段时页面仍兼容；新日志需同时升级独立主机助手。
+- 链接登录在获取过程中显示秒数并提供取消，20 秒未完成时恢复可重试状态；迟到的旧登录 state 会清理，不覆盖新链接。网络失败提示紧邻获取按钮。
+- CodeBuddy 国内及国际版申请链接采用 8 秒连接超时、15 秒整轮上限，超时不登记登录 state。
+- 国际站原域名出现连接/DNS 故障时，直连客户端尝试官方 `api.codebuddy.ai` 连接入口，保留原 Host、TLS 校验身份及授权网址；成功后缓存连接选择 5 分钟。登录、轮询、刷新及聊天连接复用此规则，读写失败不重放请求，显式代理保持原出口配置。
 
 ## v0.1.6 并发调用与系统修复
 
@@ -264,7 +274,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.6`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.7`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

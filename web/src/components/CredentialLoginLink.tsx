@@ -10,7 +10,7 @@ export function CredentialLoginLink({ provider, cancelRegistry, disabled, onNoti
   onNotice: (message: string) => void;
   onImported: (message: string) => void;
 }) {
-  const { row, refresh, copy, complete, cancel, setCallback } = useLoginLink(
+  const { row, loadingSeconds, refresh, copy, complete, cancel, setCallback } = useLoginLink(
     provider, cancelRegistry, { onNotice, onImported }, disabled);
   const prefix = `login-link-${provider}`;
   const busy = disabled || row.loading || row.completing;
@@ -29,12 +29,18 @@ export function CredentialLoginLink({ provider, cancelRegistry, disabled, onNoti
           <Button type="button" size="sm" disabled={busy || !row.authUrl || !row.state}
             data-testid={`${prefix}-copy`} onClick={() => void copy()}>复制链接</Button>
           <Button type="button" size="sm" disabled={busy} data-testid={`${prefix}-refresh`}
-            onClick={() => void refresh()}>{row.loading ? "获取中…" : row.authUrl ? "刷新链接" : "获取链接"}</Button>
+            onClick={() => void refresh()}>{row.loading ? `获取中… ${loadingSeconds} 秒` : row.authUrl ? "刷新链接" : "获取链接"}</Button>
           {provider === "officeace" && <Button type="button" size="sm" disabled={busy}
             data-testid={`${prefix}-switch`} onClick={() => void refresh(true)}>换账号刷新</Button>}
-          {row.state && <Button type="button" size="sm" variant="ghost" data-testid={`${prefix}-cancel`}
+          {(row.state || row.loading) && <Button type="button" size="sm" variant="ghost" disabled={disabled} data-testid={`${prefix}-cancel`}
             onClick={() => void cancel()}>取消链接登录</Button>}
         </div>
+        {row.loading && <p role="status" className="text-xs text-muted-foreground" data-testid={`${prefix}-loading`}>
+          正在连接授权服务；20 秒未完成会提示重试，可随时取消本次获取。
+        </p>}
+        {row.hint && <p role="status" data-testid={`${prefix}-hint`}
+          className={`text-xs ${row.tone === "err" ? "text-red-600" : row.tone === "ok"
+            ? "text-green-600" : "text-muted-foreground"}`}>{row.hint}</p>}
         <Field label={`${PROVIDER_LABEL[provider]} 回调链接`} htmlFor={`${prefix}-callback`}
           hint={row.flow === "poll" ? "可留空，授权后自动检测。" : "浏览器打不开回调时粘贴地址栏的整条链接。"}>
           <Input id={`${prefix}-callback`} data-testid={`${prefix}-callback`} value={row.callback}
@@ -46,9 +52,6 @@ export function CredentialLoginLink({ provider, cancelRegistry, disabled, onNoti
         <Button type="button" size="sm" variant="primary" disabled={busy || !row.state
           || (row.flow !== "poll" && !row.callback.trim())} data-testid={`${prefix}-complete`}
           onClick={() => void complete()}>{row.completing ? "完成中…" : "完成登录"}</Button>
-        {row.hint && <p role="status" data-testid={`${prefix}-hint`}
-          className={`text-xs ${row.tone === "err" ? "text-red-600" : row.tone === "ok"
-            ? "text-green-600" : "text-muted-foreground"}`}>{row.hint}</p>}
       </div>
     </details>
   );

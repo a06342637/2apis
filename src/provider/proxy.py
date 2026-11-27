@@ -136,7 +136,8 @@ def credential_proxy(credential_id: str | None) -> str | None:
 
 
 def build_client(*, timeout: httpx.Timeout, proxy: str | None = None,
-                 breaker: EgressBreaker | None = None) -> httpx.AsyncClient:
+                 breaker: EgressBreaker | None = None,
+                 transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
     """构造上游 HTTP 客户端：显式按渠道代理优先，永远忽略环境代理。
 
     `trust_env=False` 是既有约定——不吃 `HTTP_PROXY` 等环境变量，避免部署环境
@@ -148,7 +149,8 @@ def build_client(*, timeout: httpx.Timeout, proxy: str | None = None,
     return _EgressGuardedClient(
         timeout=timeout,
         trust_env=False,
-        proxy=proxy,
+        # 显式 transport 自己承接同一个 proxy，不能再创建覆盖它的代理 mount。
+        **({"proxy": proxy} if transport is None else {"transport": transport}),
         limits=UPSTREAM_LIMITS,
         breaker=breaker or get_egress_breaker(),
         egress_proxy=proxy,

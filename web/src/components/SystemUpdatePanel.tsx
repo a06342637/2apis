@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { systemUpdates, type SystemUpdateStatus } from "../api/systemUpdates";
 import { errorText } from "../lib/errors";
 import { Button, Field, Input, Notice, Panel } from "../ui";
+import { SystemUpdateActivity } from "./SystemUpdateActivity";
 
 const KEY = ["system-updates"];
 const LABELS = { running: "更新中", success: "更新成功", failed: "更新失败",
@@ -44,7 +45,7 @@ export function SystemUpdatePanel() {
     <div className="space-y-4">
       {query.isPending && <p>正在读取更新状态…</p>}
       {query.isError && <Notice tone="warn">{state?.job?.status === "running"
-        ? "服务正在切换，正在重新连接；更新进度由主机保存。"
+        ? "暂时无法连接主机，正在重新连接；更新进度由主机保存。"
         : errorText(query.error, "读取更新状态失败，正在重新连接。")}</Notice>}
       {mutation.isError && <Notice tone="danger">{errorText(mutation.error, "更新操作失败，请重试。")}</Notice>}
       {state?.enabled === false && <p>此部署尚未启用主机更新助手。</p>}
@@ -79,9 +80,8 @@ export function SystemUpdatePanel() {
         <p>{LABELS[job.status]} · {job.progress}%</p>
         <progress aria-label="更新进度" value={job.progress} max={100} className="w-full" />
         {job.error && <Notice tone="danger">{job.error}</Notice>}
-        <pre className="max-h-72 overflow-auto whitespace-pre-wrap text-xs" aria-label="更新日志">
-          {job.logs.map((log) => `${new Date(log.time * 1000).toLocaleTimeString()} ${log.message}`).join("\n")}
-        </pre>
+        <SystemUpdateActivity job={job} serverTime={state?.server_time}
+          syncedAt={query.dataUpdatedAt} reconnecting={query.isError} />
       </div>}
     </div>
   </Panel>;

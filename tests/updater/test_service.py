@@ -32,7 +32,8 @@ def make(host, new_source, fail=None, ci=None):
     return service, calls, pending
 
 
-def test_same_version_different_commit_check_and_source(host, new_source):
+def test_same_version_different_commit_check_and_source(host, new_source, monkeypatch):
+    monkeypatch.setattr("src.updater.service.time.time", lambda: 100)
     service, _, _ = make(host, new_source)
     assert not service.status()["update_available"]
     status = service.dispatch("check", {})

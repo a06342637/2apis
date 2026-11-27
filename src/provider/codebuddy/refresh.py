@@ -14,11 +14,11 @@ from typing import Any
 import httpx
 
 from ..base import UpstreamReloginRequired
-from ..proxy import build_client
 from .credential import CodeBuddyCredential, validate_domain
 from .events import UpstreamProtocolViolation
 from .headers import EP_ACCOUNTS, EP_SWITCH_ENTERPRISE, EP_TOKEN_REFRESH, host_of
 from .oauth import _expires_at
+from .routing import build_codebuddy_client
 
 
 @dataclass(slots=True)
@@ -50,7 +50,7 @@ class CodeBuddyRefresh:
     @property
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = build_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
+            self._client = build_codebuddy_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
         return self._client
 
     async def aclose(self) -> None:
