@@ -1,0 +1,18 @@
+{
+  "credit": {
+    "totalAmount": "250",
+    "usedAmount": "8.5",
+    "nextExpiring": {"credit": 241.5, "expiredAt": "2027-02-26 14:17:34"}
+  },
+  "overview": {
+    "groups": [
+      {"packType": "subscription", "total": 0, "items": []},
+      {"packType": "topup", "total": 0, "items": []},
+      {"packType": "gift", "total": 1, "items": [
+        {"packType": "gift", "subPackType": "welcome", "packageName": "New User Welcome Pack",
+         "status": "active", "used": 8.5, "remain": 241.5, "total": 250,
+         "startAt": "2026-11-26 14:17:35", "endAt": "2027-02-26 14:17:34", "inUsage": true}
+      ]}
+    ]
+  }
+}

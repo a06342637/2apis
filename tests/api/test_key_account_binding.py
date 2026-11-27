@@ -81,6 +81,8 @@ def test_damaged_binding_fails_closed(miora_app, stored):
 @pytest.mark.parametrize("stream", [False, True])
 def test_bound_request_cannot_retry_unselected_account(miora_app, path, stream):
     app, client, network = miora_app
+    # 本用例只测绑定边界；短冷却续试在引擎假时钟回归中单独覆盖。
+    app.state.executor._deps.short_cooldown_wait_seconds = 0
     one = import_account(client)["id"]
     import_account(client, "unselected")
     key = make_key(app, client, [one])

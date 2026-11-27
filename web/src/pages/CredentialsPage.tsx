@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useCredentialGroups, useCredentials, useQueryClient } from "../api/hooks";
 import { useDisplayModels } from "../api/modelDisplay";
-import type { Provider } from "../api/types";
+import type { Credential, Provider } from "../api/types";
 import { PROVIDER_LABEL, providerLabel, providerRank } from "../api/providers";
 import { groupModelsByProvider } from "../components/ModelPicker";
 import { PageHeader } from "../components/PageHeader";
@@ -37,7 +37,7 @@ import type { BatchButton } from "./credentials/helpers";
 import { CredentialTable } from "./credentials/table";
 import { CredentialGroupsDialog } from "./credentials/CredentialGroupsDialog";
 import { withAccountGroupProviders } from "./credentials/accountSections";
-import { downloadCredentialExport } from "./credentials/export";
+import { deliverCredentialExport, type CredentialExportMode } from "./credentials/export";
 
 /**
  * 凭证管理页：页面主体只负责取数、筛选/展开/选中状态与动作编排。
@@ -63,6 +63,20 @@ export function CredentialsPage() {
   const [managingGroups, setManagingGroups] = useState<Provider | null>(null);
   const [busy, setBusy] = useState(false);
   const exportInFlight = useRef(false);
+  const exportIdentity = useMemo(() => ({ username: session.username }), [session.username]);
+  const currentExportIdentity = useRef(exportIdentity);
+  currentExportIdentity.current = exportIdentity;
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    exportInFlight.current = false;
+    setBusy(false);
+  }, [exportIdentity]);
+  const deleteInFlight = useRef(false);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // 添加凭证对话框（登录渠道 / JSON 导入 / 免费层补回都收在里面）
   // `?new=1`：首启向导的深链，进来直接开新增对话框，随后把参数清掉
@@ -218,6 +232,7 @@ export function CredentialsPage() {
    * 组头始终可见，所以「先折叠、要看时点开」在无筛选时仍然成立。
    */
   const applyFilters = (next: typeof filters) => {
+    setConfirmBatchDelete(false);
     setFilters(next);
     if (next.query.trim() !== "" || next.provider !== ANY ||
         next.state !== ANY || next.tag !== ANY) {
@@ -321,28 +336,68 @@ export function CredentialsPage() {
     }
   };
 
-  // 只导出点击时仍在筛选结果内的选中项。导出是读取现有凭证，成功后保留选择，
-  // 不刷新列表或触发上游票据更新；ref 同步锁住连续点击，state 同时禁用批量按钮。
-  const exportSelected = async () => {
-    if (busy || exportInFlight.current) return;
-    const ids = [...new Set(selectedIds.map((credential) => credential.id))];
-    if (!ids.length) return;
+  // 两个导出入口共用同步锁；只允许当前页面与当前登录身份交付明文和更新状态。
+  // 导出读取现有凭证，成功保留选择，不刷新列表或触发上游票据更新。
+  const exportData = async (mode: CredentialExportMode,
+    load: () => Promise<{ blob: Blob }>, filename: string | undefined, notice: string) => {
+    const identity = exportIdentity;
+    const isCurrent = () => mounted.current && currentExportIdentity.current === identity;
+    if (!isCurrent() || busy || exportInFlight.current) return;
     exportInFlight.current = true;
     setBusy(true);
     try {
-      const { blob } = await api.exportCredentials(ids);
-      downloadCredentialExport(blob);
-      showNotice(`已导出 ${ids.length} 个凭证 JSON（含明文令牌，请妥善保管）`);
+      const { blob } = await load();
+      if (!await deliverCredentialExport(blob, mode, filename, isCurrent)) return;
+      if (isCurrent()) showNotice(mode === "clipboard" ? "已复制到剪贴板" : notice);
     } catch (caught) {
-      showError(errorText(caught, "导出凭证失败"));
+      if (isCurrent()) showError(errorText(caught, mode === "clipboard"
+        ? "复制到剪贴板失败，请重试或选择下载 JSON" : "导出凭证失败"));
     } finally {
-      exportInFlight.current = false;
+      if (isCurrent()) {
+        exportInFlight.current = false;
+        setBusy(false);
+      }
+    }
+  };
+  const exportSelected = async (mode: CredentialExportMode) => {
+    const ids = [...new Set(selectedIds.map((credential) => credential.id))];
+    if (!ids.length) return;
+    await exportData(mode, () => api.exportCredentials(ids), undefined,
+      `已导出 ${ids.length} 个凭证 JSON（含明文令牌，请妥善保管）`);
+  };
+  const exportOne = async (credential: Credential, mode: CredentialExportMode) => {
+    await exportData(mode, () => api.exportCredential(credential.id),
+      `coding2api-credential-${credential.provider}-${credential.id}.json`,
+      "已导出凭证 JSON（含明文令牌，请妥善保管）");
+  };
+
+  const deleteSelected = async () => {
+    if (!canWrite || busy || deleteInFlight.current || !confirmBatchDelete) return;
+    const ids = [...new Set(selectedIds.map((credential) => credential.id))];
+    if (!ids.length) return;
+    deleteInFlight.current = true;
+    setBusy(true);
+    try {
+      const result = await api.batchCredentials("delete", ids);
+      const requested = new Set(ids);
+      const deleted = new Set(result.results.filter((row) => row.ok && requested.has(row.id))
+        .map((row) => row.id));
+      setSelected((previous) => new Set([...previous].filter((id) => !deleted.has(id))));
+      setConfirmBatchDelete(false);
+      push({ tone: result.failed > 0 ? "warn" : "ok", testId: "credentials-batch-result",
+        content: <BatchToastContent result={result} names={credentialNames} done="已删除" /> });
+      await refresh();
+    } catch (caught) {
+      showError(errorText(caught, "批量删除失败"));
+    } finally {
+      deleteInFlight.current = false;
       setBusy(false);
     }
   };
 
   /** 勾选 / 取消勾选一条；用于行内 checkbox 与组头「全选本渠道」。 */
   const toggleSelected = (credentialId: string, checked: boolean) => {
+    setConfirmBatchDelete(false);
     setSelected((previous) => {
       const next = new Set(previous);
       if (checked) next.add(credentialId);
@@ -353,6 +408,7 @@ export function CredentialsPage() {
 
   /** 组头「全选本渠道」：把该组所有行一次性纳入 / 移出选中集合。 */
   const toggleGroupSelected = (ids: string[], checked: boolean) => {
+    setConfirmBatchDelete(false);
     setSelected((previous) => {
       const next = new Set(previous);
       for (const id of ids) {
@@ -382,6 +438,7 @@ export function CredentialsPage() {
     setWeightFor,
     setWebCookieFor,
     setLoginSecretFor,
+    exportCredential: (credential, mode) => void exportOne(credential, mode),
   });
 
   if (isLoading) return <PageSkeleton variant="cards" />;
@@ -489,8 +546,12 @@ export function CredentialsPage() {
                 selectedCount={selectedIds.length}
                 busy={busy}
                 onRun={(button) => void runBatch(button)}
-                onExport={() => void exportSelected()}
-                onClear={() => setSelected(new Set())}
+                onExport={(mode) => void exportSelected(mode)}
+                confirmingDelete={confirmBatchDelete}
+                onDelete={() => setConfirmBatchDelete(true)}
+                onConfirmDelete={() => void deleteSelected()}
+                onCancelDelete={() => setConfirmBatchDelete(false)}
+                onClear={() => { setConfirmBatchDelete(false); setSelected(new Set()); }}
               />
             )}
 

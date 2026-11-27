@@ -619,8 +619,9 @@ export function SettingsPage() {
                       <div className="mb-3 space-y-2 rounded-lg border border-border p-3"
                         data-testid="miora-account-settings-help">
                         <p className="text-xs text-muted-foreground">
-                          Miora 同账号保持串行，不同账号独立排队。建议 5 秒间隔、1 个在途名额，
-                          每 60 秒最多 3 次请求；这是本地保守设置，不是上游的硬门槛。
+                          Miora 同账号保持串行，不同账号独立排队，默认不限制窗口内请求次数。
+                          频繁限流时可填入 5 秒间隔、1 个在途名额、每 60 秒最多 3 次请求；
+                          这是可选的本地保守设置，不是上游的硬门槛。
                           429 会冷却该账号，优先遵守上游 Retry-After。账号启停和权重在凭证池设置。
                         </p>
                         <Button size="sm" variant="default" disabled={busy}

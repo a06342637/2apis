@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialGroupHeader } from "../groupHeader";
+import { ModelListPopup, ModelListPopupClose } from "../ModelListPopup";
 import { groupByProvider } from "../../../lib/credentialList";
 import type { Credential } from "../../../api/types";
 import type { ProviderModel } from "../../../components/ModelPicker";
@@ -96,6 +97,20 @@ describe("账号组模型弹层", () => {
     expect(await screen.findByTestId("group-miora-models")).toBeInTheDocument();
   });
 
+  it("未固定预览经Tab离开关闭后，再次Tab回触发器仍可预览", async () => {
+    setup();
+    const trigger = screen.getByTestId("group-miora-model-count");
+    act(() => trigger.focus());
+    const popup = await screen.findByRole("dialog", { name: "Miora 模型清单" });
+    expect(popup).toHaveAttribute("data-open-mode", "preview");
+    await userEvent.tab();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "外部操作" })).toHaveFocus();
+    await userEvent.tab({ shift: true });
+    expect(trigger).toHaveFocus();
+    expect(await screen.findByRole("dialog", { name: "Miora 模型清单" })).toHaveAttribute("data-open-mode", "preview");
+  });
+
   it("点击外部关闭并保留外部操作焦点", async () => {
     setup();
     await userEvent.click(screen.getByTestId("group-miora-model-count"));
@@ -103,6 +118,64 @@ describe("账号组模型弹层", () => {
     await userEvent.click(screen.getByRole("button", { name: "外部操作" }));
     await waitFor(() => expect(popup).not.toBeInTheDocument());
     expect(screen.getByRole("button", { name: "外部操作" })).toHaveFocus();
+    act(() => screen.getByTestId("group-miora-model-count").focus());
+    expect(await screen.findByRole("dialog", { name: "Miora 模型清单" })).toHaveAttribute("data-open-mode", "preview");
+  });
+
+  it("关闭按钮移除弹层后产生的触发器pointerenter不能重新预览，重新移入仍可预览", async () => {
+    setup();
+    const trigger = screen.getByTestId("group-miora-model-count");
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("button", { name: "关闭模型清单" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const pointer = new Event("pointerover", { bubbles: true });
+    Object.defineProperty(pointer, "pointerType", { value: "mouse" });
+    fireEvent(trigger, pointer);
+    fireEvent.blur(trigger, { relatedTarget: null });
+    fireEvent.focus(trigger);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.unhover(trigger);
+    await userEvent.hover(trigger);
+    expect(await screen.findByRole("dialog", { name: "Miora 模型清单" })).toHaveAttribute("data-open-mode", "preview");
+  });
+
+  it("关闭后只有命中变化不重新打开，用户真实移动鼠标后仍可重新预览", async () => {
+    setup();
+    const trigger = screen.getByTestId("group-miora-model-count");
+    await userEvent.click(trigger);
+    await userEvent.click(screen.getByRole("button", { name: "关闭模型清单" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const enter = new Event("pointerover", { bubbles: true });
+    Object.defineProperty(enter, "pointerType", { value: "mouse" });
+    fireEvent(trigger, enter);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const move = new Event("pointermove", { bubbles: true });
+    Object.defineProperty(move, "pointerType", { value: "mouse" });
+    fireEvent(trigger, move);
+    expect(await screen.findByRole("dialog", { name: "Miora 模型清单" })).toHaveAttribute("data-open-mode", "preview");
+  });
+
+  it("关闭一个浮层后静止指针命中另一个实例不重开，真实移动后可预览", async () => {
+    render(<>
+      <ModelListPopup label="第一个" content={<ModelListPopupClose>关闭第一个</ModelListPopupClose>}>
+        <button data-testid="group-miora-model-count">第一个账号</button>
+      </ModelListPopup>
+      <ModelListPopup label="第二个" content={<span>第二个账号明细</span>}>
+        <button>第二个账号</button>
+      </ModelListPopup>
+    </>);
+    await userEvent.click(screen.getByRole("button", { name: "第一个账号" }));
+    await userEvent.click(screen.getByRole("button", { name: "关闭第一个" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    const nextTrigger = screen.getByRole("button", { name: "第二个账号" });
+    const enter = new Event("pointerover", { bubbles: true });
+    Object.defineProperty(enter, "pointerType", { value: "mouse" });
+    fireEvent(nextTrigger, enter);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const move = new Event("pointermove", { bubbles: true });
+    Object.defineProperty(move, "pointerType", { value: "mouse" });
+    fireEvent(nextTrigger, move);
+    expect(await screen.findByRole("dialog", { name: "第二个 模型清单" })).toHaveAttribute("data-open-mode", "preview");
   });
 
   it("普通模型在VIP之前，每区保留用途顺序并用真实权限显示锁定，不从倍率猜VIP", async () => {

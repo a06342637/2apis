@@ -53,4 +53,19 @@ describe("copyText", () => {
     await expect(copyText("private-key")).resolves.toBe(false);
     expect(document.querySelectorAll("textarea")).toHaveLength(0);
   });
+
+  it("Clipboard API迟到拒绝后已失效，不执行旧会话的降级复制", async () => {
+    let reject!: (error: Error) => void;
+    const writeText = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const execCommand = vi.fn(() => true);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    let current = true;
+    const copied = copyText("old-user-secret", () => current);
+    current = false;
+    reject(new Error("denied after session changed"));
+    await expect(copied).resolves.toBe(false);
+    expect(execCommand).not.toHaveBeenCalled();
+    expect(document.querySelectorAll("textarea")).toHaveLength(0);
+  });
 });

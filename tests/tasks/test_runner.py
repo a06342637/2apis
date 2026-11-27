@@ -153,8 +153,11 @@ async def test_runner_start_refreshes_expired_miora_before_quota_probe(tmp_path)
             return httpx.Response(200, json={
                 "access_token": new_token, "refresh_token": "rotated-refresh",
             })
-        assert request.url.path in {"/api/miora-billing/credit", "/api/miora-billing/subscription"}
-        seen.append("probe" if request.url.path.endswith("/credit") else "subscription")
+        probe_paths = {"/api/miora-billing/credit": "probe",
+                       "/api/miora-billing/subscription": "subscription",
+                       "/api/miora-billing/overview/packs": "packs"}
+        assert request.url.path in probe_paths
+        seen.append(probe_paths[request.url.path])
         if request.headers["authorization"] != f"Bearer {new_token}":
             # 旧启动顺序会走此 401 分支，并在 quota task 中硬禁用账号。
             return httpx.Response(401, json={"code": 401, "message": "expired"})
@@ -163,6 +166,9 @@ async def test_runner_start_refreshes_expired_miora_before_quota_probe(tmp_path)
             return httpx.Response(200, json={"code": 0, "data": {
                 "tierCode": "free", "status": "active", "expireAt": "",
             }})
+        if request.url.path.endswith("/overview/packs"):
+            assert json.loads(request.content) == {}
+            return httpx.Response(200, json={"code": 0, "data": {"groups": []}})
         return httpx.Response(200, json={"code": 0, "data": {
             "totalAmount": 100, "usedAmount": 25,
         }})
@@ -186,7 +192,7 @@ async def test_runner_start_refreshes_expired_miora_before_quota_probe(tmp_path)
     )
     try:
         await runner.start()
-        assert seen == ["refresh", "probe", "subscription"]
+        assert seen == ["refresh", "probe", "subscription", "packs"]
         data = credentials.credential_data(credential_id)
         assert data["access_token"] == new_token
         assert data["refresh_token"] == "rotated-refresh"
@@ -196,6 +202,9 @@ async def test_runner_start_refreshes_expired_miora_before_quota_probe(tmp_path)
         assert candidate.health == 75
         subscription = credentials.quota_detail(credential_id)["miora_subscription"]
         assert subscription["status"] == "free" and subscription["vip"] is False
+        assert credentials.quota_detail(credential_id)["miora_credits"] == {
+            "packages_status": "ok", "next_expiring": None,
+        }
         assert runner.status.get("refresh").ok is True
         assert runner.status.get("quota_probe").ok is True
     finally:

@@ -48,15 +48,30 @@ def test_miora_throttle_settings_are_hot():
     assert "miora_max_concurrency" in HOT_BY_KEY
     assert runtime.miora_chat_min_interval == 5
     assert runtime.miora_max_concurrency == 1
-    assert runtime.miora_max_requests_per_window == 3
+    assert runtime.miora_max_requests_per_window == 0
     assert runtime.miora_request_window_seconds == 60
     assert "miora_max_requests_per_window" in HOT_BY_KEY
     runtime.set("miora_max_requests_per_window", 0)
     assert runtime.miora_max_requests_per_window == 0
+    runtime.set("miora_max_requests_per_window", 3)
+    assert runtime.miora_max_requests_per_window == 3
     runtime.set("miora_chat_min_interval", 2)
     runtime.set("miora_max_concurrency", 3)
     assert runtime.miora_chat_min_interval == 2
     assert runtime.miora_max_concurrency == 3
+
+
+def test_model_stall_deadlines_default_to_bounded_wait_and_allow_explicit_disable():
+    runtime = RuntimeSettings(settings_with(), MemoryStore())
+    assert runtime.stream_first_event_timeout_seconds == 120
+    assert runtime.stream_idle_timeout_seconds == 300
+    runtime.set("stream_first_event_timeout_seconds", 0)
+    runtime.set("stream_idle_timeout_seconds", 0)
+    assert runtime.stream_first_event_timeout_seconds == runtime.stream_idle_timeout_seconds == 0
+    env_runtime = RuntimeSettings(settings_with(
+        STREAM_FIRST_EVENT_TIMEOUT_SECONDS=240, STREAM_IDLE_TIMEOUT_SECONDS=600), MemoryStore())
+    assert env_runtime.stream_first_event_timeout_seconds == 240
+    assert env_runtime.stream_idle_timeout_seconds == 600
 
 
 async def test_real_wiring_keeps_miora_account_buckets_and_hot_limits(tmp_path):
@@ -67,7 +82,7 @@ async def test_real_wiring_keeps_miora_account_buckets_and_hot_limits(tmp_path):
     assert provider.pacer.allow_concurrent
     assert provider.pacer.min_seconds == provider.pacer.max_seconds == 5
     assert provider.pacer.max_concurrency == 1
-    assert provider.pacer.max_requests_per_window == 3
+    assert provider.pacer.max_requests_per_window == 0
     assert provider.pacer.window_seconds == 60
     services.settings.set("miora_chat_min_interval", 0.5)
     services.settings.set("miora_max_concurrency", 2)

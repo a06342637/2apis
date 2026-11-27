@@ -145,9 +145,11 @@ export function headersFromCurl(text: string): {
 }
 
 /** 看起来像 Cookie 头：至少一个 `name=value`，且只由 cookie 字符组成。 */
+const COOKIE_PAIRS = /^[A-Za-z0-9_\-]+=[^;\s]*(\s*;\s*[A-Za-z0-9_\-]+=[^;\s]*)*$/;
+
 function looksLikeCookie(text: string): boolean {
   const trimmed = text.trim();
-  if (!/^[A-Za-z0-9_\-]+=[^;\s]*(\s*;\s*[A-Za-z0-9_\-]+=[^;\s]*)*$/.test(trimmed)) {
+  if (!COOKIE_PAIRS.test(trimmed)) {
     return false;
   }
   return providerFromCookie(trimmed) !== null || /[;]/.test(trimmed);
@@ -329,7 +331,8 @@ export interface ParsedBatchCredentials {
   unparsed: string[];
 }
 
-const EMAIL_PREFIX = /^([A-Za-z0-9.!#$%&'*+/=?^_{}|~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,})(?:[ \t\r]+|$)/;
+const EMAIL_PREFIX = /^([A-Za-z0-9.!#$%&'*+/=?^_{}|~-]+@[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,})(?:[ \t\r]+|(?=\{)|$)/;
+const WRAPPED_COOKIE_START = /^\{\s*(?:cookie\s*:\s*)?[A-Za-z0-9_\-]+\s*=/i;
 
 function cleanAuthToken(value: string): string {
   return value.trim().replace(/^["']|["']$/g, "").trim().replace(/^Bearer\s+/i, "").trim();
@@ -493,6 +496,22 @@ export function parseBatchCredentialInput(
     const emailSource = email ? email + "\n" : "";
     pendingEmail = null;
     const start = position;
+    const lineSource = text.slice(position, endOfLine).trim();
+    if (WRAPPED_COOKIE_START.test(lineSource)) {
+      // 邮箱{Cookie} 是独立行的 Miora 输入；先固定边界，缺右括号、拆行
+      // 或尾随其它内容时整行报错，不把相邻账号票据拼进当前 Cookie。
+      blockedContinuation = false;
+      consume(endOfLine);
+      const cookie = lineSource.endsWith("}")
+        ? lineSource.slice(1, -1).trim().replace(/^cookie\s*:\s*/i, "").trim().replace(/;\s*$/, "")
+        : "";
+      if (!cookie || /[{}\[\]\r\n]/.test(cookie) || !COOKIE_PAIRS.test(cookie)) {
+        reject(recordLine, "Miora Cookie 格式不正确，请每行写 邮箱{authToken=...; refreshToken=...}", emailSource + lineSource);
+      } else {
+        accept({ provider: "miora", credential: { cookie } }, recordLine, email, emailSource + lineSource);
+      }
+      continue;
+    }
     if (text[position] === "{" || text[position] === "[") {
       blockedContinuation = false;
       const root = text[position];
@@ -548,7 +567,7 @@ export function parseBatchCredentialInput(
       } else accept(parsed, recordLine, email, emailSource + source);
       continue;
     }
-    const source = text.slice(position, endOfLine).trim();
+    const source = lineSource;
     consume(endOfLine);
     const token = cleanAuthToken(source);
     const jwtLike = looksLikeBatchJwt(token);

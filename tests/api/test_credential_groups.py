@@ -152,6 +152,8 @@ def test_group_retry_cannot_escape_and_empty_or_missing_groups_fail_before_dispa
         miora_app, path, stream):
     app, client, network = miora_app
     app.state.services.registry["miora"].pacer = None
+    # 本用例只测绑定边界；短冷却续试在引擎假时钟回归中单独覆盖。
+    app.state.executor._deps.short_cooldown_wait_seconds = 0
     one, _two, _foreign = add_accounts(app)
     group = create_group(client, [one])
     key = group_key(client, [group["id"]])

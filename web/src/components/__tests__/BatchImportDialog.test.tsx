@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, ApiError } from "../../api/client";
@@ -178,6 +178,36 @@ describe("BatchImportDialog", () => {
     ]);
   });
 
+  it("邮箱紧贴Cookie或JSON作为备注，重复由服务端跳过且坏行保留原邮箱", async () => {
+    const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({
+      created: [{ index: 0, id: "new", tos: { level: "green", reason: "", basis: "" } }],
+      skipped: [{ index: 1, reason: "duplicate" }], failed: [],
+    });
+    const { onImported } = renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: [
+      "first@example.com{authToken=synthetic-account; refreshToken=account-refresh}",
+      'duplicate@example.com{"authToken":"synthetic-account","refreshToken":"account-refresh"}',
+      "bad@example.com{refreshToken=missing-own-auth}",
+    ].join("\n") } });
+    expect(screen.getByTestId("batch-preview")).toHaveTextContent("first@example.com");
+    expect(screen.getByTestId("batch-preview")).toHaveTextContent("duplicate@example.com");
+    expect(screen.getByTestId("batch-count")).toHaveTextContent("识别 2 条，1 行有问题");
+    await userEvent.click(screen.getByTestId("batch-submit"));
+    expect(spy).toHaveBeenCalledExactlyOnceWith([
+      expect.objectContaining({ provider: "miora", nickname: "first@example.com",
+        credential: expect.objectContaining({ authToken: "synthetic-account", refreshToken: "account-refresh" }) }),
+      expect.objectContaining({ provider: "miora", nickname: "duplicate@example.com",
+        credential: expect.objectContaining({ authToken: "synthetic-account", refreshToken: "account-refresh" }) }),
+    ]);
+    await waitFor(() => expect(screen.getByTestId("batch-result")).toHaveTextContent("成功 1 条，跳过 1 条"));
+    expect(onImported).toHaveBeenCalledWith("批量导入完成：成功 1 条");
+    const retry = (screen.getByTestId("batch-text") as HTMLTextAreaElement).value;
+    expect(retry).toContain("bad@example.com");
+    expect(retry).not.toContain("first@example.com");
+    expect(parseBatchText(retry).entries).toEqual([]);
+    expect(parseBatchText(retry).errors).toHaveLength(1);
+  });
+
   it("服务器失败项和本地坏记录一起保留，成功项不会重新提交", async () => {
     const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({
       created: [{ index: 0, id: "new", tos: { level: "green", reason: "", basis: "" } }],
@@ -230,5 +260,75 @@ describe("BatchImportDialog", () => {
     }
     finish({ created: [], skipped: [], failed: [] });
     await waitFor(() => expect(screen.getByTestId("batch-text")).not.toBeDisabled());
+  });
+
+  it("读取文件期间不能提交旧文本，后选文件优先于先选文件的迟到结果", async () => {
+    const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({ created: [], skipped: [], failed: [] });
+    let finishFirst!: (text: string) => void;
+    let finishSecond!: (text: string) => void;
+    const first = new File([""], "first.json");
+    const second = new File([""], "second.json");
+    Object.defineProperty(first, "text", { value: () => new Promise<string>((resolve) => { finishFirst = resolve; }) });
+    Object.defineProperty(second, "text", { value: () => new Promise<string>((resolve) => { finishSecond = resolve; }) });
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: JSON.stringify([entry]) } });
+    const submit = screen.getByTestId("batch-submit");
+    act(() => {
+      fireEvent.change(screen.getByTestId("batch-file"), { target: { files: [first] } });
+      submit.click();
+    });
+    expect(spy).not.toHaveBeenCalled();
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveTextContent("读取文件中");
+    expect(screen.getByTestId("batch-text")).toBeDisabled();
+    fireEvent.change(screen.getByTestId("batch-file"), { target: { files: [second] } });
+    const latest = { ...entry, nickname: "second", credential: { token: "second-token" } };
+    await act(async () => { finishSecond(JSON.stringify([latest])); });
+    expect(screen.getByTestId("batch-text")).toHaveValue(JSON.stringify([latest]));
+    expect(submit).not.toBeDisabled();
+    await act(async () => { finishFirst(JSON.stringify([entry])); });
+    expect(screen.getByTestId("batch-text")).toHaveValue(JSON.stringify([latest]));
+    await userEvent.click(submit);
+    expect(spy).toHaveBeenCalledExactlyOnceWith([latest]);
+  });
+
+  it("过期文件读取失败不覆盖新文件，当前文件读取失败后可以继续编辑", async () => {
+    let rejectFirst!: (error: Error) => void;
+    const first = new File([""], "first.json");
+    const second = new File([""], "second.json");
+    Object.defineProperty(first, "text", { value: () => new Promise<string>((_resolve, reject) => { rejectFirst = reject; }) });
+    Object.defineProperty(second, "text", { value: async () => JSON.stringify([entry]) });
+    renderDialog();
+    fireEvent.change(screen.getByTestId("batch-file"), { target: { files: [first] } });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("batch-file"), { target: { files: [second] } });
+    });
+    await act(async () => { rejectFirst(new Error("old read failed")); });
+    expect(screen.queryByTestId("batch-error")).not.toBeInTheDocument();
+    expect(screen.getByTestId("batch-text")).toHaveValue(JSON.stringify([entry]));
+    const broken = new File([""], "broken.json");
+    Object.defineProperty(broken, "text", { value: async () => { throw new Error("read failed"); } });
+    await act(async () => { fireEvent.change(screen.getByTestId("batch-file"), { target: { files: [broken] } }); });
+    expect(screen.getByTestId("batch-error")).toHaveTextContent("读取文件失败");
+    expect(screen.getByTestId("batch-text")).not.toBeDisabled();
+  });
+
+  it("导入锁覆盖同一帧重复点击和 Escape 关闭，完成后恢复关闭", async () => {
+    let finish!: (result: { created: []; skipped: []; failed: [] }) => void;
+    const spy = vi.spyOn(api, "batchImportCredentials").mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const { onClose } = renderDialog();
+    fireEvent.change(screen.getByTestId("batch-text"), { target: { value: JSON.stringify([entry]) } });
+    act(() => {
+      const button = screen.getByTestId("batch-submit");
+      button.click();
+      button.click();
+    });
+    expect(spy).toHaveBeenCalledTimes(1);
+    fireEvent.keyDown(screen.getByTestId("batch-import-dialog"), { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("batch-file")).toBeDisabled();
+    await act(async () => { finish({ created: [], skipped: [], failed: [] }); });
+    fireEvent.keyDown(screen.getByTestId("batch-import-dialog"), { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

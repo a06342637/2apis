@@ -5,10 +5,13 @@ from __future__ import annotations
 import asyncio
 from functools import partial
 
+import pytest
+
 from src.api import account_models as mod
 from src.api.account_models import account_model_tables
 from src.api.models import _refresh_provider, serve_models
 from src.provider.base import Model, Quota
+from src.provider.miora.subscription import subscription_state
 from tests.api.test_miora_integration import import_account, token, wait_for_probes
 from tests.api.test_miora_integration import miora_app as _miora_fixture
 
@@ -45,6 +48,37 @@ def test_import_probe_exposes_anonymous_subscription_and_old_balance_updates_pre
     assert stored["access_token"] not in str(row) and stored["refresh_token"] not in str(row)
     app.state.services.credentials.save_quota(cid, Quota(remaining=6, total=10, probed_at=101))
     assert app.state.services.credentials.quota_detail(cid) == detail
+
+
+@pytest.mark.parametrize("subscription,status,vip,expiry", [
+    ({"tierCode": "pro", "status": "active", "expireAt": "2030-01-01T00:00:00Z"},
+     "active", True, 1_893_456_000),
+    ({"tierCode": "standard", "status": "expired", "expireAt": "2020-01-01T00:00:00Z"},
+     "expired", False, 1_577_836_800),
+    ({"tierCode": "pro", "status": "active", "expireAt": "not-a-date"},
+     "unknown", None, None),
+    ({"tierCode": "free", "status": "active", "expireAt": ""}, "free", False, None),
+])
+def test_membership_expiry_projection_supports_countdown_without_inventing_dates(
+    miora_app, subscription, status, vip, expiry
+):
+    app, client, network = miora_app
+    normalized = subscription_state(subscription, now=1_800_000_000)
+
+    async def probe(_credential):
+        return Quota(remaining=7, total=10, probed_at=1_800_000_000,
+                     detail={"miora_subscription": normalized})
+
+    network.probe_quota = probe
+    cid = import_account(client, "expiry-account")["id"]
+    wait_for_probes(app, client)
+    row = next(row for row in client.get("/api/credentials").json()["credentials"]
+               if row["id"] == cid)
+    public = row["quota_detail"]["miora_subscription"]
+    assert public == normalized
+    assert public["status"] == status and public["vip"] is vip
+    assert public["expires_at"] == expiry
+    assert set(public) == {"tier", "status", "vip", "expires_at", "probed_at"}
 
 
 def test_subscription_changes_and_expiry_refresh_scope_but_probe_time_does_not(

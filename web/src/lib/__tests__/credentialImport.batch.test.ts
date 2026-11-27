@@ -9,6 +9,71 @@ function jwt(uid: string) {
 }
 
 describe("批量凭证边界和邮箱昵称", () => {
+  it("邮箱紧贴JSON对象仍作为独立备注，支持漂亮JSON并覆盖原昵称", () => {
+    const parsed = parseBatchCredentialInput([
+      "one@example.com" + JSON.stringify({ authToken: jwt("one"), refreshToken: "r1", nickname: "old" }, null, 2),
+      "two@example.com" + JSON.stringify({ provider: "miora", nickname: "another-old", tags: ["tag"],
+        credential: { authToken: jwt("two"), refreshToken: "r2" } }),
+    ].join("\r\n"));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.entries).toMatchObject([
+      { nickname: "one@example.com", credential: { authToken: jwt("one"), refreshToken: "r1" } },
+      { nickname: "two@example.com", tags: ["tag"], credential: { authToken: jwt("two"), refreshToken: "r2" } },
+    ]);
+  });
+
+  it("多行邮箱紧贴花括号Cookie，每个账号保留自己的认证票和刷新票", () => {
+    const parsed = parseBatchCredentialInput([
+      `one@example.com{authToken=${jwt("one")}; refreshToken=r1}`,
+      `two@example.com{Cookie: authToken="${jwt("two")}"; refreshToken='r2';}`,
+    ].join("\r\n"), "codebuddy");
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.entries).toMatchObject([
+      { provider: "miora", nickname: "one@example.com", credential: { authToken: jwt("one"), refreshToken: "r1" } },
+      { provider: "miora", nickname: "two@example.com", credential: { authToken: jwt("two"), refreshToken: "r2" } },
+    ]);
+  });
+
+  it("包裹Cookie的坏行、票据冲突和相邻好行彼此隔离，失败回填仍不借票", () => {
+    const parsed = parseBatchCredentialInput([
+      "missing@example.com{refreshToken=only-refresh}",
+      "conflict@example.com{authToken=one; authToken=two; refreshToken=conflicting-refresh}",
+      `good@example.com{authToken=${jwt("good")}; refreshToken=good-refresh}`,
+      "bad-json@example.com{\"authToken\":\"broken\",",
+      `next@example.com{"authToken":"${jwt("next")}","refreshToken":"next-refresh"}`,
+    ].join("\n"));
+    expect(parsed.errors.map(error => error.line)).toEqual([1, 2, 4]);
+    expect(parsed.entries).toMatchObject([
+      { nickname: "good@example.com", credential: { authToken: jwt("good"), refreshToken: "good-refresh" } },
+      { nickname: "next@example.com", credential: { authToken: jwt("next"), refreshToken: "next-refresh" } },
+    ]);
+    expect(parsed.unparsed[0]).toContain("missing@example.com");
+    expect(parsed.unparsed[1]).toContain("conflict@example.com");
+    expect(parseBatchCredentialInput(parsed.unparsed.join("\n")).entries).toEqual([]);
+  });
+
+  it("包裹Cookie必须独立成行，拆行或尾随内容不会被拼成其它账号", () => {
+    const parsed = parseBatchCredentialInput([
+      "split@example.com{authToken=split-account;",
+      "refreshToken=another-account-refresh}",
+      "suffix@example.com{authToken=account; refreshToken=refresh}unexpected-opaque-account",
+      "valid@example.com{authToken=valid-account; refreshToken=valid-refresh}",
+    ].join("\n"));
+    expect(parsed.errors.map(error => error.line)).toEqual([1, 2, 3]);
+    expect(parsed.entries).toMatchObject([
+      { nickname: "valid@example.com", credential: { authToken: "valid-account", refreshToken: "valid-refresh" } },
+    ]);
+  });
+
+  it("重复行保持逐行索引供服务端跳过，同值Cookie别名允许，不同刷新票拒绝", () => {
+    const line = "same@example.com{authToken=account; authToken=account; refreshToken=refresh}";
+    const parsed = parseBatchCredentialInput(line + "\n" + line);
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.entries).toHaveLength(2);
+    expect(parsed.entries[0]).toEqual(parsed.entries[1]);
+    expect(parseBatchCredentialInput("bad@example.com{authToken=account; refreshToken=r1; refreshToken=r2}").entries).toEqual([]);
+  });
+
   it("多个漂亮JSON和相邻JSON对象分别识别，字符串里的花括号不截断", () => {
     const first = { authToken: jwt("one"), refreshToken: "r1", nickname: 'note { "} \\' };
     const second = { authToken: jwt("two"), refreshToken: "r2" };

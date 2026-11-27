@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from ..compat.openai.request import parse_chat_request
 from ..key_quota import Lease, QuotaExceeded, load_key_quota
@@ -27,7 +27,7 @@ from .endpoints import (
     quota_exceeded_response,
 )
 from .models import serve_display_models, serve_models
-from .streaming import with_keepalive
+from .streaming import respond_with_stream_start, with_keepalive
 
 
 async def _release_when_done(frames, lease: Lease):
@@ -97,11 +97,11 @@ def create_router(services: Services) -> APIRouter:
             except Exception:
                 lease.release()      # 400 不该占着并发名额
                 raise
-            return StreamingResponse(
+            return await respond_with_stream_start(
                 with_keepalive(_release_when_done(
                     executor.stream_guarded(chat_request,
-                                            username=principal.username), lease)),
-                media_type="text/event-stream")
+                                            username=principal.username), lease)), {},
+                media_type="text/event-stream", release=lease.release)
         try:
             completion = await executor.complete(chat_request,
                                                  username=principal.username,

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import httpx
+from anyio import CancelScope
 from starlette.requests import ClientDisconnect
 
 from ..auth.access import model_allowed
@@ -50,6 +51,7 @@ from ..provider.base import (
 from ..provider.naming import normalize_model_key
 from ..request_context import credential_scope, get_api_key_id, set_credential_id
 from . import privacy
+from .affinity import resolve_explicit
 from .context_stream import ContextBoundIterator
 from .continuation import ContinuationStream
 from .model_resolver import (
@@ -314,10 +316,14 @@ class _TimedReader:
     async def aclose(self) -> None:
         """关闭前清掉在途任务（避免 "Task was destroyed" 告警）。"""
         pending, self._pending = self._pending, None
-        if pending is not None and not pending.done():
-            pending.cancel()
-            await asyncio.gather(pending, return_exceptions=True)
-        await self._iterator.aclose()
+        with CancelScope(shield=True):
+            try:
+                if pending is not None:
+                    if not pending.done():
+                        pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+            finally:
+                await self._iterator.aclose()
 
 
 @dataclass(slots=True)
@@ -436,6 +442,7 @@ class _LocalPenalty:
     cooling_until: int | None = None                           # 账号级冷却截止（epoch）
     model_cooling: dict[str, int] = field(default_factory=dict)  # 上游模型名 → 截止
     disabled: bool = False
+    cooling_kind: str = ""
 
     def with_cooling(self, until: int) -> _LocalPenalty:
         """追加一条账号级冷却（渠道级暂停用）：账号级冷却在库里会清空模型级条目。"""
@@ -468,6 +475,7 @@ class _CandidateSnapshot:
     rows: tuple[Candidate, ...]
     bound: bool = False
     upstream_models: dict[str, str] = field(default_factory=dict)
+    credit_rates: dict[str, float | None] = field(default_factory=dict)
     excluded: dict[str, _LocalPenalty] = field(default_factory=dict)
 
     def all_rows(self, providers: Iterable[str] | None = None, *,
@@ -488,14 +496,16 @@ class _CandidateSnapshot:
     def penalty(self, credential_id: str) -> _LocalPenalty | None:
         return self.excluded.get(credential_id)
 
-    def penalized(self, credential_id: str, scope: str | None, now: int) -> bool:
+    def penalized(self, credential_id: str, scope: str | None, now: int, *,
+                  ignore_credit: bool = False) -> bool:
         """本请求是否已把该凭证在该模型作用域上排除（本地写库的镜像）。"""
         penalty = self.excluded.get(credential_id)
         if penalty is None:
             return False
         if penalty.disabled:
             return True
-        if penalty.cooling_until is not None and penalty.cooling_until > now:
+        if (penalty.cooling_until is not None and penalty.cooling_until > now
+                and not (ignore_credit and penalty.cooling_kind == ErrKind.CREDIT.value)):
             return True
         if scope:
             until = penalty.model_cooling.get(scope)
@@ -524,6 +534,7 @@ class _CandidateSnapshot:
         self.excluded[credential_id] = _LocalPenalty(
             cooling_until=_later(prior.cooling_until, outcome.cooling_until),
             model_cooling=merged,
+            cooling_kind=outcome.cooling_kind or prior.cooling_kind,
             disabled=prior.disabled or outcome.disabled)
 
     def exclude_provider(self, provider: str, *, until: int) -> None:
@@ -598,6 +609,7 @@ class Executor:
         """
         rows = tuple(self._deps.credentials.candidates(model=model))
         raw_models: dict[str, str] = {}
+        credit_rates: dict[str, float | None] = {}
         if credential_ids:
             rows = tuple(row for row in rows if row.credential_id in credential_ids)
             if model is not None and any(not model_allowed(model, spec)
@@ -618,8 +630,10 @@ class Executor:
                         match = matching[0] if len(matching) == 1 else None
                     if match is not None:
                         raw_models[row.credential_id] = match.id
+                        credit_rates[row.credential_id] = match.credit_rate
                 rows = tuple(row for row in rows if row.credential_id in raw_models)
-        return _CandidateSnapshot(rows=rows, bound=bool(credential_ids), upstream_models=raw_models)
+        return _CandidateSnapshot(rows=rows, bound=bool(credential_ids),
+                                  upstream_models=raw_models, credit_rates=credit_rates)
 
     def _scope(self) -> _CandidateSnapshot:
         """当前请求的快照；不在请求作用域里（自检 / 直接单测）时现取一份。
@@ -691,7 +705,7 @@ class Executor:
         now = int(time.time())
         scope = self._scope()
         remaining: int | None = None
-        for candidate in scope.all_rows(registered):
+        for candidate in self._rated_candidates(scope.all_rows(registered), target, scope):
             penalty = scope.penalty(candidate.credential_id)
             if candidate.disabled or not candidate.enabled:
                 continue
@@ -785,7 +799,7 @@ class Executor:
         def bump(kind: str) -> None:
             counts[kind] = counts.get(kind, 0) + 1
 
-        for candidate in scope.all_rows(registered):
+        for candidate in self._rated_candidates(scope.all_rows(registered), target, scope):
             penalty = scope.penalty(candidate.credential_id)
             account_until = self._account_deadline(candidate, penalty)
             model_until = self._model_deadline(candidate, penalty, target)
@@ -797,6 +811,8 @@ class Executor:
                 bump("cooling")
             elif model_until is not None and model_until > now:
                 bump("model_cooled")
+            elif self._miora_quota_blocked(candidate):
+                bump("quota_exhausted")
             elif limits is not None and limits.blocked(candidate, target.model):
                 bump("limits")
             elif inflight is not None and inflight.blocked(candidate.credential_id):
@@ -810,6 +826,9 @@ class Executor:
     def _account_deadline(self, candidate: Candidate,
                           penalty: _LocalPenalty | None) -> int | None:
         """账号级冷却截止：快照行与本请求本地惩罚取较晚者。"""
+        if (penalty is not None and self._miora_credit_exempt(candidate)
+                and penalty.cooling_kind == ErrKind.CREDIT.value):
+            penalty = None
         return _later(candidate.cooling_until,
                       None if penalty is None else penalty.cooling_until)
 
@@ -1240,8 +1259,6 @@ class Executor:
         chain = self._fallback_chain(target, account_bound=bool(credential_ids))
         state = _StreamState(translator=translator or StreamTranslator(target.model),
                              started=time.monotonic(), username=username)
-        if self._deps.affinity is not None:
-            state.affinity_id = self._deps.affinity.pin_for(request.raw, username)
         exhausted: _ModelExhausted | None = None
         for index, attempt in enumerate(chain):
             if index:
@@ -1253,6 +1270,7 @@ class Executor:
             with self._request_scope(attempt.model, credential_ids=credential_ids,
                                      credential_models=credential_models,
                                      credential_model_policy=credential_model_policy):
+                state.affinity_id = self._affinity_for(request, attempt, username)
                 if translator is None:
                     # 每链项自成一路出口（默认 chat 出口）：模型名随链项走。
                     # 注入的 translator（responses / anthropic）由调用方持有，
@@ -2050,8 +2068,7 @@ class Executor:
         # 首事件时刻：上游响应的第一个事件（TTFE，非流式的首字延迟）；跨重试只记最早一次
         first_event_at: float | None = None
         # 会话粘性：对话上一轮用过哪个凭证，本轮优先复用
-        affinity_id = (self._deps.affinity.pin_for(request.raw, username)
-                       if self._deps.affinity is not None else None)
+        affinity_id = self._affinity_for(request, target, username)
         # 出站剥离思考内容：与 _stream_loop 同口径，每次请求现读（热更）。
         # 在**聚合前**丢弃 reasoning 事件，`aggregate()` 便不会写出
         # `reasoning_content`；三个出口共用 complete 路径，故一致生效。
@@ -2119,6 +2136,10 @@ class Executor:
                 credential_id).__aiter__()
             # 与 _stream_loop 同理：在途登记 + finally 释放（含超时/断开）
             self._lease(credential_id)
+            reader = _TimedReader(iterator)
+            read_state = _StreamState(translator=StreamTranslator(target.model),
+                                      started=started, username=username)
+            progressed = False
             queued_wait: float | None = None
             try:
                 # 非流式没有 SSE 的断开信号：进聚合前先探一次，避免客户端
@@ -2129,7 +2150,11 @@ class Executor:
                 async with (asyncio.timeout(self._deps.complete_timeout_seconds)
                             if self._deps.complete_timeout_seconds > 0
                             else contextlib.nullcontext()):
-                    async for event in iterator:
+                    while True:
+                        event = await self._next_event(reader, read_state, progressed)
+                        if event is None:
+                            break
+                        progressed = progressed or _is_data_event(event)
                         if first_event_at is None:
                             first_event_at = time.monotonic()
                         if hide_reasoning and event.kind is EventKind.REASONING:
@@ -2178,6 +2203,9 @@ class Executor:
                         # 取消信号，不探就会把整个上游调用跑完再发现没人收。
                         if is_disconnected is not None and await is_disconnected():
                             raise ClientDisconnect()
+                        if event.kind is EventKind.ERROR:
+                            # 错误已经终结本轮；不能继续等上游EOF，把失败请求占号到超时。
+                            break
             except ContentRejected:
                 # 已记账；直接交给上层（不进入冷却/换号/回退）
                 raise
@@ -2384,8 +2412,10 @@ class Executor:
                         output_tokens=usage.get("completion_tokens"))
                     return result
             finally:
-                await aclose_stream(iterator)
-                self._release(credential_id)
+                try:
+                    await reader.aclose()
+                finally:
+                    self._release(credential_id)
             if queued_wait is not None:
                 # 租约与上游流都释放**之后**才等（同 _stream_loop）
                 await asyncio.sleep(queued_wait)
@@ -2412,6 +2442,20 @@ class Executor:
                     retry_after=self._recovery_seconds(target))
 
     # -------------------------------------------------------------- 内部
+
+    def _affinity_for(self, request: ChatRequest, target: ModelTarget,
+                      username: str) -> str | None:
+        """Miora 首轮相同提示不等于同一会话；显式身份/真实历史才沿用亲和。"""
+        affinity = self._deps.affinity
+        if affinity is None:
+            return None
+        if (resolve_explicit(request.raw) is None
+                and not any(message.get("role") in {"assistant", "tool"}
+                            for message in request.messages)):
+            rows = self._scope().all_rows(self._registered(target))
+            if rows and all(candidate.provider == "miora" for candidate in rows):
+                return None
+        return affinity.pin_for(request.raw, username)
 
     def _remember(self, request: ChatRequest, username: str, credential_id: str,
                   *, keep_existing: bool = False) -> None:
@@ -2533,11 +2577,13 @@ class Executor:
         scope = self._scope()
         remaining: int | None = None
         retry_id: str | None = None
-        for candidate in scope.all_rows(registered):
+        for candidate in self._rated_candidates(scope.all_rows(registered), target, scope):
             penalty = scope.penalty(candidate.credential_id)
             if candidate.disabled or not candidate.enabled:
                 continue
             if penalty is not None and penalty.disabled:
+                continue
+            if self._miora_quota_blocked(candidate):
                 continue
             if (self._deps.limits is not None
                     and self._deps.limits.blocked(candidate, target.model)):
@@ -2810,11 +2856,22 @@ class Executor:
         guard = self._deps.half_open
         while usable:
             scope = _candidate_scope.get()
-            if scope is not None and scope.bound:
-                credential_id = self._deps.scheduler.select(usable, tried, now, round_robin=True)
+            miora_pool = all(candidate.provider == "miora" for candidate in usable)
+            # 保留完整候选池：最短等待账号若被半开探测挡住，下轮仍要尝试较慢的健康号。
+            ready = self._miora_ready(usable, tried, affinity_id) if miora_pool else usable
+            if miora_pool and any(c.pinned and c.credential_id not in tried for c in ready):
+                credential_id = self._deps.scheduler.select(ready, tried, now)
+            elif scope is not None and scope.bound:
+                # Miora 的工具上下文按账号隔离；合法会话亲和不能被集合轮询打散。
+                credential_id = (self._sticky(ready, tried, affinity_id) if miora_pool else None)
+                credential_id = credential_id or self._deps.scheduler.select(
+                    ready, tried, now, round_robin=True)
             else:
-                credential_id = (self._sticky(usable, tried, affinity_id)
-                                 or self._deps.scheduler.select(usable, tried, now))
+                credential_id = (self._sticky(ready, tried, affinity_id)
+                                 or (self._deps.scheduler.select(
+                                         ready, tried, now, round_robin=True)
+                                     if miora_pool
+                                     else self._deps.scheduler.select(ready, tried, now)))
             if credential_id is None:
                 return None
             if guard is None:
@@ -2832,6 +2889,27 @@ class Executor:
                       if c.credential_id != credential_id]
         return None
 
+    def _miora_ready(self, usable: list[Candidate], tried: set[str],
+                     affinity_id: str | None) -> list[Candidate]:
+        """无会话约束时优先选本地准入等待最短的 Miora 账号。"""
+        eligible = [candidate for candidate in usable if candidate.credential_id not in tried]
+        if (not eligible or any(candidate.pinned for candidate in eligible)
+                or self._sticky(usable, tried, affinity_id)):
+            return usable
+        delay_for = getattr(self._deps.providers.get("miora"), "queue_delay", None)
+        if delay_for is None:
+            return usable
+        delays: dict[str, float | None] = {}
+        for candidate in eligible:
+            data = self._safe_credential_data(candidate.credential_id)
+            delays[candidate.credential_id] = delay_for(data) if data is not None else None
+        shortest = min((delay for delay in delays.values() if delay is not None), default=None)
+        if shortest is None:
+            # 全池在途已满：沿用负载排序，有界等待，不把忙碌账号判为失效。
+            return usable
+        return [candidate for candidate in eligible
+                if delays[candidate.credential_id] == shortest]
+
     def _half_open_key(self, candidate, target: ModelTarget,
                        now: int) -> tuple[str, str] | None:
         """该候选是否处在「冷却已过期」的半开窗口；是则返回探测键。
@@ -2848,6 +2926,35 @@ class Executor:
         if model_until is not None and model_until <= now:
             return (credential_id, scope)
         return None
+
+    def _rated_candidates(self, candidates: list, target: ModelTarget,
+                          scope: _CandidateSnapshot) -> list[Candidate]:
+        """注入当前模型倍率；Miora 账号目录优先，不能借池的免费模型放行付费账号。"""
+        rates = self._model_rates(target)
+        rated: list[Candidate] = []
+        for candidate in candidates:
+            if candidate.provider == "miora" and candidate.credential_id in scope.credit_rates:
+                rate = self._observed_paid_rate(
+                    candidate.provider, target.model, scope.credit_rates[candidate.credential_id])
+                candidate = replace(candidate, credit_rate=rate)
+            elif candidate.provider in rates:
+                candidate = replace(candidate, credit_rate=rates[candidate.provider])
+            if (self._miora_credit_exempt(candidate)
+                    and candidate.cooling_kind == ErrKind.CREDIT.value):
+                candidate = replace(candidate, cooling_until=None)
+            rated.append(candidate)
+        return rated
+
+    @staticmethod
+    def _miora_credit_exempt(candidate: Candidate) -> bool:
+        return candidate.provider == "miora" and candidate.credit_rate == 0
+
+    @staticmethod
+    def _miora_quota_blocked(candidate: Candidate) -> bool:
+        """余额/已确认耗尽挡付费模型；未探明额度与确认 x0 都仍可尝试。"""
+        return (candidate.provider == "miora" and candidate.credit_rate != 0
+                and (candidate.quota_remaining <= 0 if candidate.quota_remaining is not None
+                     else candidate.health == EXHAUSTED))
 
     def _selectable(self, candidates: list, target: ModelTarget, now: int,
                     scope: _CandidateSnapshot | None = None) -> list:
@@ -2870,28 +2977,23 @@ class Executor:
         快照行里的 `cooling_until` 是请求开始时的值，不扣的话本请求刚打冷却的
         号会在同一请求里被再选一次（旧实现靠每次重读库来避免这点）。
         """
-        rates = self._model_rates(target)
         guard = self._deps.limits
         inflight = self._deps.inflight
         scope = self._scope() if scope is None else scope
         selected = [
-            c for c in candidates
+            c for c in self._rated_candidates(candidates, target, scope)
             if c.is_selectable(now, self._model_scope(c.provider, target.model, c.credential_id))
             and not scope.penalized(c.credential_id,
                                     self._model_scope(c.provider, target.model, c.credential_id),
-                                    now)
+                                    now, ignore_credit=self._miora_credit_exempt(c))
+            and not self._miora_quota_blocked(c)
             and (guard is None or not guard.blocked(c, target.model))
             and (inflight is None or not inflight.blocked(c.credential_id))
         ]
         if inflight is not None:
             selected = [replace(c, inflight=inflight.count(c.credential_id))
                         for c in selected]
-        if not rates:
-            return selected
-        return [
-            replace(c, credit_rate=rates[c.provider]) if c.provider in rates else c
-            for c in selected
-        ]
+        return selected
 
     def _lease(self, credential_id: str) -> None:
         """请求开始：登记一个在途租约（未装配护栏则跳过）。"""

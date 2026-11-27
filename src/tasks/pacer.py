@@ -262,6 +262,30 @@ class Pacer:
         self._inflight[bucket] = 1
         return remaining
 
+    def minimum_wait(self, key: str | None = None) -> float | None:
+        """只读当前桶的最短等待；None 表示在途已满，不能预估结束时间。
+
+        调度先选能启动的账号，避免在一个已满窗口上排队而闲置其他账号。
+        这里只读状态、不预留配额；真正准入仍由 wait_turn 持锁核验。
+        """
+        now = self._now()
+        if not self._allow_concurrent:
+            started = self._last_started
+            return max(0.0, started + self.min_seconds - now) if started is not None else 0.0
+        bucket = key or ""
+        inflight = self._inflight.get(bucket, 0)
+        if self.max_concurrency > 0 and inflight >= self.max_concurrency:
+            return None
+        remaining = 0.0
+        if not inflight and bucket in self._bucket_started:
+            remaining = max(0.0, self._bucket_started[bucket] + self.min_seconds - now)
+        if self._windowed():
+            starts = [start for start in self._starts.get(bucket, [])
+                      if start + self.window_seconds > now]
+            if len(starts) >= self.max_requests_per_window:
+                remaining = max(remaining, starts[0] + self.window_seconds - now)
+        return remaining
+
     async def wait_turn(self, key: str | None = None) -> None:
         """取得一个节流 turn；只有即将真正调用上游时才应调用。
 

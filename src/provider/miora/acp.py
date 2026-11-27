@@ -64,8 +64,11 @@ class AcpConnection:
     """单请求连接；关闭只释放连接，不删除项目、运行时或会话。"""
 
     def __init__(self, client: httpx.AsyncClient, endpoint: str, token: str,
-                 *, timeout: float = 300) -> None:
+                 *, timeout: float = 300, post_client: httpx.AsyncClient | None = None,
+                 control_client: httpx.AsyncClient | None = None) -> None:
         self.client = client
+        self.post_client = post_client if post_client is not None else client
+        self.control_client = control_client if control_client is not None else self.post_client
         self.endpoint = endpoint
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout = timeout
@@ -114,7 +117,7 @@ class AcpConnection:
                 await self._context.__aexit__(exc_type, exc, traceback)
             if "Acp-Connection-Id" in self.headers:
                 with suppress(httpx.HTTPError):
-                    await self.client.delete(self.endpoint, headers=self.headers, timeout=5)
+                    await self.control_client.delete(self.endpoint, headers=self.headers, timeout=5)
 
     async def _read(self, response: httpx.Response) -> None:
         try:
@@ -132,8 +135,9 @@ class AcpConnection:
 
     async def _post(self, request: dict) -> None:
         expects_result = "id" in request and "method" in request
+        client = self.post_client if expects_result else self.control_client
         try:
-            async with self.client.stream(
+            async with client.stream(
                     "POST", self.endpoint, headers={
                         **self.headers, "Accept": "application/json, text/event-stream"},
                     json=request) as response:
@@ -225,6 +229,13 @@ class AcpConnection:
                                 if (isinstance(candidate, dict)
                                         and candidate.get("sessionId") == params.get("sessionId")):
                                     end_params = candidate
+                                    reason = candidate.get("stopReason")
+                                    if reason is not None and reason not in (
+                                        "end_turn", "stop", "max_tokens", "length"
+                                    ):
+                                        # GET 明确宣告失败时立即结束；不能等待或借用
+                                        # POST 的成功 result 将本轮部分回答收成成功。
+                                        raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
                             yield frame
                     # GET endTurn 是内容已全部送达的栅栏；POST result 先到也不丢尾帧。
                     if result is not None and end_params is not None:

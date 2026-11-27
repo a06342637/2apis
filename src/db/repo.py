@@ -959,7 +959,8 @@ class CredentialRepository:
         额度探测等后台任务）看到的是全量候选，行为与补列前一致。
         """
         rows = self._db.connect().execute(
-            "SELECT id, provider, health, cooling_until, disabled, enabled, err_count, pinned, "
+            "SELECT id, provider, health, cooling_until, cooling_kind, disabled, enabled, "
+            "err_count, pinned, "
             "quota_remaining, quota_cycle_end, quota_expiry_ladder, routing_weight, "
             "allowed_models "
             "FROM credentials").fetchall()
@@ -981,6 +982,7 @@ class CredentialRepository:
             Candidate(
                 credential_id=row["id"], provider=row["provider"], health=row["health"],
                 cooling_until=row["cooling_until"], disabled=bool(row["disabled"]),
+                cooling_kind=row["cooling_kind"],
                 enabled=bool(row["enabled"]), err_count=row["err_count"],
                 pinned=bool(row["pinned"]), cycle_end=row["quota_cycle_end"],
                 quota_remaining=row["quota_remaining"],

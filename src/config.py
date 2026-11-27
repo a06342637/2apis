@@ -412,11 +412,12 @@ class Settings(BaseSettings):
     # WPS 灵犀聊天最小间隔：真实账号渠道，上游按 run 计费且并发未取证，默认 0；
     # 需要给同一账号限速时调大（run 缓存与单飞已把重复计费压在客户端）。
     lingxi_chat_min_interval: float = 0
-    # Miora 保守的本地限速默认值；不代表上游公开的硬门槛。各账号互不排队。
+    # Miora 运行时设置共享，单账号串行、不同账号并行。默认不额外限制每分钟次数；
+    # 需要限制时显式配置窗口次数，真实上游429仍按故障策略冷却与换号。
     miora_chat_min_interval: float = 5
     miora_max_concurrency: int = 1
     miora_request_window_seconds: float = 60
-    miora_max_requests_per_window: int = 3
+    miora_max_requests_per_window: int = 0
     # 小浣熊每账号并发上限：实测 5 并发放行、第 6 个 429。取 2 留余量，避免
     # 与用户其它客户端抢同一账号的并发额度。0 关闭上限。
     raccoon_max_concurrency: int = 2
@@ -526,13 +527,13 @@ class Settings(BaseSettings):
     upstream_complete_timeout_seconds: int = 600
     # 流式首事件超时（秒）：上游接了连接却长时间不吐第一个**数据帧**时，
     # 在出帧前换号重试（此时切换安全，客户端还没收到任何内容）。注释帧/心跳
-    # 不重置该计时。默认 0 = 关闭：实测慢上下文首字可达 40–71s，默认值会误杀
-    # 正常请求，需在管理台显式打开（推荐 60）。可热更。
-    stream_first_event_timeout_seconds: float = 0
+    # 不重置该计时。默认 120s，给实测 40–71s 的慢首字留余量，避免永久占号。
+    # 0 = 显式关闭。流式和非流式共用，可热更。
+    stream_first_event_timeout_seconds: float = 120
     # 流式空闲超时（秒）：**已出帧**后上游长时间不再吐数据，只能以错误帧收尾
-    # （半截输出不可回滚，换号会把两个账号的内容拼给客户端）。默认 0 = 关闭，
-    # 推荐 300。可热更。
-    stream_idle_timeout_seconds: float = 0
+    # （半截输出不可回滚，换号会把两个账号的内容拼给客户端）。默认 300s；
+    # 非流式尚未提交正文，可安全重试。0 = 显式关闭，可热更。
+    stream_idle_timeout_seconds: float = 300
     # 短冷却「等待续上」（秒）：全池都在短冷却、没有立即可用候选时，若最短的
     # 剩余冷却不超过该值，则等待后重取一次（而不是直接 503）。等待期间不占
     # 在途租约，避免把并发请求堆成连接洪峰。默认 60：coding agent 收到 503

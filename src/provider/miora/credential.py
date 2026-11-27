@@ -43,10 +43,18 @@ def token_from_input(value: str) -> str:
         text = text[7:].strip()
     if "=" not in text:
         return text
+    return _cookie_value(text, "authToken")
+
+
+def _cookie_value(value: str, field: str) -> str:
+    text = value.strip().strip("\"'").strip()
+    if text.lower().startswith("cookie:"):
+        text = text[7:].strip()
     for segment in text.split(";"):
         name, separator, token = segment.strip().partition("=")
-        if separator and name == "authToken" and token.strip():
-            return token.strip()
+        token = token.strip().strip("\"'").strip()
+        if separator and name.lower() == field.lower() and token:
+            return token
     return ""
 
 
@@ -62,14 +70,18 @@ class MioraCredential:
     def from_dict(cls, raw: Any) -> MioraCredential:
         if not isinstance(raw, dict):
             return cls(access_token="")
-        token = token_from_input(
-            text_field(raw, "access_token", "authToken", "accessToken", "token", "cookie", "raw")
+        source = text_field(
+            raw, "access_token", "authToken", "accessToken", "token", "cookie", "raw"
         )
+        token = token_from_input(source)
         # 公共时间解析已将无效元数据归一为未知0；新JWT的exp优先于旧记录的expires_at。
         expiry = jwt_expiry(token) or credential_expiry({**raw, "access_token": token})
         return cls(
             access_token=token,
-            refresh_token=text_field(raw, "refresh_token", "refreshToken"),
+            # 单条 Cookie 导入也要保留同一份 Cookie 的刷新票；不从未选中的
+            # 其它输入拼账号，避免把另一个账号的 refreshToken 混进来。
+            refresh_token=(text_field(raw, "refresh_token", "refreshToken")
+                           or _cookie_value(source, "refreshToken")),
             uid=jwt_subject(token) or text_field(raw, "uid", "user_id", "userId"),
             expires_at=expiry,
             project_id=text_field(raw, "project_id", "projectId", "workflowId"),

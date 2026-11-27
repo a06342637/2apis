@@ -315,6 +315,48 @@ async def test_failed_get_end_turn_after_post_eof_is_rejected_without_timer_race
                 "session/prompt", {"sessionId": "s"})]
 
 
+@pytest.mark.parametrize("reason", ["error", "cancelled", "canceled"])
+@pytest.mark.parametrize("result_first", [False, True])
+async def test_failed_get_end_turn_cannot_be_hidden_by_successful_post_result(
+    monkeypatch, reason, result_first
+):
+    async with httpx.AsyncClient() as client:
+        connection = AcpConnection(client, URL, "synthetic")
+        terminal = {"jsonrpc": "2.0", "id": 1, "result": {"stopReason": "end_turn"}}
+        end = {"jsonrpc": "2.0", "method": "session/endTurn",
+               "params": {"sessionId": "s", "stopReason": reason}}
+
+        async def post(_request):
+            connection._queue.put_nowait({"jsonrpc": "2.0", "method": "session/update",
+                                         "params": {"value": "partial answer"}})
+            for frame in ([terminal, end] if result_first else [end, terminal]):
+                connection._queue.put_nowait(frame)
+
+        monkeypatch.setattr(connection, "_post", post)
+        seen = []
+        with pytest.raises(UpstreamProtocolViolation, match="未成功结束"):
+            async for frame in connection.rpc_frames("session/prompt", {"sessionId": "s"}):
+                seen.append(frame)
+        assert seen[0]["params"]["value"] == "partial answer"
+        assert not any("result" in frame for frame in seen)
+        assert connection._active_method == ""
+
+
+async def test_post_eof_needs_an_explicit_success_reason_in_get_end_turn(monkeypatch):
+    async with httpx.AsyncClient() as client:
+        connection = AcpConnection(client, URL, "synthetic")
+
+        async def post(request):
+            connection._queue.put_nowait({"jsonrpc": "2.0", "method": "session/endTurn",
+                                         "params": {"sessionId": "s"}})
+            connection._queue.put_nowait(_PromptPostEOF(request["id"]))
+
+        monkeypatch.setattr(connection, "_post", post)
+        with pytest.raises(UpstreamProtocolViolation, match="未成功结束"):
+            _ = [frame async for frame in connection.rpc_frames(
+                "session/prompt", {"sessionId": "s"})]
+
+
 async def test_post_eof_and_colliding_server_request_does_not_count_as_rpc_result():
     incoming = QueueStream()
     replies = []

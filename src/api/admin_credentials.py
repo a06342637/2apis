@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import math
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -66,8 +67,8 @@ ACCOUNT_SORT_KEYS = {
 # 批量端点支持的动作。刻意只收「已有单条端点」的动作：
 # - `refresh`（token 预刷新）没有单条入口，且一次性 refresh_token 由后台任务
 #   按 skew 窗口驱动，批量强刷会白耗票据；
-# - `delete` 破坏性太强，需要单独的二次确认流，不走通用批量通道。
-BATCH_ACTIONS = frozenset({"probe", "toggle", "checkin", "revive"})
+# - `delete` 由前端独立二次确认；后端沿用 operator/CSRF 和逐条结果边界。
+BATCH_ACTIONS = frozenset({"probe", "toggle", "checkin", "revive", "delete"})
 
 # 单次批量的上限：一次点「全部探测」最多打多少个上游。上限存在的原因是
 # 探测/签到都会真的出网，没有上限时前端一个「全选」就能把整池凭证的请求
@@ -111,12 +112,14 @@ def _miora_batch_nickname_factory() -> Callable[[], str]:
     return next_name
 
 # 批量动作 → 审计动作。探测 / 签到是只读语义（与单条端点一致，不写审计），
-# 只有真正改动凭证状态的 toggle / revive 落一条汇总流水。
+# 真正改动凭证状态的 toggle / revive / delete 落一条汇总流水。
+# 删除另记录逐条目标，保证批量操作后仍能追溯具体被删账号。
 # 写入本身有兜底：审计落库失败只记 warning，不让整批操作返回 500
 # （逐条结果比留痕更重要，且变更此时已提交生效）。
 BATCH_AUDIT_ACTIONS = {
     "toggle": ACTION_CREDENTIAL_TOGGLE,
     "revive": ACTION_CREDENTIAL_REVIVE,
+    "delete": ACTION_CREDENTIAL_DELETE,
 }
 
 
@@ -327,6 +330,18 @@ def create_router(services: Services) -> APIRouter:
     credentials = services.credentials
     registry = services.registry
     schedule_probe = services.schedule_probe
+    export_lock = threading.Lock()
+
+    def export_selected(ids: list[str], username: str) -> bytes:
+        # 解密/编码不占事件循环；锁在 worker 内持有，断开请求也不会放开仍在
+        # 运行的导出，避免多个 16 MiB 文件同时编码耗尽小内存主机。
+        with export_lock:
+            content = encode_credential_export(credentials, ids)
+            services.audit.record(
+                actor=username, action=ACTION_CREDENTIAL_EXPORT,
+                detail=json.dumps({"count": len(ids), "ids": ids}, ensure_ascii=False))
+            logger.info("管理员 %s 批量导出 %d 条凭证", username, len(ids))
+            return content
 
     def provider_for(credential_id: str, capability: str | None = None,
                      error: str | None = None):
@@ -882,6 +897,16 @@ def create_router(services: Services) -> APIRouter:
 
         async def run_one(credential_id: str) -> dict:
             try:
+                if action == "delete":
+                    if not credentials.delete(credential_id):
+                        return {"id": credential_id, "ok": False, "error": "credential not found"}
+                    try:
+                        services.audit.record(actor=principal.username,
+                                              action=ACTION_CREDENTIAL_DELETE,
+                                              target=credential_id, detail="批量删除")
+                    except Exception as error:  # noqa: BLE001 - 删除已生效，留痕失败不改结果
+                        logger.warning("批量删除凭证 %s 审计写入失败: %s", credential_id, error)
+                    return {"id": credential_id, "ok": True}
                 if action == "toggle":
                     if not credentials.set_enabled(credential_id, enabled):
                         return {"id": credential_id, "ok": False, "error": "credential not found"}
@@ -914,7 +939,7 @@ def create_router(services: Services) -> APIRouter:
 
         results = await asyncio.gather(*(run_one(credential_id) for credential_id in ids))
         succeeded = sum(1 for result in results if result["ok"])
-        # 审计只记一条汇总，不逐条落库：批量暂停 50 个号是一次操作、一个意图，
+        # 状态修改审计记一条汇总；删除另记逐条目标。批量暂停是一次操作、一个意图，
         # 50 行审计会把流水刷成噪声，反而更难定位「谁在什么时候批量做了什么」。
         # toggle 带上方向：暂停与取消暂停是同一动作名，不写方向就看不出意图。
         direction = f"（{'启用' if enabled else '暂停'}）" if action == "toggle" else ""
@@ -989,11 +1014,7 @@ def create_router(services: Services) -> APIRouter:
         """仅导出所选账号；完整文件生成成功才发送，失败不返回部分凭证。"""
         require_operator(principal)
         ids = validate_export_ids(payload)
-        content = encode_credential_export(credentials, ids)
-        services.audit.record(
-            actor=principal.username, action=ACTION_CREDENTIAL_EXPORT,
-            detail=json.dumps({"count": len(ids), "ids": ids}, ensure_ascii=False))
-        logger.info("管理员 %s 批量导出 %d 条凭证", principal.username, len(ids))
+        content = await asyncio.to_thread(export_selected, ids, principal.username)
         return Response(content, media_type="application/json", headers={
             "Content-Disposition": 'attachment; filename="coding2api-credentials.json"',
             "Cache-Control": "no-store",

@@ -114,3 +114,39 @@ def test_refresh_window(monkeypatch):
     assert not MioraCredential(access_token="t", expires_at=100).needs_refresh(10, now=90)
     assert not MioraCredential(access_token="t", refresh_token="r").needs_refresh(10, now=90)
     assert not MioraCredential(access_token="t", refresh_token="r", expires_at=-1).needs_refresh(10)
+
+
+@pytest.mark.parametrize(
+    "field", ["cookie", "raw", "authToken", "access_token", "accessToken", "token"]
+)
+def test_cookie_import_keeps_its_refresh_token_for_pre_refresh(field):
+    token = jwt({"sub": "cookie-account", "exp": 100})
+    credential = MioraCredential.from_import({
+        field: f"Cookie: other=ignored; authToken={token}; refreshToken= ; refreshToken=renew",
+    })
+    assert credential.access_token == token
+    assert credential.refresh_token == "renew"
+    assert credential.uid == "cookie-account"
+    assert credential.needs_refresh(10, now=90)
+    assert "other" not in credential.to_dict()
+
+
+def test_explicit_refresh_token_wins_and_unselected_cookie_is_not_combined():
+    assert MioraCredential.from_import({
+        "cookie": "authToken=one; refreshToken=cookie-renew",
+        "refreshToken": "explicit-renew",
+    }).refresh_token == "explicit-renew"
+    assert MioraCredential.from_import({
+        "authToken": "one", "cookie": "authToken=other; refreshToken=other-renew",
+    }).refresh_token == ""
+
+
+@pytest.mark.parametrize("access_name,refresh_name", [
+    ("authToken", "refreshToken"), ("authtoken", "refreshtoken"), ("AUTHTOKEN", "REFRESHTOKEN"),
+])
+def test_cookie_token_parsing_matches_frontend_case_and_quotes(access_name, refresh_name):
+    credential = MioraCredential.from_import({
+        "cookie": f'Cookie: {access_name}="access"; {refresh_name}=\'renew\'',
+    })
+    assert credential.access_token == "access"
+    assert credential.refresh_token == "renew"

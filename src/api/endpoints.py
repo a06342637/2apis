@@ -174,7 +174,7 @@ async def dispatch_compat(
                                 keepalive_frame=keepalive_frame)
         return await respond_with_stream_start(
             _release_when_done(frames, lease), terminal,
-            media_type="text/event-stream")
+            media_type="text/event-stream", release=lease.release)
     # 非流式保活（`nonstream_keepalive_seconds`，默认 0 = 关闭）：宽限期内
     # 完成仍是逐字节相同的 JSONResponse，超时才转 chunked 吐空白心跳。
     keepalive = float(getattr(settings, "nonstream_keepalive_seconds", 0) or 0)
