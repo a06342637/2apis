@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要打的版本号（如 v0.1.7，留空则跳过）'
+        description: '要打的版本号（如 v0.1.8，留空则跳过）'
         required: false
         default: ''
 
@@ -49,7 +49,7 @@ jobs:
           # （"v1.2.3\n恶意命令"）的第一行就能命中、整体放行；bash 正则对
           # 整个字符串做锚定匹配，$ 后面多一个换行也判不合法。
           if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::tag 格式非法: $TAG（应为 vX.Y.Z，例如 v0.1.7）"
+            echo "::error::tag 格式非法: $TAG（应为 vX.Y.Z，例如 v0.1.8）"
             exit 1
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
@@ -99,6 +99,12 @@ jobs:
           uv run ruff check src tests scripts
           uv run pytest -q --cov=src --cov-report=term --cov-fail-under=100
 
+      - name: Setup QEMU
+        if: steps.meta.outputs.tag != 'skip'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1  # v4
+        with:
+          platforms: arm64
+
       - name: Setup buildx
         if: steps.meta.outputs.tag != 'skip'
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069  # v4.4.1
@@ -127,6 +133,5 @@ jobs:
           cache-to: type=gha,scope=build,mode=max
           # provenance 让 GHCR 在 Packages 页面显示构建来源
           provenance: true
-          # 单架构（linux/amd64）够 GitHub Actions ubuntu-latest 跑；
-          # Apple Silicon 用户需要 arm64 时改 platforms: linux/amd64,linux/arm64
-          platforms: linux/amd64
+          # 同时服务 x86 VPS 与 Oracle/Apple Silicon ARM 主机。
+          platforms: linux/amd64,linux/arm64

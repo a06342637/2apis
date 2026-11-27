@@ -80,7 +80,7 @@ export function Layout({ session }: { session: SessionInfo }) {
           <div className="ml-auto flex items-center gap-1">
             <Button variant="ghost" size="icon" asChild>
               <a
-                href="https://github.com/RobbsLuo/coding2api"
+                href="https://github.com/a06342637/2apis"
                 target="_blank"
                 rel="noopener noreferrer"
                 aria-label="项目仓库"

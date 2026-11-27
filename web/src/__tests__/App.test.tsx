@@ -93,7 +93,7 @@ describe("Layout", () => {
       username: "root", is_operator: true, is_admin: true, role: "admin", must_change_password: false,
     }} />);
     const link = screen.getByRole("link", { name: "项目仓库" });
-    expect(link).toHaveAttribute("href", "https://github.com/RobbsLuo/coding2api");
+    expect(link).toHaveAttribute("href", "https://github.com/a06342637/2apis");
     expect(link).toHaveAttribute("target", "_blank");
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
