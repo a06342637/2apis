@@ -1,6 +1,12 @@
-# 2apis · v0.1.7
+# 2apis · v0.1.8
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.8 仓库入口与 ARM64 部署
+
+管理台右上角的项目仓库入口指向 [a06342637/2apis](https://github.com/a06342637/2apis)。
+版本镜像和 `latest` 同时发布 Linux AMD64 / ARM64，支持 Oracle ARM VPS 原生部署。
+使用 Cloudflare Tunnel 时，应用保留本地回源端口，`PUBLIC_BASE_URL` 设置为实际 HTTPS 域名。
 
 ## v0.1.7 更新活动日志
 
@@ -274,7 +280,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.7`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.8`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

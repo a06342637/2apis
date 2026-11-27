@@ -1,5 +1,11 @@
 # Coding2API 设计文档
 
+## 2apis v0.1.8：仓库入口与 ARM64 部署
+
+- 管理台顶栏项目仓库链接改为二次开发仓库 `a06342637/2apis`，保留原项目作者与许可证。
+- 发布流程安装固定 SHA 的 QEMU 动作，生成 Linux AMD64 / ARM64 双架构版本与 latest 镜像。
+- 新 VPS 使用原生 ARM64 镜像和 Cloudflare Tunnel HTTPS 域名，保留私有回源与主机更新助手。
+
 ## 2apis v0.1.7：更新过程可观察性
 
 - Deployment 在固定提交获取、源码校验、构建器准备、镜像构建与收尾时报告固定步骤说明及阶段里程碑，不解析或向应用暴露 subprocess 输出。
