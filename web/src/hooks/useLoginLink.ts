@@ -1,6 +1,6 @@
 // [CUSTOM] 无弹窗链接登录：每次授权的计时器与server state均由本入口独立持有。
 import { useEffect, useRef, useState } from "react";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 import type { Provider, UpstreamAuthStart } from "../api/types";
 import { copyText } from "../lib/clipboard";
 import { errorText } from "../lib/errors";
@@ -32,6 +32,7 @@ type Row = {
 };
 const initial = (): Row => ({ authUrl: "", callback: "", state: "", flow: "",
   loading: false, completing: false, waiting: false, hint: "", tone: "info" });
+export const LOGIN_LINK_TIMEOUT_MS = 20000;
 
 export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegistry,
   callbacks: { onNotice: (message: string) => void; onImported: (message: string) => void },
@@ -44,6 +45,19 @@ export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegist
   const sessionRef = useRef<Session | null>(null);
   const callbackRef = useRef(callbacks);
   callbackRef.current = callbacks;
+  const loadingTimer = useRef<number | null>(null);
+  const loadingStarted = useRef(0);
+  const [loadingSeconds, setLoadingSeconds] = useState(0);
+  const clearLoadingTimer = () => {
+    if (loadingTimer.current !== null) window.clearTimeout(loadingTimer.current);
+    loadingTimer.current = null;
+  };
+  useEffect(() => {
+    if (!row.loading) return;
+    const timer = window.setInterval(() => setLoadingSeconds(
+      Math.max(0, Math.floor((Date.now() - loadingStarted.current) / 1000))), 1000);
+    return () => window.clearInterval(timer);
+  }, [row.loading]);
 
   const patch = (value: Partial<Row>) => {
     if (mounted.current) {
@@ -56,6 +70,7 @@ export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegist
   };
   const owned = (session: Session) => mounted.current && sessionRef.current === session;
   const cancel = async () => {
+    clearLoadingTimer();
     const pending = sessionRef.current || rowRef.current.loading || rowRef.current.completing;
     generation.current += 1;
     const session = sessionRef.current;
@@ -130,7 +145,17 @@ export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegist
     const previous = sessionRef.current;
     sessionRef.current = null;
     clearTimer(previous);
+    clearLoadingTimer();
+    loadingStarted.current = Date.now();
+    setLoadingSeconds(0);
     patch({ ...initial(), loading: true });
+    const timer = window.setTimeout(() => {
+      if (!mounted.current || generation.current !== id) return;
+      generation.current += 1;
+      loadingTimer.current = null;
+      patch({ loading: false, hint: "获取登录链接超时，请重试；持续失败时请检查服务器到授权服务的网络连接。", tone: "err" });
+    }, LOGIN_LINK_TIMEOUT_MS);
+    loadingTimer.current = timer;
     try {
       if (previous) await api.upstreamCancel(provider, previous.state).catch(() => undefined);
       if (!mounted.current || generation.current !== id) return;
@@ -166,8 +191,15 @@ export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegist
       schedule(session);
     } catch (caught) {
       if (mounted.current && generation.current === id) {
-        patch({ loading: false, hint: errorText(caught, "无法获取登录链接，请重试。"), tone: "err" });
+        const networkError = caught instanceof ApiError
+          && ["upstream_unavailable", "egress_unavailable", "timeout"].includes(caught.code);
+        patch({ loading: false, hint: networkError
+          ? "无法连接授权服务，请重试；持续失败时请检查服务器的网络连接或授权服务是否可用。"
+          : errorText(caught, "无法获取登录链接，请重试。"), tone: "err" });
       }
+    } finally {
+      // 旧请求完成时不能清掉新一轮获取链接的超时计时器。
+      if (generation.current === id && loadingTimer.current === timer) clearLoadingTimer();
     }
   };
 
@@ -211,6 +243,6 @@ export function useLoginLink(provider: Provider, registry: LoginLinkCancelRegist
     }
   };
 
-  return { row, refresh, copy, complete, cancel,
+  return { row, loadingSeconds, refresh, copy, complete, cancel,
     setCallback: (callback: string) => patch({ callback }) };
 }

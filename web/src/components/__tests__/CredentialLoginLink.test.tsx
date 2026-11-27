@@ -44,6 +44,54 @@ describe("CredentialLoginLink", () => {
     vi.restoreAllMocks();
   });
 
+  it("获取国际版链接时显示计时和取消，取消后清理迟到state且可重新获取", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof api.upstreamStart>>) => void;
+    vi.mocked(api.upstreamStart).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const { props, user, prefix } = setup("codebuddy_intl");
+    await user.click(screen.getByTestId(`${prefix}-summary`));
+    await user.click(screen.getByTestId(`${prefix}-refresh`));
+    await advance(3000);
+    expect(screen.getByTestId(`${prefix}-refresh`)).toHaveTextContent("3 秒");
+    expect(screen.getByTestId(`${prefix}-loading`)).toHaveTextContent("可随时取消");
+    await user.click(screen.getByTestId(`${prefix}-cancel`));
+    expect(screen.getByTestId(`${prefix}-refresh`)).toBeEnabled();
+    await user.click(screen.getByTestId(`${prefix}-refresh`));
+    expect(screen.getByTestId(`${prefix}-url`)).toHaveValue("https://login.example/?state=first");
+    await act(async () => finish({ flow: "poll", state: "late", auth_url: "https://login.example/late", interval: 1 }));
+    expect(api.upstreamCancel).toHaveBeenCalledWith("codebuddy_intl", "late");
+    expect(screen.getByTestId(`${prefix}-url`)).toHaveValue("https://login.example/?state=first");
+    expect(props.onImported).not.toHaveBeenCalled();
+  });
+
+  it("超过20秒结束获取中并允许重试，晚到state被取消且不能覆盖新计时器", async () => {
+    let first!: (value: Awaited<ReturnType<typeof api.upstreamStart>>) => void;
+    const finishes: typeof first[] = [];
+    vi.mocked(api.upstreamStart).mockImplementation(() => new Promise(resolve => finishes.push(resolve)));
+    const { user, prefix } = setup("codebuddy_intl");
+    await user.click(screen.getByTestId(`${prefix}-summary`));
+    await user.click(screen.getByTestId(`${prefix}-refresh`));
+    first = finishes[0];
+    await advance(20001);
+    expect(screen.getByTestId(`${prefix}-hint`)).toHaveTextContent("获取登录链接超时");
+    expect(screen.getByTestId(`${prefix}-refresh`)).toBeEnabled();
+    await user.click(screen.getByTestId(`${prefix}-refresh`));
+    await act(async () => first({ flow: "poll", state: "old", auth_url: "https://login.example/old", interval: 1 }));
+    expect(api.upstreamCancel).toHaveBeenCalledWith("codebuddy_intl", "old");
+    await advance(20001);
+    expect(screen.getByTestId(`${prefix}-hint`)).toHaveTextContent("获取登录链接超时");
+    expect(screen.getByTestId(`${prefix}-url`)).toHaveValue("");
+  });
+
+  it("授权服务网络失败显示中文可重试说明而非停在获取中", async () => {
+    vi.mocked(api.upstreamStart).mockRejectedValue(new ApiError(502, "upstream_unavailable", "upstream transport failed"));
+    const { user, prefix } = setup("codebuddy_intl");
+    await user.click(screen.getByTestId(`${prefix}-summary`));
+    await user.click(screen.getByTestId(`${prefix}-refresh`));
+    expect(screen.getByTestId(`${prefix}-hint`)).toHaveTextContent("无法连接授权服务");
+    expect(screen.getByTestId(`${prefix}-refresh`)).toBeEnabled();
+    expect(screen.queryByTestId(`${prefix}-loading`)).not.toBeInTheDocument();
+  });
+
   it("默认折叠，只获取/复制安全链接，不调用window.open", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const { props, user, prefix } = setup();

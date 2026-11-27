@@ -35,9 +35,9 @@ from typing import Any
 import httpx
 
 from ..base import ActivityResult
-from ..proxy import build_client
 from .client import build_headers
 from .credential import CodeBuddyCredential
+from .routing import build_codebuddy_client
 
 # 中立层定义、本模块再导出：既有调用点（provider.client 的 `from .activity
 # import ActivityResult`）与测试都不必改。
@@ -162,7 +162,7 @@ class CodeBuddyActivity:
     @property
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = build_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
+            self._client = build_codebuddy_client(timeout=httpx.Timeout(30.0), proxy=self._proxy)
         return self._client
 
     async def aclose(self) -> None:

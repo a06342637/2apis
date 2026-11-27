@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 
+from .activity import report_activity
 from .deployment import Deployment, HostConfig, code_manifest
 from .source import GitHubSource, validate_commit, validate_source
 from .state import StateStore
@@ -17,7 +18,7 @@ class UpdateService:
         self.config = config
         self.store = StateStore(config.state_dir)
         self.github = github or GitHubSource()
-        self.deployment = deployment or Deployment(config)
+        self.deployment = deployment or Deployment(config, progress=self._build_progress)
         self.spawn = spawn or self._spawn
         self.control = threading.Lock()
         state = self.store.snapshot()
@@ -40,11 +41,17 @@ class UpdateService:
         if job:
             public_job = {key: job[key] for key in ("id", "status", "phase", "progress", "logs",
                           "error", "started_at", "finished_at")}
+            public_job.update({key: job.get(key) for key in
+                               ("step", "step_started_at", "heartbeat_at")})
         return {"enabled": True, "source": state["source"], "branch": "main",
                 "current": state["current"], "latest": latest, "dirty": state["dirty"],
                 "update_available": bool(latest and latest != {**state["current"],
                                                                 "ci": latest["ci"]}),
-                "job": public_job}
+                "job": public_job, "server_time": int(time.time())}
+
+    def _build_progress(self, progress: int, message: str) -> None:
+        job = self.store.snapshot()["job"]
+        self.store.activity(job["id"], message, progress)
 
     def _check(self) -> dict:
         state = self.store.snapshot()
@@ -96,6 +103,14 @@ class UpdateService:
         return self.status()
 
     def _execute(self) -> None:
+        job = self.store.snapshot()["job"]
+        try:
+            with report_activity(self.store, job["id"]):
+                self._execute_steps()
+        except Exception as error:
+            self._fail(error)
+
+    def _execute_steps(self) -> None:
         job = self.store.snapshot()["job"]
         directory = self.config.state_dir / job["id"]
         try:

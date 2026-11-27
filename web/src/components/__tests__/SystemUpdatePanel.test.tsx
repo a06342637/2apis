@@ -85,7 +85,7 @@ describe("SystemUpdatePanel", () => {
     setup();
     await screen.findByText("更新中 · 10%");
     await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
-    expect(await screen.findByText(/服务正在切换/)).toBeInTheDocument();
+    expect(await screen.findByText(/暂时无法连接主机/)).toBeInTheDocument();
     await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     expect(await screen.findByText("更新成功 · 100%")).toBeInTheDocument();
   });

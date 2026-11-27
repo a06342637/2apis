@@ -53,9 +53,12 @@ class LazyClients:
         key = (kind, proxy)
         client = pools.get(key)
         if client is None:
-            client = build_client(timeout=timeout, proxy=proxy)
+            client = self._build_http_client(timeout, proxy)
             pools[key] = client
         return client
+
+    def _build_http_client(self, timeout: httpx.Timeout, proxy: str | None) -> httpx.AsyncClient:
+        return build_client(timeout=timeout, proxy=proxy)
 
     @property
     def _stream(self) -> httpx.AsyncClient:

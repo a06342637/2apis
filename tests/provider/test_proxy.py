@@ -149,13 +149,13 @@ def _codearts_client(proxy):
 async def test_provider_client_forwards_proxy(monkeypatch, factory, module_path):
     """代理按渠道转发：两条池都拿到同一个 proxy。
 
-    `build_client` 现在只在 `lazy_clients` 里调用（7 家共用一份懒建逻辑），
-    所以 patch 点在那里，`module_path` 只用来定位被测客户端类。
+    CodeBuddy 使用专属连接路由工厂，其余渠道保留共享懒建工厂。
     """
     import importlib
 
-    calls = _capture_build(monkeypatch,
-                           importlib.import_module("src.provider.lazy_clients"))
+    builder_module = ("src.provider.codebuddy.routing" if factory is _codebuddy_client
+                      else "src.provider.lazy_clients")
+    calls = _capture_build(monkeypatch, importlib.import_module(builder_module))
     client = factory("socks5://127.0.0.1:1080")
 
     stream, short = client._stream, client._short
@@ -174,8 +174,9 @@ def _codearts_login():
 
 async def test_codebuddy_oauth_forwards_proxy(monkeypatch):
     import src.provider.codebuddy.oauth as module
+    import src.provider.codebuddy.routing as routing
 
-    calls = _capture_build(monkeypatch, module)
+    calls = _capture_build(monkeypatch, routing)
     oauth = module.CodeBuddyOAuth("https://copilot.tencent.com", proxy="http://p:1")
     _ = oauth._http
     assert calls[0]["proxy"] == "http://p:1"
