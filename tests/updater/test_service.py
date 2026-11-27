@@ -25,7 +25,8 @@ def make(host, new_source, fail=None, ci=None):
         build=step("build", lambda *_: "new-image"), stop=step("stop"),
         backup=step("backup", actual.backup),
         replace_code=step("replace", lambda *_: actual.replace_code(new_source)),
-        start=step("start"), restore=step("restore", actual.restore))
+        start=step("start"), restore=step("restore", actual.restore),
+        stop_interrupted_build=step("stop_build"))
     github = SimpleNamespace(latest=lambda _: dict(LATEST, ci=ci or "success"))
     service = UpdateService(host, github=github, deployment=deployment, spawn=pending.append)
     return service, calls, pending
@@ -113,6 +114,44 @@ def test_build_rechecks_ci_and_helper_restart(host, new_source):
     assert recovered.status()["job"]["status"] == "rolled_back"
     recovered.recover()
     assert recovered.status()["job"]["status"] == "rolled_back"
+
+
+@pytest.mark.parametrize("phase", ["queued", "building"])
+def test_restart_cancels_pre_switch_job_and_reclaims_only_interrupted_build(
+        host, new_source, phase):
+    service, calls, _pending = make(host, new_source)
+    service.dispatch("start", {"commit": SHA})
+    service.store.phase(phase, 10, "pre-switch")
+    recovered = UpdateService(host, github=service.github, deployment=service.deployment)
+    recovered.recover()
+    assert calls == (["stop_build"] if phase == "building" else [])
+    assert recovered.status()["job"]["status"] == "failed"
+    assert recovered.status()["current"]["commit"] == "a" * 40
+    assert (host.source_root / "README.md").read_text() == "old code"
+    recovered.recover()
+    assert calls == (["stop_build"] if phase == "building" else [])
+
+
+def test_interrupted_builder_cleanup_failure_is_visible_and_retryable_without_app_rollback(
+        host, new_source):
+    service, calls, _pending = make(host, new_source, fail="stop_build")
+    service.dispatch("start", {"commit": SHA})
+    service.store.phase("building", 10, "building")
+    recovered = UpdateService(host, github=service.github, deployment=service.deployment)
+    recovered.recover()
+    job = recovered.status()["job"]
+    assert calls == ["stop_build"]
+    assert job["status"] == "recovery_failed" and job["phase"] == "building"
+    assert "构建器" in job["error"] and job["finished_at"]
+    with pytest.raises(ValueError, match="已有更新"):
+        recovered.dispatch("start", {"commit": SHA})
+    recovered.deployment.stop_interrupted_build = lambda: calls.append("stop_build_retry")
+    recovered.recover()
+    assert calls == ["stop_build", "stop_build_retry"]
+    assert recovered.status()["job"]["status"] == "failed"
+    assert recovered.status()["current"]["commit"] == "a" * 40
+    recovered.recover()
+    assert recovered.status()["job"]["status"] == "failed"
 
 
 def test_spawn_failure_and_generic_error(host, new_source):

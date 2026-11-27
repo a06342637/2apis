@@ -149,4 +149,14 @@ class UpdateService:
         """helper 被杀/重启后继续安全恢复，不重复执行未知完成度的更新。"""
         state = self.store.snapshot()
         if state["job"] and state["job"]["status"] in {"running", "recovery_failed"}:
+            if state["job"]["phase"] == "building":
+                try:
+                    self.deployment.stop_interrupted_build()
+                except Exception:
+                    # 保留 building 阶段供下次重试清理，不能误入已切换镜像的回滚路径。
+                    self.store.phase("building", 10,
+                        "中断构建器回收失败，旧服务继续运行，请主机管理员检查",
+                        status="recovery_failed", error="主机助手重启，无法停止中断的构建器",
+                        finished_at=int(time.time()))
+                    return
             self._fail(RuntimeError("主机助手重启，恢复中断的更新"))

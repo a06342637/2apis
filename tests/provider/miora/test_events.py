@@ -32,7 +32,14 @@ def update(kind: str, **values) -> dict:
         (400, b"", ErrKind.INVALID),
         (404, b"", ErrKind.INVALID),
         (422, b"", ErrKind.INVALID),
-        (500, b"\xff", ErrKind.OTHER),
+        (500, b"\xff", ErrKind.SOFT),
+        (502, b"", ErrKind.SOFT),
+        (503, b"", ErrKind.SOFT),
+        (504, b"", ErrKind.SOFT),
+        (599, b"", ErrKind.SOFT),
+        (600, b"", ErrKind.OTHER),
+        (503, b"model not available", ErrKind.BLOCKED),
+        (599, "余额不足".encode(), ErrKind.CREDIT),
         (200, b"", ErrKind.OTHER),
     ],
 )
@@ -69,8 +76,6 @@ def test_errors_are_sanitized():
     ("reason", "expected"),
     [
         ("end_turn", "stop"),
-        ("cancelled", "stop"),
-        ("canceled", "stop"),
         ("stop", "stop"),
         ("max_tokens", "length"),
         ("length", "length"),
@@ -84,6 +89,13 @@ def test_finish(reason, expected):
 
 def test_unknown_finish_fails_closed():
     assert parse_update({"result": {"stopReason": "unknown"}})[0].kind == EventKind.ERROR
+
+
+@pytest.mark.parametrize("reason", ["cancelled", "canceled"])
+def test_upstream_cancel_is_an_error_instead_of_successful_truncation(reason):
+    event = parse_update({"result": {"stopReason": reason}})[0]
+    assert event.kind == EventKind.ERROR
+    assert event.error_kind == ErrKind.UPSTREAM_PROTOCOL
 
 
 @pytest.mark.parametrize(

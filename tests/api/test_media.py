@@ -539,9 +539,12 @@ async def test_zero_keepalive_configuration_does_not_stream_or_spin_while_work_i
     update_settings(app, nonstream_keepalive_seconds=0)
     app.manager.wait_gate = asyncio.Event()
     messages, _disconnected, _whitespace, task = asgi_request(app)
-    async with asyncio.timeout(2):
+    # The guard catches deadlocks, not host scheduling delays. Observe pending
+    # work across loop turns rather than requiring a 20 ms wall-clock wakeup.
+    async with asyncio.timeout(30):
         await app.manager.wait_started.wait()
-        await asyncio.sleep(0.02)
+        for _ in range(5):
+            await asyncio.sleep(0)
         before_completion = list(messages)
         app.manager.wait_gate.set()
         await task

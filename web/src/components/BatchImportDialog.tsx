@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FileUp, TriangleAlert, Upload } from "lucide-react";
 import { api, ApiError } from "../api/client";
 import type { BatchImportEntry, BatchImportResult, Provider } from "../api/types";
@@ -36,31 +36,50 @@ export function BatchImportDialog({
   onImported: (message: string) => void;
   onNotice: (message: string) => void;
 }) {
-  const dialogRef = useDialogFocus<HTMLDivElement>(onClose);
+  const working = useRef(false);
+  const dialogRef = useDialogFocus<HTMLDivElement>(() => { if (!working.current) onClose(); });
   const fileRef = useRef<HTMLInputElement>(null);
+  const fileReadGeneration = useRef(0);
+  const fileReadInFlight = useRef(false);
   const [text, setText] = useState("");
   const [fallback, setFallback] = useState<Provider>("miora");
   const [pending, setPending] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BatchImportResult | null>(null);
   const parsed = useMemo(() => parseBatchCredentialInput(text, fallback), [text, fallback]);
 
+  useEffect(() => () => { fileReadGeneration.current += 1; }, []);
+
   const readFile = async (file: File | undefined) => {
-    if (!file) return;
+    if (!file || working.current) return;
+    const generation = ++fileReadGeneration.current;
+    fileReadInFlight.current = true;
+    setReadingFile(true);
     try {
-      setText(await file.text());
+      const contents = await file.text();
+      // 再次选择文件或关闭弹窗后，旧读取结果不能覆盖新内容。
+      if (generation !== fileReadGeneration.current) return;
+      setText(contents);
       setError(null);
       setResult(null);
     } catch {
-      setError("读取文件失败");
+      if (generation === fileReadGeneration.current) setError("读取文件失败");
+    } finally {
+      if (generation === fileReadGeneration.current) {
+        fileReadInFlight.current = false;
+        setReadingFile(false);
+      }
     }
   };
 
   const submit = async () => {
+    if (working.current || fileReadInFlight.current) return;
     if (!parsed.entries.length) {
       setError("没有可导入的条目");
       return;
     }
+    working.current = true;
     setPending(true);
     setError(null);
     setResult(null);
@@ -83,6 +102,7 @@ export function BatchImportDialog({
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "批量导入失败，请稍后重试");
     } finally {
+      working.current = false;
       setPending(false);
     }
   };
@@ -104,7 +124,9 @@ export function BatchImportDialog({
         </div>
         <p className="text-xs text-muted-foreground">
           粘贴多份 JSON（可换行）、一行一个 Cookie 或完整 token，也支持 JSON 数组/JSONL。
-          邮箱放在凭证前或上一行作为昵称。新 Miora 账号未填昵称时按北京时间自动编号，
+          Miora 也支持每行粘贴 <code>{"邮箱{authToken=...; refreshToken=...}"}</code>，
+          或让邮箱紧贴 JSON 对象。邮箱会作为账号备注（昵称），也可单独放在上一行。
+          新 Miora 账号未填昵称时按北京时间自动编号，
           重新导入保留旧昵称；同批重复凭证会跳过。
         </p>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -130,6 +152,8 @@ export function BatchImportDialog({
             ref={fileRef}
             type="file"
             accept=".json,.jsonl,.txt"
+            hidden
+            disabled={pending}
             className="hidden"
             data-testid="batch-file"
             onChange={(event) => void readFile(event.target.files?.[0])}
@@ -161,10 +185,10 @@ export function BatchImportDialog({
             setResult(null);
           }}
           rows={8}
-          disabled={pending}
+          disabled={pending || readingFile}
           autoComplete="off"
           spellCheck={false}
-          placeholder={'mail@example.com {"authToken":"TOKEN","refreshToken":"REFRESH"}\n{"authToken":"ANOTHER_TOKEN","refreshToken":"ANOTHER_REFRESH"}'}
+          placeholder={'mail@example.com{authToken=TOKEN; refreshToken=REFRESH}\nanother@example.com{"authToken":"ANOTHER_TOKEN","refreshToken":"ANOTHER_REFRESH"}'}
           className="w-full resize-y rounded-md border border-border bg-background p-2 font-mono text-xs"
         />
         {parsed.entries.length > 0 && (
@@ -215,9 +239,9 @@ export function BatchImportDialog({
             variant="default"
             data-testid="batch-submit"
             onClick={() => void submit()}
-            disabled={pending || parsed.entries.length === 0 || parsed.entries.length > 100}
+            disabled={pending || readingFile || parsed.entries.length === 0 || parsed.entries.length > 100}
           >
-            {pending ? "导入中…" : `导入 ${parsed.entries.length} 条`}
+            {pending ? "导入中…" : readingFile ? "读取文件中…" : `导入 ${parsed.entries.length} 条`}
           </Button>
         </div>
       </div>

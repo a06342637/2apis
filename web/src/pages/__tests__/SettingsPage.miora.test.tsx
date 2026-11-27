@@ -9,7 +9,7 @@ const MIORA_SETTINGS: RuntimeSetting[] = [
   { key: "miora_chat_min_interval", label: "Miora 聊天最小间隔（秒）", kind: "float", value: 0, default: 5 },
   { key: "miora_max_concurrency", label: "Miora 每账号并发上限", kind: "int", value: 0, default: 1 },
   { key: "miora_request_window_seconds", label: "Miora 滚动窗口（秒）", kind: "float", value: 30, default: 60 },
-  { key: "miora_max_requests_per_window", label: "Miora 窗口内最多请求数", kind: "int", value: 10, default: 3 },
+  { key: "miora_max_requests_per_window", label: "Miora 窗口内最多请求数", kind: "int", value: 10, default: 0 },
 ].map((row) => ({ ...row, env_name: row.key.toUpperCase(), description: "按账号独立限速。",
   overridden: true, task: null, group: "miora_throttle", section: null }));
 const SUGGESTED = {
@@ -81,6 +81,7 @@ describe("SettingsPage Miora 限速与系统更新", () => {
       expect(screen.getByTestId(`source-${setting.key}`)).toHaveTextContent("DB 覆盖");
     }
     expect(help).toHaveTextContent("不同账号独立排队");
+    expect(help).toHaveTextContent("默认不限制窗口内请求次数");
     expect(help).toHaveTextContent("每 60 秒最多 3 次请求");
     expect(help).toHaveTextContent("上游的硬门槛");
     expect(help).toHaveTextContent("Retry-After");

@@ -392,6 +392,12 @@ describe("display helpers", () => {
       provider: "trae", quota_cycle_end: null }) as never);
     expect(balance).toBe("账户剩余（单调递减）");
 
+    const miora = quotaSemantics(makeCredential({
+      provider: "miora", quota_cycle_end: 1_800_000_000 }) as never);
+    expect(miora).toContain("积分余额");
+    expect(miora).toContain("各自到期");
+    expect(miora).not.toContain("重置");
+
     // Kilo 与 Zen 同为免费层：无额度接口
     const kilo = quotaSemantics(makeCredential({
       provider: "kilo", quota_cycle_end: null }) as never);

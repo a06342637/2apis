@@ -254,6 +254,8 @@ class Candidate:
     # (凭证, 模型) 冷却表：model → ModelCooldown。模型级限流只写这里，
     # 不写 cooling_until，因此同账号的其他模型仍然可选
     model_cooldowns: Mapping[str, ModelCooldown] | None = None
+    # 已有账号级冷却来源；Miora 明确 x0 模型仅可豁免信用耗尽，不豁免其他失败。
+    cooling_kind: str | None = None
 
     def expiry_credits(self, now: int, window: int) -> float:
         """窗口内即将到期的积分总量（不含已过期与已用完的包）。
@@ -390,9 +392,7 @@ class Scheduler:
             key_id = (get_api_key_id() or "") if round_robin_key is None else round_robin_key
             # 指定账号集合保留健康分档，再按在途数和最久未选轮询，顺序请求也分担。
             selected = min(pool, key=lambda candidate: (
-                (2 if (candidate.health is not None and candidate.health <= 0)
-                 or (candidate.quota_remaining is not None and candidate.quota_remaining <= 0)
-                 else _rank(candidate.health)), candidate.inflight,
+                _round_robin_rank(candidate), candidate.inflight,
                 self._round_robin_last.get((key_id, candidate.credential_id), 0),
                 candidate.credential_id))
             self._round_robin_tick += 1
@@ -643,6 +643,18 @@ def _rank(health: int | None) -> int:
     if health < 0:
         return 2
     return 0
+
+
+def _round_robin_rank(candidate: Candidate) -> int:
+    """Miora 的正余额/x0 模型可分摊；0% 可能只是比例四舍五入，不代表用完。"""
+    if candidate.provider == "miora" and (
+            candidate.credit_rate == 0
+            or (candidate.quota_remaining is not None and candidate.quota_remaining > 0)):
+        return 0
+    if ((candidate.health is not None and candidate.health <= 0)
+            or (candidate.quota_remaining is not None and candidate.quota_remaining <= 0)):
+        return 2
+    return _rank(candidate.health)
 
 
 def _health_value(health: int | None) -> int:

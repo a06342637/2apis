@@ -34,6 +34,7 @@ def test_frontend_dist_returns_none_when_absent(tmp_path, monkeypatch):
     from src.webapp import static
 
     monkeypatch.setattr(static, "_PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(static, "_CONTAINER_DIST", tmp_path / "container-dist-missing")
     monkeypatch.chdir(tmp_path)
     assert static.frontend_dist() is None
 

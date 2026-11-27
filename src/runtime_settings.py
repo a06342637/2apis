@@ -154,12 +154,13 @@ HOT_SETTINGS: tuple[HotSetting, ...] = (
                "留空 = 不启用。", group="model_routing"),
     HotSetting("stream_first_event_timeout_seconds", float, "流式首事件超时（秒）",
                "上游接了连接却长时间不吐第一个数据帧时，在**出帧前**换号重试"
-               "（此时切换安全）。注释帧/心跳不重置计时。0 = 关闭；实测慢上下文"
-               "首字可达 40–71s，内置默认必须保持关闭，用时按部署实际填（推荐 60）。",
+               "（此时切换安全）。注释帧/心跳不重置计时。默认 120，给慢首字留余量；"
+               "0 = 关闭。非流式聚合同样受此限制。",
                minimum=0.0, group="stream_thinking"),
     HotSetting("stream_idle_timeout_seconds", float, "流式空闲超时（秒）",
                "**已出帧**后上游长时间不再吐数据时断流并以错误帧收尾——半截输出"
-               "不可回滚，换号会把两个账号的内容拼给客户端。0 = 关闭（推荐 300）。",
+               "不可回滚，换号会把两个账号的内容拼给客户端。默认 300；0 = 关闭。"
+               "非流式尚未提交正文时可安全重试。",
                minimum=0.0, group="stream_thinking"),
     HotSetting("short_cooldown_wait_seconds", float, "短冷却等待上限（秒）",
                "全池都在短冷却、没有任何立即可用候选时，最短剩余冷却不超过该值"
@@ -272,8 +273,8 @@ HOT_SETTINGS: tuple[HotSetting, ...] = (
                "不向上游连发。0 关闭窗口，间隔和并发限制仍生效。",
                minimum=0.0, group="miora_throttle"),
     HotSetting("miora_max_requests_per_window", int, "Miora 窗口内最多请求数",
-               "默认每账号每 60 秒最多启动 3 次，这是本地保守建议，不是上游承诺。"
-               "与并发上限独立；0 关闭窗口次数限制。仍遇到 429 时先遵守上游"
+               "默认 0，不额外限制窗口内请求次数，避免多次调用后人为等待一分钟。"
+               "与并发上限独立；填入正数可启用窗口次数限制。仍遇到 429 时先遵守上游"
                "Retry-After，再适当增加间隔或降低此值。",
                minimum=0, group="miora_throttle"),
     HotSetting("qoder_chat_min_interval", float, "Qoder 聊天最小间隔（秒）",

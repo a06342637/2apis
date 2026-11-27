@@ -263,6 +263,19 @@ class Deployment:
                 return
             raise RuntimeError("构建完成但无法停止受限构建器，请主机管理员检查") from None
 
+    def stop_interrupted_build(self) -> None:
+        """助手重启后回收本项目构建容器，不依赖进程私有的 buildx 注册目录。"""
+        container = f"buildx_buildkit_apis-update-{self.config.project}0"
+        existing = self.run(["docker", "ps", "--all", "--filter",
+                             f"name=^{re.escape(container)}$", "--format", "{{.Names}}"],
+                            timeout=60)
+        if not existing:
+            return
+        if existing != container:
+            raise RuntimeError("中断构建器名称不匹配，停止回收")
+        # docker stop 对已经停止的容器也幂等；保留镜像与缓存，不做 prune/rm。
+        self.run(["docker", "stop", "--time", "10", container], timeout=60)
+
     def _prepare_builder(self, builder: str) -> None:
         try:
             description = self.run(["docker", "buildx", "inspect", builder], timeout=60)

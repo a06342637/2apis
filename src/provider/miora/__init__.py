@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
-from ...tasks.pacer import paced
+from ...tasks.pacer import Pacer, paced
 from ..base import ErrKind, Event, Model, Quota, UpstreamProtocolViolation
-from .client import MioraClient, MioraHTTPError
+from .client import CHAT_QUEUE_TIMEOUT_SECONDS, MioraClient, MioraHTTPError, MioraQueueTimeout
 from .credential import MioraCredential
 from .events import classify_status
 from .live import CredentialReader, current_credential
@@ -50,6 +51,15 @@ class MioraProvider:
     def classify(self, status: int, body: bytes) -> ErrKind:
         return classify_status(status, body)
 
+    def queue_delay(self, credential_data: dict) -> float | None:
+        """纯本地容量快照；相同账号的项目别名仍共享运行时锁。"""
+        identity = self.login_identity(credential_data)
+        if isinstance(self.client, MioraClient):
+            lock = self.client._identity_locks.get(identity)
+            if lock is not None and lock.locked():
+                return None
+        return self.pacer.minimum_wait(identity) if isinstance(self.pacer, Pacer) else 0.0
+
     async def refresh(self, credential_data: dict) -> dict:
         """仅 RefreshTask 持凭证编辑锁调用；调用者须先落盘轮转票据。"""
         return await self.client.refresh_token(self.credential_from(credential_data))
@@ -81,7 +91,12 @@ class MioraProvider:
     ) -> AsyncIterator[Event]:
         credential = MioraCredential.from_import(credential_data)
         # 先同步关闭内层 ACP 流，再归还节流名额，客户端断开不依赖 asyncgen GC。
-        async with paced(self.pacer, credential.identity()):
+        async with AsyncExitStack() as stack:
+            try:
+                async with asyncio.timeout(CHAT_QUEUE_TIMEOUT_SECONDS):
+                    await stack.enter_async_context(paced(self.pacer, credential.identity()))
+            except TimeoutError as error:
+                raise MioraQueueTimeout("Miora 调用排队超时，请稍后重试") from error
             if self.before_inference is not None:
                 self.before_inference()
             credential = current_credential(credential, self.reload_credential)

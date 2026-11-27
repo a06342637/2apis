@@ -1849,6 +1849,7 @@ describe("CredentialsPage", () => {
 
     await userEvent.click(screen.getByTestId("actions-cred_1"));
     await userEvent.click(screen.getByRole("menuitem", { name: "导出凭证" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "下载 JSON" }));
 
     await waitFor(() => {
       expect(fetchSpy.mock.calls.some(([url]) =>

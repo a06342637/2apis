@@ -37,9 +37,11 @@ from ..base import (
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
+from ..proxy import SHORT_TIMEOUT, STREAM_TIMEOUT
 from .access import model_access
 from .acp import AcpConnection, AcpHTTPError
 from .credential import MioraCredential, jwt_subject
+from .credits import PACKS_API, credit_packages, next_expiring_credit
 from .events import classify_status, parse_update
 from .live import CredentialReader, current_credential
 from .subscription import subscription_state
@@ -49,6 +51,17 @@ API = "/api/ai"
 PROJECT_TITLE = "2apis API workspace"
 MAX_ACCOUNTS = 128
 MAX_TOOL_RESPONSE_CHARS = 8 * 1024 * 1024
+CHAT_QUEUE_TIMEOUT_SECONDS = 60.0
+
+
+class MioraQueueTimeout(UpstreamProtocolViolation):
+    """本地排队超时：没有发起推理，不冷却或禁用健康账号。"""
+
+    error_code = "local_queue_timeout"
+    summary = "Miora local queue timed out"
+
+    def kind(self) -> ErrKind:
+        return ErrKind.UPSTREAM_PROTOCOL
 
 
 class MioraHTTPError(UpstreamHTTPError):
@@ -166,6 +179,21 @@ class MioraClient(LazyClients):
         self.reload_credential: CredentialReader | None = None
         self.before_inference: Callable[[], None] | None = None
 
+    @property
+    def _rpc(self) -> httpx.AsyncClient:
+        # 长GET通知流不能占用POST/RPC所需的连接名额。显式测试client仍按原约定复用；
+        # 正式流量按出口代理独立建RPC池，并由LazyClients.aclose统一关闭。
+        if self._stream_client is not None:
+            return self._stream_client
+        return self._pooled(STREAM_TIMEOUT, "miora-rpc")
+
+    @property
+    def _control(self) -> httpx.AsyncClient:
+        # POST prompt自身也可能持有长SSE；回调ACK和取消须有独立的短请求名额。
+        if self._stream_client is not None:
+            return self._stream_client
+        return self._pooled(SHORT_TIMEOUT, "miora-control")
+
     def _account(self, credential: MioraCredential) -> _Account:
         identity = credential.identity()
         key = f"{identity}|{credential.project_id}"
@@ -200,6 +228,18 @@ class MioraClient(LazyClients):
         finally:
             account.users -= 1
             self._trim_accounts()
+
+    @asynccontextmanager
+    async def _account_turn(self, account: _Account) -> AsyncIterator[None]:
+        try:
+            async with asyncio.timeout(CHAT_QUEUE_TIMEOUT_SECONDS):
+                await account.lock.acquire()
+        except TimeoutError as error:
+            raise MioraQueueTimeout("Miora 账号排队超时，请稍后重试") from error
+        try:
+            yield
+        finally:
+            account.lock.release()
 
     @staticmethod
     def _headers(credential: MioraCredential) -> dict[str, str]:
@@ -239,7 +279,8 @@ class MioraClient(LazyClients):
     @asynccontextmanager
     async def _connection(self, credential: MioraCredential, account: _Account,
                           endpoint: str, token: str) -> AsyncIterator[AcpConnection]:
-        connection = AcpConnection(self._stream, endpoint, token)
+        connection = AcpConnection(self._stream, endpoint, token, post_client=self._rpc,
+                                   control_client=self._control)
         try:
             await connection.__aenter__()
         except AcpHTTPError as error:
@@ -247,7 +288,8 @@ class MioraClient(LazyClients):
                 raise
             # 仅重开尚未发 prompt 的连接；不重放可能已计费的推理。
             endpoint, token = await self._runtime(credential, account)
-            connection = AcpConnection(self._stream, endpoint, token)
+            connection = AcpConnection(self._stream, endpoint, token, post_client=self._rpc,
+                                       control_client=self._control)
             await connection.__aenter__()
         try:
             yield connection
@@ -322,7 +364,7 @@ class MioraClient(LazyClients):
             "sessionId": session, "cwd": "/workspace", "mcpServers": []})
 
     async def fetch_models(self, credential: MioraCredential) -> list[Model]:
-        async with self._using_account(credential) as account, account.lock:
+        async with self._using_account(credential) as account, self._account_turn(account):
             tiers = await self._request(credential, "GET", f"{API}/public/cloud-agent/tiers")
             endpoint, token = await self._runtime(credential, account)
             if not account.catalog_session_id:
@@ -351,7 +393,24 @@ class MioraClient(LazyClients):
             # 订阅补充探测失败不打坏已拿到的积分，也不能把未知账号猜成 free。
             subscription = None
         detail = {"miora_subscription": subscription_state(subscription, now=moment)}
-        return Quota(remaining=max(0, total - used), total=total, probed_at=moment, detail=detail)
+        remaining = max(0, total - used)
+        next_expiring = next_expiring_credit(data, now=moment, remaining=remaining)
+        packages, ladder = None, None
+        packages_status = "ok"
+        try:
+            overview = await self._request(credential, "POST", PACKS_API, body={})
+            packages, ladder = credit_packages(overview, now=moment)
+        except (httpx.HTTPError, MioraHTTPError, UpstreamProtocolViolation, RecursionError):
+            # 明细失败仍保留已拿到的汇总与真实最早作废批次，不伪造原始积分包。
+            packages_status = "summary_only" if next_expiring is not None else "unavailable"
+            ladder = [next_expiring] if next_expiring is not None else None
+        detail["miora_credits"] = {
+            "packages_status": packages_status,
+            "next_expiring": ({"credit": next_expiring[1], "expires_at": next_expiring[0]}
+                              if next_expiring is not None else None),
+        }
+        return Quota(remaining=remaining, total=total, cycle_end=ladder[0][0] if ladder else None,
+                     expiry_ladder=ladder, packages=packages, probed_at=moment, detail=detail)
 
     async def refresh_token(self, credential: MioraCredential) -> dict:
         if not credential.refresh_token:
@@ -390,7 +449,7 @@ class MioraClient(LazyClients):
             if selected is None:
                 raise InvalidModelName("Miora 不提供指定模型")
             # tier/effort 属于运行时全局设置，整轮按账号串行；不同账号仍并行。
-            async with account.lock:
+            async with self._account_turn(account):
                 if self.before_inference is not None:
                     self.before_inference()
                 current = current_credential(credential, self.reload_credential)
@@ -446,6 +505,11 @@ class MioraClient(LazyClients):
                                 text.append(event.content or "")
                             elif event.kind == EventKind.FINISH:
                                 finish = event
+                            elif event.kind == EventKind.ERROR:
+                                yield event
+                                # 不能在失败后解析缓冲的工具JSON并向客户端提出执行；
+                                # 外层即使继续消费，错误也必须保持终态。
+                                raise UpstreamProtocolViolation("Miora 对话未成功结束")
                             else:
                                 yield event
             finally:

@@ -25,17 +25,23 @@ export type Health = number | null;
 
 /** 额度包明细（管理台悬浮展示）：各渠道的积分/权益包。 */
 export interface QuotaPackage {
-  /** 包名：CodeBuddy 为 PackageName；TRAE 为福利积分/每月登录赠送/签到奖励等，可能为空 */
+  /** 包名：CodeBuddy 为 PackageName；Miora 为 packageName；TRAE 为福利积分/每月登录赠送/签到奖励等，可能为空 */
   name: string;
   total: number;
   used: number;
-  /** 到期 epoch；无到期信息为 null。CodeArts 为整份套餐到期日，非每笔积分到期日 */
+  /** 到期 epoch；无到期信息为 null。Miora 为各积分包 endAt，与会员期限独立；CodeArts 为整份套餐到期日，非每笔积分到期日 */
   end: number | null;
-  /** 7 天内即将到期的积分（CodeArts 分项包才给）；上游未提供为 null */
+  /** 7 天内即将到期的积分（CodeArts 分项/Miora 积分包给）；上游未提供为 null */
   expiring?: number | null;
   /** 该池是否真的可用（缺省视为可用）。小浣熊的充值池被冻结时为 false ——
-   * 「看得见用不了」，与「已用完」不是一回事。 */
+   * Miora 退款/冻结等无效包也为 false；「看得见用不了」与「已用完」不同。 */
   usable?: boolean;
+}
+
+/** Miora 官方积分明细的获取状态；最早到期批次与整账号余额分开。 */
+export interface MioraCredits {
+  packages_status: "ok" | "summary_only" | "unavailable";
+  next_expiring: { credit: number; expires_at: number } | null;
 }
 
 /** 一条 (凭证, 模型) 级冷却：模型级限流或「该渠道无此模型」负缓存。 */
@@ -86,7 +92,7 @@ export interface Credential {
   /** 额度包明细（含包名，仅供展示）；未探测或上游未提供时为 null */
   quota_packages: QuotaPackage[] | null;
   /** 仅展示，模型权限仍按官方账号目录；旧库/未探测时缺省或 null。 */
-  quota_detail?: { miora_subscription?: MioraSubscription } | null;
+  quota_detail?: { miora_subscription?: MioraSubscription; miora_credits?: MioraCredits } | null;
   /** 网页明细源状态：null=未配置/未知，ok=正常，expired=网页会话失效（仅提示） */
   web_cookie_state: "ok" | "expired" | null;
   /**
@@ -701,7 +707,7 @@ export interface CheckinResult {
 }
 
 /** 批量动作：与后端 `BATCH_ACTIONS` 同口径（只收已有单条端点的动作）。 */
-export type BatchAction = "probe" | "toggle" | "checkin" | "revive";
+export type BatchAction = "probe" | "toggle" | "checkin" | "revive" | "delete";
 
 /**
  * 批量执行结果的一行。

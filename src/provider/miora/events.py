@@ -25,6 +25,8 @@ def classify_status(status: int, body: bytes = b"") -> ErrKind:
         return ErrKind.SOFT
     if status in (400, 404, 422):
         return ErrKind.INVALID
+    if 500 <= status < 600:
+        return ErrKind.SOFT
     return ErrKind.OTHER
 
 
@@ -68,7 +70,9 @@ def parse_update(frame: Any) -> list[Event]:
     result = frame.get("result")
     if isinstance(result, dict) and "stopReason" in result:
         reason = result["stopReason"]
-        if reason in ("end_turn", "cancelled", "canceled", "stop"):
+        # 客户端主动取消由异步生成器取消处理；收到上游 cancelled 终态时
+        # 本次回答并未正常完成，不能将部分输出伪装为成功的 stop。
+        if reason in ("end_turn", "stop"):
             return [Event(kind=EventKind.FINISH, finish_reason="stop")]
         if reason in ("max_tokens", "length"):
             return [Event(kind=EventKind.FINISH, finish_reason="length")]

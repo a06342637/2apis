@@ -47,7 +47,9 @@ async def test_real_miora_window_counts_are_independent_of_concurrency_without_r
     app = build_app(settings)
     services = app.state.services
     pacer = services.registry["miora"].pacer
-    assert pacer.max_concurrency == 1 and pacer.max_requests_per_window == 3
+    assert pacer.max_concurrency == 1 and pacer.max_requests_per_window == 0
+    services.settings.set("miora_max_requests_per_window", 3)
+    assert pacer.max_requests_per_window == 3
     services.settings.set("miora_max_concurrency", 2)
     assert pacer.max_requests_per_window == 3
     clock = [0.0]

@@ -55,6 +55,7 @@ async def with_keepalive(frames: AsyncIterator[bytes],
         interval = KEEPALIVE_SECONDS
     iterator = ContextBoundIterator(frames)
     pending: asyncio.Task[bytes] | None = None
+    ticker: asyncio.Task[None] | None = None
     try:
         while True:
             if pending is None:
@@ -78,12 +79,21 @@ async def with_keepalive(frames: AsyncIterator[bytes],
         # 客户端断开 / 生成器关闭：清掉在途任务，避免 "Task was destroyed"。
         # cancel() 只是「请求取消」，必须 await 到任务真正结束再退出——否则
         # 生成器所在事件循环很快回收，任务以 pending 状态被销毁并打印告警。
-        if pending is not None and not pending.done():
-            pending.cancel()
-            await asyncio.gather(pending, return_exceptions=True)
-        # 同样要显式关闭上游迭代器：提前结束（首帧改判 400 / 客户端断开）时
-        # `async for` 不会关闭它，节流名额只能等 GC。
-        await aclose_stream(iterator)
+        with CancelScope(shield=True):
+            try:
+                if ticker is not None:
+                    ticker.cancel()
+                    await asyncio.gather(ticker, return_exceptions=True)
+            finally:
+                try:
+                    if pending is not None:
+                        if not pending.done():
+                            pending.cancel()
+                        await asyncio.gather(pending, return_exceptions=True)
+                finally:
+                    # 提前结束时 `async for` 不会关闭源流；取消 scope 也不能
+                    # 中断显式关闭，否则账号并发许可只能等 GC 归还。
+                    await aclose_stream(iterator)
 
 
 async def _first_then(first: bytes, iterator: AsyncIterator[bytes],
@@ -121,9 +131,74 @@ async def _after_pending(pending: asyncio.Task[bytes],
         await aclose_stream(iterator)
 
 
+class _OwnedSSEIterator:
+    """首帧任务与源流共用一个幂等所有者，正文和响应收尾均可释放。"""
+
+    def __init__(self, iterator: AsyncIterator[bytes],
+                 release: Callable[[], None] | None = None):
+        self._iterator = iterator
+        self._pending: asyncio.Task[bytes] | None = None
+        self._release = release
+        self._closed = False
+
+    def prefetch(self) -> asyncio.Task[bytes]:
+        self._iterator = ContextBoundIterator(self._iterator)
+        read = anext(self._iterator)
+        try:
+            self._pending = asyncio.ensure_future(read)
+        except BaseException:
+            read.close()
+            raise
+        return self._pending
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await anext(self._iterator)
+
+    async def aclose(self):
+        if self._closed:
+            return
+        self._closed = True
+        with CancelScope(shield=True):
+            try:
+                if self._pending is not None:
+                    if not self._pending.done():
+                        self._pending.cancel()
+                    # 已完成的任务也要取走异常：宽限之后、发送响应头之前仍可能失败。
+                    await asyncio.gather(self._pending, return_exceptions=True)
+            finally:
+                try:
+                    await aclose_stream(self._iterator)
+                finally:
+                    # 配额在生成器启动前已准入；未启动或关闭失败也必须归还。
+                    if self._release is not None:
+                        self._release()
+
+
+class _OwnedSSEResponse(StreamingResponse):
+    """即使发送响应头失败、正文从未迭代，也归还预取任务与源流。"""
+
+    def __init__(self, frames, owner: _OwnedSSEIterator, media_type: str):
+        self._owner = owner
+        super().__init__(frames, media_type=media_type)
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with CancelScope(shield=True):
+                try:
+                    await aclose_stream(self.body_iterator)
+                finally:
+                    await self._owner.aclose()
+
+
 async def respond_with_stream_start(frames: AsyncIterator[bytes],
                                     terminal: dict[str, str],
                                     media_type: str = "text/event-stream",
+                                    release: Callable[[], None] | None = None,
                                     ) -> Response:
     """拉首帧后再发响应头：无效请求返回 400，运营暂停返回 503。
 
@@ -135,35 +210,40 @@ async def respond_with_stream_start(frames: AsyncIterator[bytes],
     其余终态（`no_healthy_credential` 等）维持 200 错误帧，
     避免改掉既有 503 / 排队语义。宽限内无首帧 → 照旧发头，取帧任务保留。
     """
-    iterator = ContextBoundIterator(frames)
-    pending: asyncio.Task[bytes] = asyncio.ensure_future(anext(iterator))
-    grace = asyncio.ensure_future(asyncio.sleep(STREAM_START_GRACE_SECONDS))
+    owner = _OwnedSSEIterator(frames, release)
     try:
-        done, _ = await asyncio.wait({pending, grace},
-                                     return_when=asyncio.FIRST_COMPLETED)
-    except BaseException:                    # 客户端断开 / 任务被取消
-        pending.cancel()
-        await asyncio.gather(pending, return_exceptions=True)
-        await aclose_stream(iterator)
+        pending = owner.prefetch()
+        grace_wait = asyncio.sleep(STREAM_START_GRACE_SECONDS)
+        try:
+            grace = asyncio.ensure_future(grace_wait)
+        except BaseException:
+            grace_wait.close()
+            raise
+        try:
+            done, _ = await asyncio.wait({pending, grace},
+                                         return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            grace.cancel()
+            with CancelScope(shield=True):
+                await asyncio.gather(grace, return_exceptions=True)
+        if pending not in done:                    # 宽限到点：发头，继续等原任务
+            return _OwnedSSEResponse(_after_pending(pending, owner), owner, media_type)
+        try:
+            first = pending.result()
+        except StopAsyncIteration:
+            await owner.aclose()                  # 空流：保持原有 200 空 body
+            return StreamingResponse(b"", media_type=media_type)
+        code = terminal.get("code", "")
+        status = {"invalid_request": 400, "service_paused": 503}.get(code)
+        if status is not None:
+            await owner.aclose()
+            return JSONResponse(
+                error_payload(terminal.get("message", ""), code, status),
+                status_code=status)
+        return _OwnedSSEResponse(_first_then(first, owner), owner, media_type)
+    except BaseException:                    # 构造失败 / 客户端断开 / 任务被取消
+        await owner.aclose()
         raise
-    finally:
-        grace.cancel()
-    if pending not in done:                    # 宽限到点：发头，继续等原任务
-        return StreamingResponse(_after_pending(pending, iterator),
-                                 media_type=media_type)
-    try:
-        first = pending.result()
-    except StopAsyncIteration:
-        await aclose_stream(iterator)          # 空流：保持原有 200 空 body
-        return StreamingResponse(b"", media_type=media_type)
-    code = terminal.get("code", "")
-    status = {"invalid_request": 400, "service_paused": 503}.get(code)
-    if status is not None:
-        await aclose_stream(iterator)
-        return JSONResponse(
-            error_payload(terminal.get("message", ""), code, status),
-            status_code=status)
-    return StreamingResponse(_first_then(first, iterator), media_type=media_type)
 
 
 # 保活已提交 200 之后上游才失败时的正文：状态码已经发出去了，改不回来，只能

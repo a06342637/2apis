@@ -1,6 +1,41 @@
-# 2apis · v0.1.5
+# 2apis · v0.1.6
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.6 并发调用与系统修复
+
+- 单个账号的「导出凭证」和已选账号栏的「批量导出凭证」都先展开二级菜单，可选择「下载 JSON」或「复制到剪贴板」。两种方式使用同一份可重新导入的数据；复制成功提示「已复制到剪贴板」，失败保留选择并允许重试。
+- 已选账号栏支持「批量删除」，先确认当前选中数量；成功项移出选择，失败项保留并展示原因，修改勾选或筛选会撤销旧确认。只操作选中账号，不触发上游推理或刷新。
+
+- Miora 独立请求优先分配给本地并发、频率窗口等待最短的账号，减少忙碌账号排队；连续会话、工具回传和手工指定仍保持账号约束。单次本地节流或账号锁等待最多 60 秒，超时明确失败并按原轮换预算尝试其他账号，不处罚健康账号。
+- Miora 默认不再叠加每分钟 3 次的本地窗口限制，避免第三次调用后人为等待一分钟；单账号串行和最小间隔保留，真实上游限流仍换号或退避。已显式配置的窗口次数仍有效，可在管理台调整。
+- 首事件超时默认 120 秒，流内空闲超时默认 300 秒，流式和非流式共用；心跳和空事件不能无限延长请求。流式部分输出后超时报告错误；非流式尚未提交正文时丢弃不完整结果并安全重试。两个配置都允许显式设为 0 关闭。
+- 非流式收到上游错误事件后立即处理失败，不继续等待停滞连接的 EOF，及时释放账号并按原规则切换。
+- ACP 通知长连接、推理 POST 和控制请求使用独立连接池，避免长流占满连接后无法初始化、回复权限回调或取消；取消与连接删除仍有独立截止时间。
+- 恢复探测位已满时继续尝试其余健康账号；取消请求和超时后的后台取帧任务会完整收尾，避免异步清理被重复取消打断或遗漏已完成任务的异常。
+- SSE 在响应头阶段断开也会关闭预取任务和上游流，避免反复断开后占满账号名额；本版同时包含多账号邮箱 Cookie 导入、会员和各积分包到期展示，以及导入/导出、模型弹层和更新恢复修复。
+
+## Miora 多账号导入与调用
+
+- 批量导入支持邮箱紧贴凭证：`邮箱{JSON}` 或 `邮箱{authToken=...; refreshToken=...}`。每行一份账号，邮箱保存为账号备注/昵称，Cookie 与刷新票只绑定该行。
+- 独立会话在可用 Miora 账号间轮询，并优先分摊给在途请求较少的账号；没有会话标识和历史的首次提问即使文字相同也独立分摊。同一会话及工具回传优先复用仍有效的账号。手动指定、API Key 绑定范围和各账号模型权限继续生效。
+- 并行对话若初始提示完全相同，请使用独立 `conversation_id` 或会话头来稳定账号亲和；没有显式标识时只能按消息前缀推断，相同前缀可能碰撞。完整客户端历史仍随每轮请求转发，亲和不会扩大 Key 或模型授权范围。
+- 已知积分耗尽的账号不再承接付费或倍率未知的聊天模型；上游明确标为零倍率的模型保留可用性，仅信用额度耗尽的冷却不会封锁它，认证失效、暂停和限流约束继续生效。未知余额不视为零。额度不足、限流或账号失效时按故障分类切换可用账号；HTTP 5xx 暂时故障会进入短冷却，避免下一请求立即撞回故障账号。
+- 上游取消或两条 ACP 通道终态冲突会明确报错，不能把部分回答标为正常完成。首字节前失败可安全换号；已输出内容后发生异常时保留已输出内容并报告失败，错误后不再提出缓冲中的工具调用。
+
+```text
+first@example.com{authToken=FIRST_TOKEN; refreshToken=FIRST_REFRESH}
+second@example.com{"authToken":"SECOND_TOKEN","refreshToken":"SECOND_REFRESH"}
+```
+
+## 本地修复与会员到期展示
+
+- Miora 单条 Cookie 导入会保留同一份 Cookie 中的 `refreshToken`，让主动暂停的账号仍能按原规则预刷新票据。
+- Miora 账号显示会员剩余时间；会员明细展示上游确认的北京时间到期日期，7 天内到期会提示。免费套餐、未知会员和探测失败时不虚构倒计时。
+- Miora 积分明细按上游积分包分别显示订阅、充值、赠送等来源的剩余、已用及到期时间；免费注册赠送和试用积分也可能到期。积分包使用自己的 `endAt`，与会员期限独立；未知日期不会标为永久有效。
+- 批量导入读取文件时禁用提交，后选文件覆盖先选文件的读取结果，提交期间阻止重复操作及误关对话框。
+- 批量导出的解密与 JSON 编码在线程中串行执行，避免大量凭证导出阻塞服务响应或同时编码占用内存。
+- 更新助手重启后会回收本项目中断的 BuildKit 构建器并保留缓存；回收失败会显示恢复待处理状态，原服务继续运行，可在主机修复后重试恢复。
 
 ## v0.1.5 批量导出凭证
 
@@ -229,7 +264,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.5`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.6`）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 
@@ -307,7 +342,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 - **usage 收尾帧**：finish chunk 后、`data: [DONE]` 前补一帧 `choices: []` 的 usage；上游没上报就不补，未上报字段一律 `null`。
 - **思考 token**：需客户端带 `reasoning_effort`；CodeBuddy 未给补 `medium`（否则思考进正文），显式值原样透传。
 - **首帧延迟发头**：流式不立刻发 200，先等上游第一帧（宽限 5s，`api/streaming.STREAM_START_GRACE_SECONDS`）。首帧是**请求级错误**（11128 风控、11115 上下文超限、11135 坏图、11129 工具 schema、4001 模型不属于该上游）→ 回 **400 JSON**（`invalid_request`）；宽限内无帧 → 照旧发 200（不取消在途取帧）；已出帧后的错误维持 `200 + 错误帧`。
-- **流式超时（默认关）**：`STREAM_FIRST_EVENT_TIMEOUT_SECONDS`（首事件超时，出帧前可换号，记 `upstream_first_event_timeout`，心跳不重置计时）、`STREAM_IDLE_TIMEOUT_SECONDS`（已出帧只断流不换号）。默认关是刻意的：实测慢上下文首字 40–71s；要用按部署开（推荐 60 / 300）。
+- **调用停滞超时**：`STREAM_FIRST_EVENT_TIMEOUT_SECONDS` 默认 120 秒（首事件超时，出帧前可换号，记 `upstream_first_event_timeout`，心跳不重置计时），`STREAM_IDLE_TIMEOUT_SECONDS` 默认 300 秒（已出帧报告错误，不拼接另一账号回答）。非流式聚合同样逐事件检查，部分结果尚未提交时可以安全重试；显式设为 0 可关闭。
 
 ### Playground
 
@@ -543,8 +578,9 @@ curl -X POST http://127.0.0.1:8000/v1/fetch \
 ### 凭证暂停与批量运维
 
 - **暂停** = 摘出 API 选号与模型列表。token 预刷新、额度探测、签到和成长维护照常；模拟推理活跃与模型探活跳过。系统硬禁用表示凭据失效，需要重登后恢复。同一开关 `POST /api/credentials/{id}/toggle`；手工删除的账号不会在重启后复活。
-- **批量**：`POST /api/credentials/batch`，`{action: "probe"|"toggle"|"checkin"|"revive", ids: [...], enabled?, force?}`，一次 ≤200 条，重复 id 去重。
+- **批量**：`POST /api/credentials/batch`，`{action: "probe"|"toggle"|"checkin"|"revive"|"delete", ids: [...], enabled?, force?}`，一次 ≤200 条，重复 id 去重。
 - **批量导入**：`POST /api/credentials/batch-import`，`{items: [{provider, credential, nickname?, tags?}]}`，一次 ≤100 条；坏条目进 `failed`（带 `index` 与原因），同渠道解密后内容一致进 `skipped`。支持粘贴 JSON 数组 / JSONL 或选文件。
+- **批量删除**：`POST /api/credentials/batch` 支持 `action=delete`，沿用 ≤200 个去重后的账号 ID、operator/CSRF 校验和逐条结果。单个失败不影响其余账号；成功删除记录具体目标及批量汇总审计，留痕失败不会把已生效删除误报为失败。
 - **单条导出**：`GET /api/credentials/{id}/export` 返回与导入同形的 JSON（含明文凭证，仅 admin / operator，落 `credential.export` 审计）。
 - **「恢复」≠「取消暂停」**：`revive` 解系统硬禁用（需先重新登录），`toggle enabled=true` 才取消暂停。
 - **`revive` 默认保留上游点名的冷却**（限流 / 余额 / 权益 / 风控）：清掉只会立刻再撞一次。强制清除走 `force=true`（前端「强制恢复」）。签到失败回 `ok=false` + 可读 `message`，不 500。审计只记一条汇总，写失败只 warning。
@@ -824,8 +860,8 @@ python3 scripts/restore_db.py data/backups/coding2api-20261014-030000.sqlite3 --
 | `CONTEXT_COMPRESS_STICKY_ENABLED` | `true` | 粘性裁剪：一次裁到预算 60% 并锁定窗口起点，跨轮前缀不变以命中上游缓存 |
 | `PREFIX_DEBUG_ENABLED` | `false` | 前缀缓存诊断：每请求一行载荷指纹（只记摘要）。可热更 |
 | `UPSTREAM_COMPLETE_TIMEOUT_SECONDS` | `600` | 非流式聚合整体超时；`≤0` 关闭 |
-| `STREAM_FIRST_EVENT_TIMEOUT_SECONDS` | `0` | 首事件超时（出帧前可换号）。**默认必须保持关闭**，推荐 60。可热更 |
-| `STREAM_IDLE_TIMEOUT_SECONDS` | `0` | 流内空闲超时（已出帧只断流不换号），推荐 300。可热更 |
+| `STREAM_FIRST_EVENT_TIMEOUT_SECONDS` | `120` | 首事件超时（出帧前可换号）；流式/非流式共用，0 关闭。可热更 |
+| `STREAM_IDLE_TIMEOUT_SECONDS` | `300` | 空闲超时；已出帧只报告错误，非流式未提交正文可重试，0 关闭。可热更 |
 | `SHORT_COOLDOWN_WAIT_SECONDS` | `60`（compose 显式设 `0`） | 全池短冷却时原地等最短剩余冷却（≤ 该值），等到的号解禁后重取一次；`0` = 快速失败。可热更；非流式建议同时开 `NONSTREAM_KEEPALIVE_SECONDS=15` |
 | `NONSTREAM_KEEPALIVE_SECONDS` | `0` | 非流式出口 N 秒未完成 → 转 chunked 吐空白心跳；`0` = 关，仅 CDN 后需要，推荐 15。可热更 |
 | `MODEL_ALIASES` | `""` | 自定义别名；留空不启用。可热更 |

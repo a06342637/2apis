@@ -59,6 +59,9 @@ export function quotaSemantics(credential: Credential): string {
   if (credential.provider === "trae") {
     return "账户剩余（单调递减）";
   }
+  if (credential.provider === "miora") {
+    return "积分余额（试用、购买等积分各自到期；详情以上游提供的积分包为准）";
+  }
   // CodeArts 的额度就是积分（内置模型计费，上游数值本身即积分，不经折算）；
   // 积分包各自有到期日，用完不掉，到期即作废，故不说「本周期」。
   if (credential.provider === "codearts") {

@@ -10,13 +10,15 @@ import type { Credential } from "../../api/types";
 import { LongTextTip } from "../../components/Tip";
 import { Button } from "../../ui";
 import { packageExpiry } from "./helpers";
+import { MioraQuotaDetails } from "./MioraQuotaDetails";
 
 /** 额度包明细：一个账号常有几十个各自独立到期的积分/权益包，
  * 汇总（剩余/总量）看不出"哪些包、什么时候过期"。表格里只在首行
  * 「剩余 / 总量」右侧留一个「套餐 N 个」，鼠标悬浮才弹出完整明细——
  * 几十行不能挤进单元格。无明细（未探测/上游未提供）时不渲染。
  */
-export function PackageLadder({ credential }: { credential: Credential }) {
+export function PackageLadder({ credential, now = Date.now() / 1000 }: { credential: Credential; now?: number }) {
+  if (credential.provider === "miora") return <MioraQuotaDetails credential={credential} now={now} />;
   // 已消耗完（剩余 ≤ 0）的包不再展示：它们只是上游按期返回的历史残留，
   // 既不带可用积分、也不会再被消耗，堆在弹层里只会淹没还有余额的包。
   const packages = (credential.quota_packages ?? []).filter(

@@ -41,13 +41,17 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { Badge, Button, Checkbox, TableCell, TableHead, TableRow } from "../../ui";
 import type { Actions } from "./actions";
 import { ModelCooldownList, PackageLadder, TokenExpiry } from "./cells";
 import { supportsActivity, supportsCheckin, supportsGrowth } from "./helpers";
-import { mioraAccountPlan } from "./mioraAccountPlan";
+import { MioraPlanBadge } from "./MioraPlanBadge";
+import { CredentialExportOptions } from "./ExportOptions";
 
 /**
  * 列头行：**迁移到每个展开的渠道组内部**，不再是全局表头。
@@ -177,7 +181,6 @@ export function Row({
   const cooldown = cooldownRemaining(credential.cooling_until, now);
   const tokenExpiry = tokenExpiryView(
     credential.token_expires_at, tokenWarning, now, credential.token_issued_at);
-  const plan = mioraAccountPlan(credential, now);
 
   // 抽屉由调用方渲染成**独立的下一行**（见 TableBody）：塞进本行的最后一个单元格
   // 只会挤在「操作」列里——同行内的 colSpan 不生效，整行高度会被拉坏。
@@ -206,9 +209,7 @@ export function Row({
           >
             {credential.nickname || credential.id.slice(0, 12)}
           </span>
-          {plan && <span data-testid={`miora-plan-${credential.id}`} className="shrink-0" title={plan.description}>
-            <Badge tone={plan.tone}>{plan.label}</Badge>
-          </span>}
+          <MioraPlanBadge credential={credential} now={now} />
           {credential.pinned === 1 && <Badge tone="accent">已指定</Badge>}
           {credential.limits && (
             <span data-testid={`limits-badge-${credential.id}`}>
@@ -308,7 +309,7 @@ export function Row({
             <ModelCooldownList credential={credential} now={now} />
           </span>
           {/* 套餐明细：CodeBuddy / TRAE 的权益包与 CodeArts 的积分包都走这里。 */}
-          {<PackageLadder credential={credential} />}
+          {<PackageLadder credential={credential} now={now} />}
         </div>
         {/* 到期积分：直接来自后端按凭证自己的阶梯算好的窗口内到期额。 */}
         {expiring && (
@@ -489,12 +490,16 @@ export function Row({
                         )}
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem
-                      onSelect={() => actions.export(credential)}
-                      title="导出为 JSON（含明文令牌，可原样再导入；操作会记审计）"
-                    >
-                      <Download className="size-4" /> 导出凭证
-                    </DropdownMenuItem>
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger disabled={busy}
+                        title="导出为 JSON（含明文令牌，可原样再导入；操作会记审计）">
+                        <Download className="size-4" /> 导出凭证
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent className="min-w-40">
+                        <CredentialExportOptions busy={busy}
+                          onChoose={(mode) => actions.export(credential, mode)} />
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
                       onSelect={() => onConfirmDelete(credential.id)}

@@ -1,8 +1,11 @@
-import { Download, Search } from "lucide-react";
+import { ChevronDown, Download, Search, Trash2 } from "lucide-react";
 import { DEFAULT_FILTERS, ANY } from "../../lib/credentialList";
 import type { CountedOption, CredentialFilters, GroupSort } from "../../lib/credentialList";
 import { Button, Input, Select } from "../../ui";
 import { BATCH_BUTTONS, type BatchButton } from "./helpers";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { CredentialExportOptions } from "./ExportOptions";
+import type { CredentialExportMode } from "./export";
 
 /** 筛选工具条：纯展示层收敛，不改后端排序（后端仍按 sort/order 给全量）。 */
 export function CredentialFilterBar({
@@ -130,12 +133,20 @@ export function BatchActionBar({
   busy,
   onRun,
   onExport,
+  confirmingDelete,
+  onDelete,
+  onConfirmDelete,
+  onCancelDelete,
   onClear,
 }: {
   selectedCount: number;
   busy: boolean;
   onRun: (button: BatchButton) => void;
-  onExport: () => void;
+  onExport: (mode: CredentialExportMode) => void;
+  confirmingDelete: boolean;
+  onDelete: () => void;
+  onConfirmDelete: () => void;
+  onCancelDelete: () => void;
   onClear: () => void;
 }) {
   return (
@@ -151,26 +162,44 @@ export function BatchActionBar({
                     key={button.key}
                     size="sm"
                     variant="default"
-                    disabled={busy}
+                    disabled={busy || confirmingDelete}
                     data-testid={`batch-${button.key}`}
                     onClick={() => onRun(button)}
                   >
                     {button.verb}
                   </Button>
                 ))}
-                <Button
-                  size="sm"
-                  variant="default"
-                  disabled={busy}
-                  data-testid="batch-export"
-                  onClick={onExport}
-                >
-                  <Download className="size-3.5" /> 导出凭证
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="default" disabled={busy || confirmingDelete} data-testid="batch-export">
+                      <Download className="size-3.5" /> 批量导出凭证 <ChevronDown className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent side="right" align="start" className="min-w-40">
+                    <CredentialExportOptions busy={busy} onChoose={onExport} />
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {confirmingDelete ? <>
+                  <span className="text-xs text-destructive" data-testid="batch-delete-question">
+                    确认删除选中的 {selectedCount} 个凭证？
+                  </span>
+                  <Button size="sm" variant="danger" disabled={busy}
+                    data-testid="batch-delete-confirm" onClick={onConfirmDelete}>
+                    确认删除 {selectedCount} 个凭证
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={busy}
+                    data-testid="batch-delete-cancel" onClick={onCancelDelete}>
+                    取消删除
+                  </Button>
+                </> : <Button size="sm" variant="default" disabled={busy}
+                  className="text-destructive hover:text-destructive"
+                  data-testid="batch-delete" onClick={onDelete}>
+                  <Trash2 className="size-3.5" /> 批量删除
+                </Button>}
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={busy}
+                  disabled={busy || confirmingDelete}
                   data-testid="batch-clear"
                   onClick={onClear}
                 >

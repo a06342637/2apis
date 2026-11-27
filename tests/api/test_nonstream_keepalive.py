@@ -322,20 +322,35 @@ def test_endpoint_keepalive_enabled_fast_request_stays_plain(tmp_path):
 
 def test_endpoint_keepalive_enabled_slow_request_streams(tmp_path):
     """打开保活且超过宽限期：200 + chunked + 空白前导，正文仍是合法 JSON。"""
-    import asyncio as aio
-
     from tests.helpers.events import TRAE_GOOD
+
+    gate = asyncio.Event()
 
     class SlowProvider:
         id = "trae"
 
         async def stream_chat(self, _credential_data, _payload, _model):
-            await aio.sleep(0.05)
+            # 上游必须在真实保活帧发出后才完成；两个短 sleep 在受限 CPU 上
+            # 可能一起被延后，不能据其调度顺序断言必有空白前导。
+            await asyncio.wait_for(gate.wait(), timeout=5)
             for event in TRAE_GOOD:
                 yield event
 
         async def list_models(self, _credential_data):
             return []
+
+    class ReleaseAfterHeartbeat:
+        def __init__(self, app):
+            self.app = app
+
+        async def __call__(self, scope, receive, send):
+            async def observe_send(message):
+                await send(message)
+                if (message["type"] == "http.response.body"
+                        and message.get("body") == JSON_KEEPALIVE_BYTES):
+                    gate.set()
+
+            await self.app(scope, receive, observe_send)
 
     from fastapi.testclient import TestClient
 
@@ -346,6 +361,7 @@ def test_endpoint_keepalive_enabled_slow_request_streams(tmp_path):
     settings = Settings(_env_file=None, APP_SECRET=SECRET, DATA_DIR=str(tmp_path),
                         ADMIN_USERNAMES="root", nonstream_keepalive_seconds=0.01)
     app = build_app(settings, providers={"trae": SlowProvider()})
+    app.add_middleware(ReleaseAfterHeartbeat)
     with TestClient(app) as client:
         headers = _headers(client)
         response = client.post("/v1/chat/completions", headers=headers,
@@ -355,6 +371,7 @@ def test_endpoint_keepalive_enabled_slow_request_streams(tmp_path):
     assert response.headers["content-type"].startswith("application/json")
     assert response.headers["x-accel-buffering"] == "no"
     assert "content-length" not in response.headers
+    assert gate.is_set()
     assert response.content.startswith(JSON_KEEPALIVE_BYTES)
     assert json.loads(response.content)["choices"][0]["message"]["content"] == "hi"
 

@@ -158,3 +158,39 @@ def test_successful_build_with_failed_stop_is_not_reported_as_complete(host, tmp
         Deployment(host, run=run).build("a/b", SHA, stage)
     assert calls[-2][0][:3] == ["docker", "buildx", "build"]
     assert calls[-1][0] == ["docker", "buildx", "stop", "apis-update-2apis"]
+
+
+@pytest.mark.parametrize("existing", ["", "buildx_buildkit_apis-update-tenant.10"])
+def test_restart_cleanup_does_not_need_buildx_registration_or_delete_caches(host, existing):
+    calls = []
+    container = "buildx_buildkit_apis-update-tenant.10"
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return existing if argv[1] == "ps" else ""
+
+    Deployment(replace(host, project="tenant.1"), run=run).stop_interrupted_build()
+    assert calls[0] == (["docker", "ps", "--all", "--filter",
+                         r"name=^buildx_buildkit_apis\-update\-tenant\.10$",
+                         "--format", "{{.Names}}"], {"timeout": 60})
+    assert [argv for argv, _kwargs in calls[1:]] == (
+        [["docker", "stop", "--time", "10", container]] if existing else [])
+    assert all("buildx" not in argv and "rm" not in argv and "prune" not in argv
+               for argv, _kwargs in calls)
+
+
+@pytest.mark.parametrize("failure", ["query", "stop", "name"])
+def test_restart_cleanup_failure_never_stops_another_project(host, failure):
+    calls = []
+    container = "buildx_buildkit_apis-update-2apis0"
+
+    def run(argv, **_kwargs):
+        calls.append(argv)
+        if (failure == "query" and argv[1] == "ps") or (failure == "stop" and argv[1] == "stop"):
+            raise RuntimeError("Docker unavailable")
+        return "buildx_buildkit_apis-update-another0" if failure == "name" else container
+
+    with pytest.raises(RuntimeError):
+        Deployment(host, run=run).stop_interrupted_build()
+    assert len(calls) == (2 if failure == "stop" else 1)
+    assert not any("buildx_buildkit_apis-update-another0" in argv for argv in calls)

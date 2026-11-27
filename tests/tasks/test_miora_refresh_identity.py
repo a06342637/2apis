@@ -109,6 +109,33 @@ async def test_paused_account_still_refreshes_and_preserves_pause(credentials):
         await provider.aclose()
 
 
+async def test_paused_cookie_import_keeps_refresh_ability(credentials):
+    access = jwt({"sub": "cookie-account", "iat": 1, "exp": 10})
+    data = MioraCredential.from_import({
+        "cookie": f"authToken={access}; refreshToken=synthetic-cookie-refresh; ignored=secret",
+    }).to_dict()
+    cid = credentials.add(provider="miora", credential_data=data)
+    credentials.set_enabled(cid, False)
+
+    def response(request):
+        assert request.url.path == "/api/auth/refresh-token"
+        assert request.content == b'{"refresh_token":"synthetic-cookie-refresh"}'
+        return httpx.Response(200, json={
+            "access_token": jwt({"sub": "cookie-account", "iat": 1000, "exp": 10000}),
+            "refresh_token": "synthetic-renewed-refresh",
+        })
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(response)) as short:
+        provider = MioraProvider(client=MioraClient(short_client=short))
+        report = await RefreshTask(credentials, {"miora": provider},
+            skew_seconds=60, now=lambda: 1000).run_once()
+        assert report.succeeded == 1 and report.failed == 0
+        assert credentials.credential_data(cid)["refresh_token"] == "synthetic-renewed-refresh"
+        assert not credentials.candidates()[0].enabled
+        assert not credentials.candidates()[0].disabled
+        await provider.aclose()
+
+
 async def test_queued_refresh_does_not_repeat_after_terminal_authentication_failure(credentials):
     cid, before = old_account(credentials)
     entered, finish = asyncio.Event(), asyncio.Event()

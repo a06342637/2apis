@@ -6,6 +6,7 @@ import type { ToastItem } from "../../components/Toast";
 import type { Ledger } from "../../lib/credentialList";
 import { errorText } from "../../lib/errors";
 import { GrowthToastContent } from "./toasts";
+import type { CredentialExportMode } from "./export";
 
 /** 变动流水抽屉的打开态：一次只开一本账。 */
 export interface CreditEventsState {
@@ -43,6 +44,7 @@ export interface ActionsDeps {
   setWeightFor: (id: string) => void;
   setWebCookieFor: (id: string) => void;
   setLoginSecretFor: (id: string) => void;
+  exportCredential: (credential: Credential, mode: CredentialExportMode) => void;
 }
 
 export interface Actions {
@@ -62,7 +64,7 @@ export interface Actions {
   weight: (credential: Credential) => void;
   webCookie: (credential: Credential) => void;
   loginSecret: (credential: Credential) => void;
-  export: (credential: Credential) => void;
+  export: (credential: Credential, mode: CredentialExportMode) => void;
 }
 export function buildActions(deps: ActionsDeps): Actions {
   const {
@@ -239,23 +241,6 @@ export function buildActions(deps: ActionsDeps): Actions {
     // 只开对话框；保存与探测由对话框/后端负责
     webCookie: (credential) => setWebCookieFor(credential.id),
     loginSecret: (credential) => setLoginSecretFor(credential.id),
-    export: (credential) =>
-      void (async () => {
-        try {
-          const { blob } = await api.exportCredential(credential.id);
-          const url = URL.createObjectURL(blob);
-          const anchor = document.createElement("a");
-          anchor.href = url;
-          anchor.download =
-            `coding2api-credential-${credential.provider}-${credential.id}.json`;
-          document.body.appendChild(anchor);
-          anchor.click();
-          anchor.remove();
-          URL.revokeObjectURL(url);
-          showNotice("已导出凭证 JSON（含明文令牌，请妥善保管）");
-        } catch (caught) {
-          showError(errorText(caught, "导出凭证失败"));
-        }
-      })(),
+    export: deps.exportCredential,
   };
 }

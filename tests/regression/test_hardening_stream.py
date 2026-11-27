@@ -68,13 +68,20 @@ def _request():
 
 @pytest.mark.asyncio
 async def test_with_keepalive_emits_comment_on_idle():
+    ready = asyncio.Event()
+
     async def slow():
-        await asyncio.sleep(0.05)
+        await ready.wait()
         yield b"data: x\n\n"
 
-    frames = [f async for f in with_keepalive(slow(), interval=0.01)]
-    assert SSE_COMMENT in frames
-    assert frames[-1] == b"data: x\n\n"
+    frames = with_keepalive(slow(), interval=0.01)
+    try:
+        assert await asyncio.wait_for(anext(frames), timeout=1) == SSE_COMMENT
+        ready.set()
+        remaining = [frame async for frame in frames]
+        assert remaining[-1] == b"data: x\n\n"
+    finally:
+        await frames.aclose()
 
 @pytest.mark.asyncio
 async def test_with_keepalive_passes_frames_through_when_fast():
@@ -89,15 +96,21 @@ async def test_with_keepalive_passes_frames_through_when_fast():
 async def test_with_keepalive_uses_protocol_specific_frame():
     """心跳帧随出口协议走：Anthropic 的 ping 事件替换默认注释帧。"""
     ping = b'event: ping\ndata: {"type": "ping"}\n\n'
+    ready = asyncio.Event()
 
     async def slow():
-        await asyncio.sleep(0.05)
+        await ready.wait()
         yield b"data: x\n\n"
 
-    frames = [f async for f in with_keepalive(slow(), interval=0.01,
-                                              keepalive_frame=ping)]
-    assert ping in frames
-    assert SSE_COMMENT not in frames
+    frames = with_keepalive(slow(), interval=0.01, keepalive_frame=ping)
+    try:
+        assert await asyncio.wait_for(anext(frames), timeout=1) == ping
+        ready.set()
+        remaining = [frame async for frame in frames]
+        assert remaining[-1] == b"data: x\n\n"
+        assert SSE_COMMENT not in remaining
+    finally:
+        await frames.aclose()
 
 @pytest.mark.asyncio
 async def test_stream_disconnect_records_usage():

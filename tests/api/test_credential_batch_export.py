@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
+import threading
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -313,3 +316,47 @@ def test_non_ascii_encoding_chunk_cannot_bypass_byte_limit(monkeypatch):
     repository = SimpleNamespace(export_entry=lambda _cid: {"token": "中" * 40})
     with pytest.raises(InvalidRequest, match="超过 16 MiB，请减少选择后重试"):
         encode_credential_export(repository, ["selected"])
+
+
+async def test_export_keeps_health_responsive_and_serializes_encoding(export_app, monkeypatch):
+    app, _client, repository, audit, _probes = export_app
+    cid = repository.add(provider="miora", credential_data={"authToken": "private"})
+    started = asyncio.Event()
+    released = threading.Event()
+    loop = asyncio.get_running_loop()
+    loop_thread = threading.current_thread()
+    threads: list[threading.Thread] = []
+    real_export = repository.export_entry
+
+    def slow_export(credential_id):
+        threads.append(threading.current_thread())
+        loop.call_soon_threadsafe(started.set)
+        assert released.wait(5)
+        return real_export(credential_id)
+
+    async def health():
+        return {"status": "ok"}
+
+    app.add_api_route("/health", health)
+    monkeypatch.setattr(repository, "export_entry", slow_export)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
+                                base_url="http://testserver") as client:
+        first = asyncio.create_task(client.post("/api/credentials/export", json={"ids": [cid]}))
+        second = None
+        try:
+            await asyncio.wait_for(started.wait(), timeout=3)
+            response = await asyncio.wait_for(client.get("/health"), timeout=1)
+            assert response.json() == {"status": "ok"}
+            assert not first.done()
+            second = asyncio.create_task(client.post(
+                "/api/credentials/export", json={"ids": [cid]}))
+            await asyncio.sleep(0.05)
+            assert len(threads) == 1
+        finally:
+            released.set()
+            responses = await asyncio.gather(first, *([second] if second is not None else []))
+        assert all(response.status_code == 200 for response in responses)
+        assert [response.json() for response in responses] == [
+            [repository.export_entry(cid)], [repository.export_entry(cid)]]
+    assert all(thread is not loop_thread for thread in threads[:2])
+    assert len(audit.query(action=ACTION_CREDENTIAL_EXPORT)) == 2

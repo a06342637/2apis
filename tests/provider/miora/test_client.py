@@ -86,7 +86,7 @@ class FakeAcp:
     frames = [update("agent_message_chunk", "answer"), {"result": {"stopReason": "end_turn"}}]
     failures = []
 
-    def __init__(self, client, endpoint, token):
+    def __init__(self, client, endpoint, token, *, post_client=None, control_client=None):
         self.endpoint = endpoint
         self.token = token
 
@@ -273,6 +273,60 @@ async def test_generator_close_cancels_upstream(acp, api):
         await stream.aclose()
         await asyncio.sleep(0)
     assert any(method == "session/cancel" for method, _ in acp.calls)
+
+
+@pytest.mark.parametrize("reason", ["cancelled", "canceled"])
+@pytest.mark.parametrize("partial", [False, True])
+async def test_upstream_cancel_preserves_partial_output_but_never_reports_success(
+    acp, api, reason, partial
+):
+    _, transport = api
+    acp.frames = ([update("agent_message_chunk", "partial answer")] if partial else []) + [
+        {"result": {"stopReason": reason}},
+    ]
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = MioraClient(short_client=http, stream_client=http)
+        credential = MioraCredential("long", uid="account")
+        seen = []
+        with pytest.raises(UpstreamProtocolViolation, match="未成功结束"):
+            async for event in client.stream_chat(credential, {"messages": []}, "hy4flash-free"):
+                seen.append(event)
+        assert [event.content for event in seen if event.kind == EventKind.CONTENT] == (
+            ["partial answer"] if partial else [])
+        assert [event.kind for event in seen if event.kind != EventKind.CONTENT] == [
+            EventKind.ERROR,
+        ]
+        assert seen[-1].error_kind == ErrKind.UPSTREAM_PROTOCOL
+        assert not any(event.kind == EventKind.FINISH for event in seen)
+        assert any(method == "session/cancel" for method, _ in acp.calls)
+        assert client._account(credential).users == 0
+        assert not client._account(credential).lock.locked()
+        await client.aclose()
+
+
+@pytest.mark.parametrize("failure", [
+    {"result": {"stopReason": "cancelled"}},
+    {"error": {"code": -32000, "message": "Bearer private-token"}},
+])
+async def test_upstream_error_never_releases_buffered_tool_proposals(acp, api, failure):
+    _, transport = api
+    acp.frames = [update("agent_message_chunk",
+        '{"content":null,"tool_calls":[{"name":"constant","arguments":{}}]}'), failure]
+    payload = {"messages": [], "tool_choice": "required", "tools": [
+        {"type": "function", "function": {"name": "constant", "parameters": {"type": "object"}}},
+    ]}
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = MioraClient(short_client=http, stream_client=http)
+        seen = []
+        with pytest.raises(UpstreamProtocolViolation, match="未成功结束"):
+            async for event in client.stream_chat(
+                MioraCredential("long"), payload, "hy4flash-free"
+            ):
+                seen.append(event)
+        assert [event.kind for event in seen] == [EventKind.ERROR]
+        assert "private-token" not in seen[0].error_message
+        assert any(method == "session/cancel" for method, _ in acp.calls)
+        await client.aclose()
 
 
 async def test_native_model_without_subagent_tier(acp, api):

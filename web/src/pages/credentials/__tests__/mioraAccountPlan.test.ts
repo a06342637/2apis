@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Credential } from "../../../api/types";
 import { makeCredential } from "@/test-utils";
-import { mioraAccountPlan } from "../mioraAccountPlan";
+import { mioraAccountPlan, mioraPlanExpiryTime } from "../mioraAccountPlan";
 
 const NOW = 1_800_000_000;
 type Subscription = NonNullable<NonNullable<Credential["quota_detail"]>["miora_subscription"]>;
@@ -45,9 +45,28 @@ describe("Miora 账号套餐状态", () => {
     { status: "unknown" as const, vip: null, tier: null },
     { expires_at: null },
     { expires_at: Number.NaN },
+    { expires_at: 0 },
+    { expires_at: -1 },
+    { expires_at: Number.POSITIVE_INFINITY },
     { vip: false },
     { tier: "free" as const },
   ])("不完整或矛盾的付费状态不冒认VIP：%j", (fields) => {
     expect(mioraAccountPlan(credential(subscription(fields)), NOW)?.label).toBe("套餐未获取");
+  });
+  it("剩余时间与7天临期提醒跟随当前时间，到期后不再显示剩余会员", () => {
+    const row = credential(subscription({ expires_at: NOW + 8 * 86400 }));
+    expect(mioraAccountPlan(row, NOW)).toMatchObject({ expiresAt: NOW + 8 * 86400,
+      remainingSeconds: 8 * 86400, expiring: false });
+    expect(mioraAccountPlan(row, NOW + 86400)).toMatchObject({ remainingSeconds: 7 * 86400, expiring: true });
+    expect(mioraAccountPlan(row, NOW + 8 * 86400)).toMatchObject({ remainingSeconds: 0, expiring: false, label: "套餐已到期" });
+  });
+  it("免费或未确认套餐没有虚构到期日期或倒计时", () => {
+    expect(mioraAccountPlan(credential(subscription({ tier: "free", status: "free", vip: false, expires_at: null })), NOW))
+      .toMatchObject({ expiresAt: null, remainingSeconds: null, expiring: false });
+    expect(mioraAccountPlan(credential(), NOW)).toMatchObject({ expiresAt: null, remainingSeconds: null, expiring: false });
+    expect(mioraAccountPlan({ ...credential(subscription()), health: null }, NOW)).toMatchObject({ expiresAt: null, remainingSeconds: null });
+  });
+  it("会员到期时间明确按北京时间跨日展示", () => {
+    expect(mioraPlanExpiryTime(Date.UTC(2026, 10, 26, 20) / 1000)).toBe("2026/11/27 04:00:00");
   });
 });
