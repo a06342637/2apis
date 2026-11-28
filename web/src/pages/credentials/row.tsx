@@ -253,6 +253,11 @@ export function Row({
             <Badge tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Badge>
             <Badge tone={health.tone}>{health.label}</Badge>
           </div>
+          {state === "off" && credential.miora_exhausted_at != null && (
+            <div className="text-xs text-muted-foreground" title="仅在后续探测确认仍无积分时删除">
+              积分耗尽自动暂停 · {formatTime(credential.miora_exhausted_at + 48 * 3600)} 后复查清理
+            </div>
+          )}
           {state === "cooling" && (
             <div className="text-xs text-muted-foreground">{formatDuration(cooldown)}</div>
           )}
@@ -393,7 +398,7 @@ export function Row({
                     )}
                   </>
                 )}
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button
                       size="icon"

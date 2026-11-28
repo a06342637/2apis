@@ -1,6 +1,14 @@
-# 2apis · v0.1.10
+# 2apis · v0.1.11
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.11 远端备份与凭证维护
+
+- 在「任务与配置 → 远端备份」配置私有阿里云 OSS 或 SFTP，设置时区、执行时刻和保留份数；计划关闭后也可手动备份。SFTP 必须填写从目标服务器独立核对的 SHA256 主机公钥指纹。
+- 远端只上传经完整性校验的 SQLite 快照，不包含 `.env`、源码和远端连接配置。跨机恢复时须另行保管原 `APP_SECRET`，否则新实例无法解密凭证。远端连接参数加密保存在当前实例的 `DATA_DIR/remote-backup`，密码和私钥不回显。
+- 「备份与恢复」可浏览、删除或下载并暂存指定目标的本实例文件，重启才会恢复。自动清理只在本目标上传成功后处理本实例的旧备份。「服务端日志」可按「备份」或「Miora 账号维护」分类筛选。
+- 批量导入跳过同渠道的已有账号或重复凭证，不更新它们，结果在输入框下显示；需要更换已有账号的登录信息时使用单条导入或重新登录。删除、探测和签到完成后无需等待列表后台刷新即可继续操作。
+- Miora 实测零积分时自动暂停，48 小时后的成功探测确认仍为零才删除；积分恢复会自动启用。用户手动暂停、探测失败或登录失效不触发删除。删除日志记录账号、剩余与总积分、票据时间和留存期内词元计量，不记录明文票据。
 
 ## v0.1.10 Miora 官方头像
 
@@ -140,7 +148,7 @@ Key 创建/编辑可选全部账号、指定账号或指定分组；绑定分组
 
 ## Miora 接入
 
-Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，重新导入同一账号会更新原凭证。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。暂停仅停止 API 选号，预刷新、额度探测、签到和成长维护继续；模拟推理活跃和模型探活尊重暂停。
+Miora 与 CodeArts 一样进入公共凭证池：可添加多个账号、批量导入、启停、设权重、查积分余额，单条重新导入同一账号可更新原凭证，批量导入则跳过。长期凭证经 `APP_SECRET` 加密保存，预刷新任务在到期窗口轮换 `authToken` / `refreshToken`；失效的刷新票据提示重新登录。暂停仅停止 API 选号，预刷新、额度探测、签到和成长维护继续；模拟推理活跃和模型探活尊重暂停。
 
 导入后会先按账号执行共享预刷新，再用持久化的新票据探测额度；过期 access token 搭配有效 refresh token 可以自动续期，刷新临时失败会保留账号等待重试。并发刷新取得编辑锁后会重新检查有效期，避免重复消费轮转票据。
 
@@ -292,7 +300,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.10`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.11`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

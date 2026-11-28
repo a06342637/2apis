@@ -80,6 +80,21 @@ describe("LogsPage", () => {
     expect(screen.getAllByTestId("log-row")[2]).toHaveTextContent("新的一条");
   });
 
+  it("备份分类查询历史并保留同序号的实时行，过滤其他类别", async () => {
+    const historic = line({ seq: 1, logger: "src.remote_backup.service", message: "远端备份开始" });
+    const spy = mockFetch({ "/api/logs": { capacity: 500, limit: 500, lines: [historic] } });
+    renderPage(<LogsPage />, { username: "root", is_admin: true }, "/logs?category=backup");
+    await screen.findByText("远端备份开始");
+    expect(spy.mock.calls.some(([url]) => String(url).includes("category=backup"))).toBe(true);
+    const source = MockEventSource.last();
+    source.emit(historic);
+    source.emit(line({ seq: 1, ts: historic.ts + 1, logger: "src.remote_backup.service", message: "远端备份已上传" }));
+    source.emit(line({ seq: 2, message: "普通请求" }));
+    await screen.findByText("远端备份已上传");
+    expect(screen.getAllByTestId("log-row")).toHaveLength(2);
+    expect(screen.queryByText("普通请求")).not.toBeInTheDocument();
+  });
+
   it("重复 seq 去重，坏帧丢弃但连接继续", async () => {
     mockFetch({ "/api/logs": SNAPSHOT });
     renderPage(<LogsPage />, { username: "root", is_admin: true });

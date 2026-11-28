@@ -157,11 +157,11 @@ describe("SettingsPage Miora 限速与系统更新", () => {
     expect(screen.getByTestId("input-miora_chat_min_interval")).toHaveValue("5");
   });
 
-  it("更新系统是第三个一级 tab，真实面板按需加载，切换保留草稿与二级选择", async () => {
+  it("远端备份紧跟更新系统，更新面板按需加载，切换保留草稿与二级选择", async () => {
     const { writes, fetchSpy } = setup();
     await screen.findByTestId("input-quota_probe_minutes");
     const top = screen.getByTestId("settings-sections");
-    expect(within(top).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["后台任务", "网关配置", "更新系统"]);
+    expect(within(top).getAllByRole("tab").map((tab) => tab.textContent)).toEqual(["后台任务", "网关配置", "更新系统", "远端备份"]);
     expect(screen.queryByTestId("system-update-panel")).not.toBeInTheDocument();
     expect(fetchSpy.mock.calls.some(([url]) => String(url) === "/api/system-updates")).toBe(false);
     await openTask("account", "activity");

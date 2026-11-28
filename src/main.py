@@ -32,6 +32,7 @@ from .api import (
     admin_keys,
     admin_model_availability,
     admin_model_catalog,
+    admin_remote_backups,
     admin_settings,
     admin_stats,
     admin_updates,
@@ -153,6 +154,8 @@ from .provider.qoder.events import detect_realm_from_domain
 from .provider.raccoon.client import RaccoonClient, RaccoonProvider
 from .provider.trae.client import TraeClient, TraeProvider
 from .provider.zen.client import ZenClient, ZenProvider
+from .remote_backup.config import Store as RemoteBackupStore
+from .remote_backup.service import RemoteBackups
 from .request_context import get_credential_id
 from .runtime_settings import load_runtime_settings
 from .stats.collector import StatsCollector
@@ -454,6 +457,8 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     # 必须在 apply_schema 之后构造——新库的 runtime_settings 表由上面建好。
     runtime = load_runtime_settings(config, RuntimeSettingsRepository(db))
     cipher = CredentialCipher(config.app_secret)
+    remote_backups = RemoteBackups(config.db_path, RemoteBackupStore(
+        Path(config.data_dir) / "remote-backup", cipher), admin_backups.verify_and_stage)
     credentials = CredentialRepository(db, cipher)
     growth_events = GrowthRepository(db)
     credit_events = CreditEventRepository(db)
@@ -915,6 +920,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
         app_.state.upstream_warmup_task = asyncio.create_task(
             _warm_upstream_status(upstream_status_task))
         # 让预热任务先跑一步：失败时日志立即落盘（成功与否都不阻塞下面 yield）。
+        remote_backup_scheduler = asyncio.create_task(remote_backups.schedule())
         await asyncio.sleep(0)
         try:
             yield
@@ -927,6 +933,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
             if start_task is not None and not start_task.done():
                 with contextlib.suppress(Exception):
                     await start_task
+            await remote_backups.close(remote_backup_scheduler)
             await runner.stop()
             warmup = getattr(app_.state, "model_warmup_task", None)
             if warmup is not None and not warmup.done():
@@ -1140,6 +1147,7 @@ def build_app(settings: Settings | None = None, *, providers: dict | None = None
     app.include_router(admin_keys.create_router(services))
     app.include_router(admin_settings.create_router(services))
     app.include_router(admin_backups.create_router(services))
+    app.include_router(admin_remote_backups.create_router(remote_backups))
     app.include_router(admin_model_catalog.create_router(services))
     app.include_router(admin_model_availability.create_router(services))
     app.include_router(admin_alerts.create_router(services))

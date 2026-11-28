@@ -803,6 +803,50 @@ describe("CredentialsPage", () => {
     expect(await screen.findByTestId("credentials-notice")).toHaveTextContent("未知错误");
   });
 
+  it.each(["probe", "delete", "batch-probe"])("%s 完成后即使后台刷新挂起，也仍可打开添加和批量导入", async action => {
+    let mutated = false;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/batch") && init?.method === "POST") {
+        mutated = true;
+        return Promise.resolve(jsonResponse({ action: "probe", total: 1, succeeded: 1, failed: 0,
+          results: [{ id: "cred_1", ok: true }] }));
+      }
+      if (url.endsWith("/probe") || init?.method === "DELETE") {
+        mutated = true;
+        return Promise.resolve(jsonResponse({ ok: true, probed: true, remaining: 30, total: 100 }));
+      }
+      if (mutated && url.startsWith("/api/credentials?") && init?.method !== "POST") {
+        return new Promise<Response>(() => {});
+      }
+      if (url.startsWith("/api/credential-groups")) return Promise.resolve(jsonResponse({ groups: [], is_operator: true }));
+      if (url.startsWith("/api/playground/models")) return Promise.resolve(jsonResponse({ data: [] }));
+      return Promise.resolve(jsonResponse(listBody([makeCredential({ id: "cred_1" })])));
+    }));
+    renderPage(<CredentialsPage />, ADMIN);
+    await settle();
+    await expandCredentialGroups();
+    if (action === "probe") await userEvent.click(screen.getByTestId("probe-cred_1"));
+    else if (action === "batch-probe") {
+      await userEvent.click(screen.getByTestId("group-select-trae"));
+      await userEvent.click(screen.getByTestId("batch-probe"));
+    } else {
+      await userEvent.click(screen.getByTestId("actions-cred_1"));
+      await userEvent.click(screen.getByRole("menuitem", { name: "删除" }));
+      await userEvent.click(screen.getByRole("button", { name: "确认删除" }));
+    }
+    await waitFor(() => expect(mutated).toBe(true));
+    await waitFor(() => expect(screen.getByTestId("open-add-dialog")).toBeEnabled());
+    if (action === "batch-probe") {
+      await userEvent.click(screen.getByTestId("select-cred_1"));
+      expect(screen.getByTestId("batch-probe")).toBeEnabled();
+    }
+    await openAddDialog();
+    await userEvent.click(screen.getByTestId("add-credential-close"));
+    await userEvent.click(screen.getByTestId("open-batch-import"));
+    expect(await screen.findByTestId("batch-import-dialog")).toBeInTheDocument();
+  });
+
   it("探测成功展示剩余与总量", async () => {
     vi.stubGlobal(
       "fetch",

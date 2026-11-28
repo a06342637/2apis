@@ -259,6 +259,7 @@ class LogRepository:
 
     def query(self, *, limit: int = 200, request_id: str | None = None,
               since: int | None = None, level: str | None = None,
+              loggers: tuple[str, ...] = (),
               ) -> list[dict[str, Any]]:
         """按条件取最近 N 行（旧→新）。
 
@@ -276,6 +277,9 @@ class LogRepository:
         if level:
             clauses.append("level = ?")
             params.append(level.upper())
+        if loggers:
+            clauses.append("logger IN (" + ",".join("?" for _ in loggers) + ")")
+            params.extend(loggers)
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = self._db.connect().execute(
             f"SELECT seq, ts, level, logger, message, request_id FROM log_events"

@@ -10,11 +10,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 
 from ..config import live
 from ..db.backup import backup_database
+
+logger = logging.getLogger(__name__)
 
 
 class BackupTask:
@@ -33,5 +36,10 @@ class BackupTask:
     def run_once(self) -> dict[str, object]:
         """同步执行一轮（磁盘 IO，调用方负责放到线程池，见 runner）。"""
         keep = int(self._keep())
-        target = backup_database(self._db_path, keep=keep)
+        try:
+            target = backup_database(self._db_path, keep=keep)
+        except Exception as error:
+            logger.error("定时本地备份失败（%s）", type(error).__name__)
+            raise
+        logger.info("定时本地备份完成：%s，保留 %d 份", target.name, keep)
         return {"backup": target.name, "path": str(target), "keep": keep}

@@ -228,11 +228,13 @@ def test_same_account_manual_login_waits_for_refresh_and_keeps_new_tokens(
     }
     entered, proceed = asyncio.Event(), asyncio.Event()
 
+    rotated_token = token("same-account", "old-rotation")
+
     async def delayed_refresh(credential):
         entered.set()
         await proceed.wait()
         return {
-            "access_token": token(credential.uid, "old-rotation"),
+            "access_token": rotated_token,
             "refresh_token": "old-rotation-refresh",
             "uid": credential.uid,
         }
@@ -275,7 +277,8 @@ def test_same_account_manual_login_waits_for_refresh_and_keeps_new_tokens(
             )
             try:
                 await asyncio.wait_for(import_entered.wait(), timeout=5)
-                assert not pending.done()
+                if not batch:
+                    assert not pending.done()
                 assert (
                     app.state.credentials.credential_data(initial["id"])["access_token"]
                     == old_token
@@ -293,12 +296,18 @@ def test_same_account_manual_login_waits_for_refresh_and_keeps_new_tokens(
     assert refresh.result().succeeded == 1
     assert response.status_code == 200, response.text
     saved = app.state.credentials.credential_data(initial["id"])
-    assert saved["access_token"] == new_token
-    assert saved["refresh_token"] == "manual-refresh"
+    if batch:
+        assert response.json()["skipped"] == [
+            {"index": 0, "reason": "duplicate", "duplicate_type": "existing"}]
+        assert saved["access_token"] == rotated_token
+        assert saved["refresh_token"] == "old-rotation-refresh"
+    else:
+        assert saved["access_token"] == new_token
+        assert saved["refresh_token"] == "manual-refresh"
     assert saved["uid"] == "same-account"
     rows = app.state.credentials.list_all()
     assert len(rows) == 1 and rows[0]["tags"] == ["original"]
-    assert rows[0]["nickname"] == "latest"
+    assert rows[0]["nickname"] == ("" if batch else "latest")
 
 
 @pytest.mark.parametrize("outcome", ["valid", "expired-refresh", "unavailable"])

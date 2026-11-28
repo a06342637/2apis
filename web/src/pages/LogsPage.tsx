@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { FileTerminal, Pause, Play, Trash2 } from "lucide-react";
 import { ApiError } from "../api/client";
 import {
   LOG_LEVELS,
+  logMatchesCategory,
   fetchLogs,
   subscribeLogs,
   type LogLevel,
@@ -11,7 +13,7 @@ import {
 import { errorText } from "../lib/errors";
 import { PageHeader } from "../components/PageHeader";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { Badge, Button, Checkbox, EmptyState, Field, Input, Notice, Panel } from "../ui";
+import { Badge, Button, Checkbox, EmptyState, Field, Input, Notice, Panel, Select } from "../ui";
 import type { Tone } from "../ui";
 
 /** 首次加载 / 订阅回放的保留行数：与缓冲上限无关，页面只看最近这些。 */
@@ -59,6 +61,11 @@ export function filterLines(lines: LogLine[], levels: ReadonlySet<string>,
   });
 }
 
+// 持久化行与 SSE 行的 seq 属于不同计数器，同一条日志仍有相同内容和时间戳。
+function logIdentity(line: LogLine): string {
+  return JSON.stringify([line.ts, line.level, line.logger, line.message, line.request_id ?? ""]);
+}
+
 /**
  * 服务端日志页（admin only，只读）。
  *
@@ -70,6 +77,8 @@ export function filterLines(lines: LogLine[], levels: ReadonlySet<string>,
  * 拉一次快照（暂停期间的行不会凭空出现，但环形缓冲里还在）。
  */
 export function LogsPage() {
+  const [params] = useSearchParams();
+  const [category, setCategory] = useState(params.get("category") ?? "");
   const [lines, setLines] = useState<LogLine[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -87,30 +96,20 @@ export function LogsPage() {
   const capacityRef = useRef<number | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  // 合并新行：按 seq 去重（快照与实时推送会交叠），并保持 seq 升序；
-  // 行数按当前缓冲容量截断，只保留最近的若干行（长连 SSE 不能无限增长）。
+  // 快照与实时流可互相重叠，也可能使用相同序号表示不同日志。
   const merge = (incoming: LogLine[]) => {
     setLines((previous) => {
-      const seen = new Set(previous.map((line) => line.seq));
-      const fresh = incoming.filter((line) => !seen.has(line.seq));
-      if (fresh.length === 0) return previous;
-      // 快路径：新行整体严格递增且都大于末行（实时推送的正常形态）→ 直接追加，
-      // 省掉每次全量排序；只有补拉快照 / 乱序到达才走排序。
-      let ascending = true;
-      for (let index = 0; index < fresh.length; index += 1) {
-        const floor = index === 0
-          ? (previous.length > 0 ? previous[previous.length - 1].seq : -Infinity)
-          : fresh[index - 1].seq;
-        if (fresh[index].seq <= floor) {
-          ascending = false;
-          break;
-        }
-      }
-      const merged = ascending
-        ? [...previous, ...fresh]
-        : [...previous, ...fresh].sort((a, b) => a.seq - b.seq);
+      const seen = new Set(previous.map(logIdentity));
+      const fresh = incoming.filter((line) => {
+        const key = logIdentity(line);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (!fresh.length) return previous;
+      const merged = [...previous, ...fresh].sort((a, b) => a.ts - b.ts || a.seq - b.seq);
       const limit = capacityRef.current ?? FALLBACK_MAX_LINES;
-      return merged.length > limit ? merged.slice(merged.length - limit) : merged;
+      return merged.slice(-limit);
     });
   };
 
@@ -120,7 +119,7 @@ export function LogsPage() {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
-    fetchLogs(INITIAL_LINES, controller.signal)
+    fetchLogs(INITIAL_LINES, controller.signal, category)
       .then((response) => {
         if (cancelled) return;
         setAvailable(true);
@@ -144,7 +143,7 @@ export function LogsPage() {
       cancelled = true;
       controller.abort();
     };
-  }, [paused]);
+  }, [paused, category]);
 
   useEffect(() => {
     if (paused || available !== true) {
@@ -153,10 +152,10 @@ export function LogsPage() {
     }
     return subscribeLogs({
       limit: INITIAL_LINES,
-      onLine: (line) => merge([line]),
+      onLine: (line) => { if (logMatchesCategory(line, category)) merge([line]); },
       onStatus: setStatus,
     });
-  }, [paused, available]);
+  }, [paused, available, category]);
 
   // 跟随最新：新行到达后滚到底（关闭时保持当前位置，方便回看）。
   useEffect(() => {
@@ -164,7 +163,8 @@ export function LogsPage() {
     bottomRef.current?.scrollIntoView?.({ block: "end" });
   }, [lines, follow, paused]);
 
-  const visible = useMemo(() => filterLines(lines, levels, keyword), [lines, levels, keyword]);
+  const visible = useMemo(() => filterLines(lines.filter(line => logMatchesCategory(line, category)), levels, keyword),
+    [lines, levels, keyword, category]);
 
   const toggleLevel = (level: LogLevel) => {
     setLevels((previous) => {
@@ -225,6 +225,12 @@ export function LogsPage() {
           }
         >
           <div className="mb-3 flex flex-wrap items-end gap-3">
+            <Field label="日志分类" htmlFor="logs-category">
+              <Select id="logs-category" value={category} onChange={e => { if (!paused) setLines([]); setCategory(e.target.value); }}>
+                <option value="">全部</option><option value="backup">备份</option>
+                <option value="miora-lifecycle">Miora 账号维护</option>
+              </Select>
+            </Field>
             <div className="w-64">
               <Field label="关键字" htmlFor="logs-keyword">
                 <Input
@@ -289,7 +295,7 @@ export function LogsPage() {
             >
               {visible.map((line) => (
                 <li
-                  key={line.seq}
+                  key={logIdentity(line)}
                   data-testid="log-row"
                   className="flex items-start gap-2 rounded px-1.5 py-0.5 hover:bg-muted"
                 >

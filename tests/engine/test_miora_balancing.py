@@ -130,7 +130,7 @@ async def test_miora_zero_credit_is_skipped_but_unknown_or_small_positive_balanc
     with executor._request_scope("chat", credential_ids=(ids[0],),
                                  credential_models=catalog([ids[0]], rate)):
         target = ModelTarget(model="chat", providers=("miora",))
-        assert executor._no_pick_breakdown(target, set()) == {"quota_exhausted": 1}
+        assert executor._no_pick_breakdown(target, set()) == {"paused": 1}
 
 
 @pytest.mark.parametrize("stream", [False, True])
@@ -138,6 +138,7 @@ async def test_miora_zero_balance_free_exception_uses_account_catalog_not_pool_u
     executor, credentials, provider, ids, uids = engine(repo, count=2)
     for cid in ids:
         credentials.save_quota(cid, Quota(remaining=0, total=100, probed_at=1_000))
+        credentials.set_enabled(cid, True, now=1_001)
     executor._deps.model_aliases = {"miora": {"chat": "chat"}}
     executor._deps.model_list_cache = {"miora": {"chat": Model(id="chat", credit_rate=0)}}
     tables = catalog(ids)
@@ -161,6 +162,7 @@ async def test_miora_confirmed_free_provider_model_can_use_zero_balance_without_
 ):
     executor, credentials, provider, _ids, _uids = engine(repo, count=1)
     credentials.save_quota(_ids[0], Quota(remaining=0, total=0, probed_at=1_000))
+    credentials.set_enabled(_ids[0], True, now=1_001)
     executor._deps.model_aliases = {"miora": {"chat": "chat"}}
     executor._deps.model_list_cache = {"miora": {"chat": Model(id="chat", credit_rate=0)}}
     await run(executor, stream)
@@ -242,6 +244,8 @@ async def test_miora_ineligible_affinity_respects_catalog_binding_pin_and_inflig
 async def test_miora_zero_balance_does_not_wait_for_short_cooldown(repo, monkeypatch):
     executor, credentials, _provider, ids, _uids = engine(repo, count=1)
     credentials.save_quota(ids[0], Quota(remaining=0, total=100, probed_at=1_000))
+    # Explicit resume must still respect the quota guard for paid models.
+    credentials.set_enabled(ids[0], True, now=1_001)
     executor._deps.short_cooldown_wait_seconds = 60
     from src.engine.scheduler import ErrorOutcome
 
@@ -296,9 +300,14 @@ async def test_miora_confirmed_exhausted_health_without_remaining_still_blocks_p
 async def test_miora_free_model_shares_zero_and_positive_balance_accounts(repo, stream):
     executor, credentials, provider, ids, uids = engine(repo, count=2)
     credentials.save_quota(ids[0], Quota(remaining=0, total=0, probed_at=1_000))
+    scope = {"credential_ids": tuple(ids), "credential_models": catalog(ids, 0)}
+    await run(executor, stream, **scope)
+    assert [call[0] for call in provider.calls] == [uids[1]]
+    credentials.set_enabled(ids[0], True, now=1_001)
     for _ in range(4):
-        await run(executor, stream, credential_ids=tuple(ids), credential_models=catalog(ids, 0))
-    assert [call[0] for call in provider.calls] == uids * 2
+        await run(executor, stream, **scope)
+    assert {call[0] for call in provider.calls[1:]} == set(uids)
+    assert [call[0] for call in provider.calls[1:]].count(uids[0]) == 2
 
 
 @pytest.mark.parametrize("stream", [False, True])

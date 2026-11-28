@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import math
@@ -45,6 +46,7 @@ from ..engine.limits import day_start
 from ..provider.base import CheckinResult, GrowthResult, GrowthStep, StepStatus
 from ..provider.login_identity import (
     MANUAL_MERGE_PROVIDERS,
+    login_identities_for,
 )
 from ..provider.probe_failure import relogin_reason
 from ..provider.tos import tos_for
@@ -52,7 +54,7 @@ from ..request_context import credential_scope
 from ..sorting import sort_rows
 from ..tags import parse_tags
 from .credential_export import encode_credential_export, validate_export_ids
-from .credential_login import save_login_credential
+from .credential_login import DuplicateCredential, save_login_credential
 from .deps import Services, csrf_protected, principal_from_request
 
 logger = logging.getLogger(__name__)
@@ -427,7 +429,8 @@ def create_router(services: Services) -> APIRouter:
 
     async def register_import(provider_id: str, credential_data: dict, tags: list[str],
                               nickname: str, principal, *,
-                              new_nickname: Callable[[], str] | None = None) -> dict:
+                              new_nickname: Callable[[], str] | None = None,
+                              skip_existing: bool = False) -> dict:
         """落库 + 审计 + 探测入队；返回凭证 id、ToS 风险与是否就地合并。
 
         `MANUAL_MERGE_PROVIDERS`（灵犀 / 小浣熊）没有 OAuth 轨道，手工导入就是
@@ -446,7 +449,8 @@ def create_router(services: Services) -> APIRouter:
             credential_id, merged = await save_login_credential(
                 services, provider_id=provider_id, credential_data=credential_data,
                 nickname=nickname, added_by=principal.username, tags=tags,
-                new_nickname=new_nickname, merge_identical=new_nickname is not None)
+                new_nickname=new_nickname, merge_identical=new_nickname is not None,
+                skip_existing=skip_existing)
         if not merged and provider_id == "zen" and credential_data.get("api_key"):
             # zen 是单槽渠道（一条虚拟凭证代表整条上游）：带 Key 导入不是
             # 「再加一条号」，而是把这条虚拟凭证从匿名档换成付费档。否则会
@@ -506,9 +510,8 @@ def create_router(services: Services) -> APIRouter:
                                        principal=Depends(principal_from_request)):
         """批量导入：逐条校验，坏条目只进 failed、不连累其他条目。
 
-        去重口径 = 同渠道且解密后内容完全一致（批内重复 + 与库里已有凭证
-        重复都跳过）。返回带下标的 created/skipped/failed，前端据此原样
-        保留失败行供重试。
+        同渠道的稳定账号身份或规范化凭证内容相同，就跳过且不覆盖旧凭证。
+        返回带下标的 created/skipped/failed，前端据此保留失败行供重试。
         """
         require_operator(principal)
         items = payload.get("items")
@@ -520,6 +523,7 @@ def create_router(services: Services) -> APIRouter:
         skipped: list[dict] = []
         failed: list[dict] = []
         seen: set[str] = set()
+        seen_identities: set[tuple[str, str]] = set()
         new_miora_name = _miora_batch_nickname_factory()
         for index, item in enumerate(items):
             if not isinstance(item, dict):
@@ -530,21 +534,34 @@ def create_router(services: Services) -> APIRouter:
             except InvalidRequest as error:
                 failed.append({"index": index, "reason": str(error)})
                 continue
-            fingerprint = (
-                f"{provider_id}:"
-                + json.dumps(credential_data, sort_keys=True, ensure_ascii=False)
-            )
+            payload_text = json.dumps(credential_data, sort_keys=True, ensure_ascii=False)
+            fingerprint = provider_id + ":" + hashlib.sha256(payload_text.encode()).hexdigest()
             nickname = str(item.get("nickname") or "")
             if provider_id == "miora":
                 nickname = nickname.strip()
-            if fingerprint in seen or (credentials.has_same_credential(
-                    provider_id, credential_data) and not (provider_id == "miora" and nickname)):
-                skipped.append({"index": index, "reason": "duplicate"})
-                continue
+            identities = login_identities_for(provider_id, credential_data)
+            aliases = {(provider_id, value) for value in identities}
+            in_batch = fingerprint in seen or bool(aliases & seen_identities)
             seen.add(fingerprint)
-            row = await register_import(provider_id, credential_data, tags,
-                nickname, principal,
-                new_nickname=new_miora_name if provider_id == "miora" else None)
+            seen_identities.update(aliases)
+            existing = (not in_batch and provider_id not in MANUAL_MERGE_PROVIDERS
+                        and identities and credentials.find_login_credential(
+                            provider_id,
+                            lambda data, pid=provider_id: login_identities_for(pid, data),
+                            identities))
+            if (in_batch or existing
+                    or credentials.has_same_credential(provider_id, credential_data)):
+                skipped.append({"index": index, "reason": "duplicate",
+                                "duplicate_type": "batch" if in_batch else "existing"})
+                continue
+            try:
+                row = await register_import(provider_id, credential_data, tags,
+                    nickname, principal, skip_existing=True,
+                    new_nickname=new_miora_name if provider_id == "miora" else None)
+            except DuplicateCredential:
+                skipped.append({"index": index, "reason": "duplicate",
+                                "duplicate_type": "existing"})
+                continue
             created.append({"index": index, **row})
         logger.info("管理员 %s 批量导入：成功 %d，跳过 %d，失败 %d",
                     principal.username, len(created), len(skipped), len(failed))
