@@ -37,6 +37,7 @@ export function CredentialDialogs({
   showNotice,
   showError,
   refresh,
+  onGroupsChanged,
 }: {
   canWrite: boolean;
   limitsCredential: Credential | null;
@@ -61,6 +62,7 @@ export function CredentialDialogs({
   showNotice: (content: ReactNode) => void;
   showError: (content: ReactNode) => void;
   refresh: () => Promise<unknown>;
+  onGroupsChanged?: () => void;
 }) {
   return (
     <>
@@ -131,6 +133,7 @@ export function CredentialDialogs({
 
       {canWrite && batchOpen && (
         <BatchImportDialog
+          onGroupsChanged={onGroupsChanged}
           onClose={() => setBatchOpen(false)}
           onImported={(message) => {
             showNotice(message);

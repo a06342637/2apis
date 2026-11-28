@@ -6,6 +6,7 @@ import { providerLabel } from "../api/providers";
 import { IMPORT_PROVIDERS, parseBatchCredentialInput } from "../lib/credentialImport";
 import { useDialogFocus } from "../hooks/useDialogFocus";
 import { Button, Notice } from "../ui";
+import { useBatchImportGrouping } from "./BatchImportGrouping";
 
 type ParseError = { line: number; message: string };
 
@@ -31,10 +32,12 @@ export function BatchImportDialog({
   onClose,
   onImported,
   onNotice,
+  onGroupsChanged = () => {},
 }: {
   onClose: () => void;
   onImported: (message: string) => void;
   onNotice: (message: string) => void;
+  onGroupsChanged?: () => void;
 }) {
   const working = useRef(false);
   const dialogRef = useDialogFocus<HTMLDivElement>(() => { if (!working.current) onClose(); });
@@ -48,6 +51,10 @@ export function BatchImportDialog({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<BatchImportResult | null>(null);
   const parsed = useMemo(() => parseBatchCredentialInput(text, fallback), [text, fallback]);
+  const providers = [...new Set(parsed.entries.map(entry => entry.provider))]
+    .filter((provider): provider is Provider => IMPORT_PROVIDERS.includes(provider as Provider));
+  const grouping = useBatchImportGrouping(providers.length ? providers : [fallback], pending, working, onGroupsChanged);
+  const blocked = pending || grouping.managing;
 
   useEffect(() => () => { fileReadGeneration.current += 1; }, []);
 
@@ -74,7 +81,7 @@ export function BatchImportDialog({
   };
 
   const submit = async () => {
-    if (working.current || fileReadInFlight.current) return;
+    if (working.current || fileReadInFlight.current || grouping.selectionIssue || grouping.hasWaiting) return;
     if (!parsed.entries.length) {
       setError("没有可导入的条目");
       return;
@@ -99,6 +106,7 @@ export function BatchImportDialog({
       if (response.skipped.length && !response.created.length && !response.failed.length) {
         onNotice(`全部为重复凭证（${response.skipped.length} 条），未新增`);
       }
+      await grouping.assignImported(response, parsed.entries);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "批量导入失败，请稍后重试");
     } finally {
@@ -136,7 +144,7 @@ export function BatchImportDialog({
             aria-label="原始 token 默认渠道"
             autoComplete="off"
             value={fallback}
-            disabled={pending}
+            disabled={blocked}
             onChange={(event) => setFallback(event.target.value as Provider)}
             className="rounded border border-border bg-background px-2 py-1 text-foreground"
           >
@@ -146,6 +154,7 @@ export function BatchImportDialog({
           </select>
           <span>JSON/Cookie 的明确渠道优先</span>
         </label>
+        {grouping.controls}
 
         <div className="flex items-center gap-2">
           <input
@@ -153,7 +162,7 @@ export function BatchImportDialog({
             type="file"
             accept=".json,.jsonl,.txt"
             hidden
-            disabled={pending}
+            disabled={blocked}
             className="hidden"
             data-testid="batch-file"
             onChange={(event) => void readFile(event.target.files?.[0])}
@@ -162,7 +171,7 @@ export function BatchImportDialog({
             size="sm"
             variant="ghost"
             data-testid="batch-pick-file"
-            disabled={pending}
+            disabled={blocked}
             onClick={() => fileRef.current?.click()}
           >
             <FileUp className="size-4" /> 选择文件
@@ -185,7 +194,7 @@ export function BatchImportDialog({
             setResult(null);
           }}
           rows={8}
-          disabled={pending || readingFile}
+          disabled={blocked || readingFile}
           autoComplete="off"
           spellCheck={false}
           placeholder={'mail@example.com{authToken=TOKEN; refreshToken=REFRESH}\nanother@example.com{"authToken":"ANOTHER_TOKEN","refreshToken":"ANOTHER_REFRESH"}'}
@@ -232,14 +241,14 @@ export function BatchImportDialog({
         )}
 
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" data-testid="batch-cancel" onClick={onClose} disabled={pending}>
+          <Button variant="ghost" data-testid="batch-cancel" onClick={onClose} disabled={blocked}>
             关闭
           </Button>
           <Button
             variant="default"
             data-testid="batch-submit"
             onClick={() => void submit()}
-            disabled={pending || readingFile || parsed.entries.length === 0 || parsed.entries.length > 100}
+            disabled={blocked || grouping.hasWaiting || Boolean(grouping.selectionIssue) || readingFile || parsed.entries.length === 0 || parsed.entries.length > 100}
           >
             {pending ? "导入中…" : readingFile ? "读取文件中…" : `导入 ${parsed.entries.length} 条`}
           </Button>

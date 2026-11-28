@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as groupsApi from "../../api/credentialGroups";
 import { api, ApiError } from "../../api/client";
 import { BatchImportDialog, parseBatchText } from "../BatchImportDialog";
 
@@ -51,6 +52,7 @@ describe("parseBatchText", () => {
 });
 
 describe("BatchImportDialog", () => {
+  beforeEach(() => vi.spyOn(groupsApi, "listCredentialGroups").mockResolvedValue({ groups: [], is_operator: true }));
   afterEach(() => {
     vi.restoreAllMocks();
   });
