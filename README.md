@@ -2,6 +2,10 @@
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
 
+## 未发布
+
+- 添加凭证、完成 OAuth 登录或批量导入后，会自动查询额度。新增账号按顺序逐个查询，关闭导入窗口不影响后台查询。凭证页显示「额度查询中」，查到后自动显示余额；查询失败不按零余额处理，无额度接口的渠道仍显示「无探测」。账号标签可悬浮、聚焦或点击查看全文。
+
 ## v0.1.11 远端备份与凭证维护
 
 - 在「任务与配置 → 远端备份」配置私有阿里云 OSS 或 SFTP，设置时区、执行时刻和保留份数；计划关闭后也可手动备份。SFTP 必须填写从目标服务器独立核对的 SHA256 主机公钥指纹。
@@ -1119,6 +1123,8 @@ event=request request_id=9f2c… method=POST route=/v1/chat/completions status=2
 # 后端：lint + 测试（行/分支覆盖门槛 100%）
 uv run ruff check src tests scripts
 uv run pytest -q --cov=src --cov-report=term --cov-fail-under=100
+# 多核环境可使用与 CI 相同的全量并行检查（不减少测试或覆盖率门槛）
+uv run pytest -q -n 3 --dist=loadfile --cov=src --cov-report=term --cov-fail-under=100
 
 # 前端
 cd web

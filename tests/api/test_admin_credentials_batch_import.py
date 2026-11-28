@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi.testclient import TestClient
 
 from src.auth.session import create_session_token
@@ -9,6 +11,7 @@ from src.compat.openai.request import InvalidRequest
 from src.config import Settings
 from src.main import build_app
 from src.provider.base import Quota
+from src.request_context import get_credential_id
 from tests.helpers.constants import SECRET
 
 
@@ -105,3 +108,49 @@ def test_batch_import_requires_operator(tmp_path):
             {"provider": "codebuddy", "credential": {"token": "x"}},
         ]})
         assert response.status_code == 403
+
+
+def test_import_probes_in_order_and_updates_list_without_manual_probe(admin_client):
+    app, client = admin_client
+    release = asyncio.Event()
+    calls = []
+
+    class SerialProvider(_StubProvider):
+        async def probe_quota(self, data):
+            token = data["bearer_token"]
+            calls.append((get_credential_id(), token))
+            if token == "first":
+                await release.wait()
+            if token == "bad":
+                raise TimeoutError
+            return Quota(remaining=7, total=10, probed_at=1)
+
+    app.state.services.registry["codebuddy"] = SerialProvider()
+    entries = [{"provider": "codebuddy", "credential": {"token": token}}
+               for token in ("first", "bad", "third", "third", "removed")]
+    response = client.post("/api/credentials/batch-import", json={"items": entries}).json()
+    first, bad, third, removed = [row["id"] for row in response["created"]]
+    repo = app.state.credentials
+    try:
+        pending = client.get("/api/credentials").json()["credentials"]
+        assert {row["id"] for row in pending if row["quota_probe_pending"]} == {
+            first, bad, third, removed}
+        assert calls == [(first, "first")]
+        # 查询中触发一次后续刷新；排队中的重复触发合并。删号/换票要读取最新值。
+        schedule = app.state.services.schedule_probe
+        client.portal.call(schedule, first)
+        client.portal.call(schedule, third)
+        repo.merge_login_credential(third, {"bearer_token": "new"}, "")
+        repo.delete(removed)
+    finally:
+        client.portal.call(release.set)
+
+    async def drain():
+        await asyncio.wait_for(asyncio.gather(*app.state.pending_probes), 5)
+
+    client.portal.call(drain)
+    assert calls == [(first, "first"), (bad, "bad"), (third, "new"), (first, "first")]
+    rows = {row["id"]: row for row in client.get("/api/credentials").json()["credentials"]}
+    assert not any(row["quota_probe_pending"] for row in rows.values())
+    assert rows[first]["quota_remaining"] == rows[third]["quota_remaining"] == 7
+    assert rows[bad]["quota_remaining"] is None and rows[bad]["quota_probed_at"] is not None

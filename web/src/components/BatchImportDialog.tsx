@@ -142,7 +142,7 @@ export function BatchImportDialog({
           Miora 也支持每行粘贴 <code>{"邮箱{authToken=...; refreshToken=...}"}</code>，
           或让邮箱紧贴 JSON 对象。邮箱会作为账号备注（昵称），也可单独放在上一行。
           新 Miora 账号未填昵称时按北京时间自动编号，
-          已有账号或重复凭证会跳过，导入后在下方显示结果和跳过原因。
+          已有账号或重复凭证会跳过。新增账号按导入顺序自动查询额度，关闭窗口不影响查询。
         </p>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           原始 token 默认渠道

@@ -1,3 +1,4 @@
+import { stubPopupGeometry } from "@/test-utils/popupGeometry";
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialsPage } from "../CredentialsPage";
@@ -31,6 +32,7 @@ async function openAddDialog() {
 // 手动恢复的话，后续 describe 的 useSearchParams 会拿到残缺的 URL 构造器。
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("CredentialsPage", () => {
@@ -1715,22 +1717,28 @@ describe("CredentialsPage", () => {
     expect(screen.queryByTestId("credential-tag-filter")).not.toBeInTheDocument();
   });
 
-  it("行内最多显示两个标签，多余收成 +N 且 title 给全量", async () => {
+  it("长标签只占一个计数按钮，悬浮显示全部原文", async () => {
     mockFetch({
       "/api/credentials": listBody([
-        makeCredential({ id: "many", tags: ["一", "二", "三", "四"] }),
+        makeCredential({ id: "many", tags: ["注册", "2026-11-28 12:02:35", "三", "四"], quota_probe_pending: true }),
       ]),
     });
     renderPage(<CredentialsPage />, ADMIN);
     await settle();
     await expandCredentialGroups();
 
+    stubPopupGeometry("tags-many");
     const tags = screen.getByTestId("tags-many");
-    expect(within(tags).getByText("一")).toBeInTheDocument();
-    expect(within(tags).getByText("二")).toBeInTheDocument();
-    expect(within(tags).getByText("+2")).toBeInTheDocument();
-    expect(within(tags).queryByText("三")).not.toBeInTheDocument();
-    expect(tags).toHaveAttribute("title", "一 / 二 / 三 / 四");
+    expect(tags).toHaveTextContent(/^4$/);
+    expect(screen.getByText("额度查询中")).toBeInTheDocument();
+    await userEvent.hover(tags);
+    const popup = await screen.findByRole("dialog", { name: "账号标签" });
+    expect(within(popup).getAllByRole("listitem").map((item) => item.textContent))
+      .toEqual(["注册", "2026-11-28 12:02:35", "三", "四"]);
+    await userEvent.click(tags);
+    expect(popup).toHaveAttribute("data-open-mode", "pinned");
+    await userEvent.keyboard("{Escape}");
+    expect(popup).not.toBeInTheDocument();
   });
 
   it("无标签的行不渲染标签容器", async () => {

@@ -390,6 +390,7 @@ def create_router(services: Services) -> APIRouter:
         checkin_today = services.checkin_events.latest_since(
             day_start(int(time.time())))
         for row in rows:
+            row["quota_probe_pending"] = row["id"] in services.pending_quota_probes
             record = limits_map.get(row["id"])
             row["limits"] = record.as_dict() if record is not None else None
             row["checkin_today"] = checkin_today.get(row["id"])

@@ -104,6 +104,7 @@ export interface Credential {
   /** 生效中的模型级冷却（模型级限流/负缓存）；无则为空数组 */
   model_cooldowns: ModelCooldown[];
   quota_probed_at: number | null;
+  quota_probe_pending?: boolean;
   /** access token 到期 epoch（秒）；0 = 未知（渠道没给到期信息，也可能是 JWT 不可解析） */
   token_expires_at: number;
   /** access token 签发 epoch（秒，JWT iat）；0 = 未知。进度条满量程 = 它到到期时间的间隔 */

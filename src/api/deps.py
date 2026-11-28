@@ -137,6 +137,8 @@ class Services:
     # 凭证在途租约（executor 也持同一实例）：`/metrics` 的 `inflight` gauge 从
     # 它现读。为 None 时该指标输出 0（未装配的测试替身不该崩）。
     inflight: Any = None
+    # 即时探测（排队或执行中）；不持有凭证数据。
+    pending_quota_probes: set[str] = field(default_factory=set)
     # 模型列表缓存：provider_id → {小写模型名: Model}（含元数据）。
     # list_models 成功时更新，某上游拉取失败时用缓存兜底（v1/models 稳定返回）。
     # **存未过滤的原始表**：MODEL_BLOCKLIST 是可热更项，过滤在每个出口现做，

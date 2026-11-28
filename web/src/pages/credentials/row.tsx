@@ -50,6 +50,7 @@ import { Badge, Button, Checkbox, TableCell, TableHead, TableRow } from "../../u
 import type { Actions } from "./actions";
 import { ModelCooldownList, PackageLadder, TokenExpiry } from "./cells";
 import { supportsActivity, supportsCheckin, supportsGrowth } from "./helpers";
+import { ModelListPopup } from "./ModelListPopup";
 import { MioraPlanBadge } from "./MioraPlanBadge";
 import { CredentialExportOptions } from "./ExportOptions";
 
@@ -202,9 +203,9 @@ export function Row({
       <TableCell label="凭证">
         {/* 渠道名不在这里重复：它已在组头（按渠道分组后，同一组内所有行的渠道名
             完全相同）。昵称单独占一行，「已指定」紧贴昵称。 */}
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span
-            className="truncate font-medium"
+            className="max-w-48 truncate font-medium"
             title={credential.nickname || credential.id.slice(0, 12)}
           >
             {credential.nickname || credential.id.slice(0, 12)}
@@ -226,32 +227,28 @@ export function Row({
               <Badge tone="muted">限模型</Badge>
             </span>
           )}
-          {/* 标签紧贴昵称（它是这一行的记号）：最多显示两个，多余的收成 +N 并
-              在 title 里给全量，避免长标签把昵称挤到省略号。 */}
           {credential.tags.length > 0 && (
-            <span
-              className="flex shrink-0 items-center gap-1"
-              data-testid={`tags-${credential.id}`}
-              title={credential.tags.join(" / ")}
-            >
-              {credential.tags.slice(0, 2).map((tag) => (
-                <Badge key={tag} tone="muted">{tag}</Badge>
-              ))}
-              {credential.tags.length > 2 && (
-                <span className="text-xs text-muted-foreground">
-                  +{credential.tags.length - 2}
-                </span>
-              )}
-            </span>
+            <ModelListPopup label="账号标签" contentLabel="账号标签" className="w-64 p-3"
+              content={<><p className="mb-2 font-semibold">账号标签 · {credential.tags.length}</p>
+                <ul className="space-y-1">{credential.tags.map((tag) =>
+                  <li key={tag} className="break-all">{tag}</li>)}</ul></>}>
+              <button type="button" data-testid={`tags-${credential.id}`}
+                aria-label={`查看 ${credential.nickname || credential.id} 的 ${credential.tags.length} 个标签`}
+                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">
+                <Tag className="size-3" aria-hidden />{credential.tags.length}
+              </button>
+            </ModelListPopup>
           )}
         </div>
       </TableCell>
-      <TableCell label="状态 / 健康度">
+      <TableCell label="状态 / 健康度" className="whitespace-normal [overflow-wrap:anywhere]">
         {/* 状态 + 健康度合并成一列：两个 Badge 同行，附加说明换行小字 */}
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Badge>
-            <Badge tone={health.tone}>{health.label}</Badge>
+            {credential.quota_probe_pending && hasQuotaProbe(credential.provider)
+              ? <Badge tone="muted">额度查询中</Badge>
+              : <Badge tone={health.tone}>{health.label}</Badge>}
           </div>
           {state === "off" && credential.miora_exhausted_at != null && (
             <div className="text-xs text-muted-foreground" title="仅在后续探测确认仍无积分时删除">
@@ -336,7 +333,7 @@ export function Row({
           {credential.growth_last_result ? (
             // 汇报可能很长（多步领取串成一行）：限宽单行截断，hover 看全文
             <LongTextTip content={credential.growth_last_result}>
-              <div data-testid={`growth-${credential.id}`} className="max-w-[22rem]">
+              <div data-testid={`growth-${credential.id}`} className="max-w-[clamp(5rem,12cqw,16rem)]">
                 <div className="truncate">{credential.growth_last_result}</div>
                 <div className="text-muted-foreground">
                   {formatTime(credential.growth_last_run_at)}
@@ -353,7 +350,7 @@ export function Row({
       {!showGrowth && <TableCell aria-hidden />}
       {canWrite && (
         <TableCell label="操作">
-          <div className="flex items-center justify-end gap-1">
+          <div className="flex flex-wrap items-center justify-end gap-1">
             {confirming ? (
               <>
                 <Button

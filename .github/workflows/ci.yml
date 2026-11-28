@@ -33,7 +33,8 @@ jobs:
       - name: Ruff
         run: uv run ruff check src tests scripts
       - name: 测试与覆盖率（门槛 100%）
-        run: uv run pytest -q --cov=src --cov-report=term --cov-fail-under=100
+        # 按文件分配给 3 个独立进程，pytest-cov 合并分支覆盖率后执行同一硬门槛。
+        run: uv run pytest -q -n 3 --dist=loadfile --cov=src --cov-report=term --cov-fail-under=100
 
   # 平台门禁必须有真机验证：其余 job 全在 ubuntu-latest，正是 issue #46 的
   # 成因——Windows 上的 `ModuleNotFoundError: No module named 'fcntl'` 在

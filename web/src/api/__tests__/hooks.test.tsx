@@ -31,6 +31,17 @@ describe("useCredentials", () => {
     expect(keys.some((key) => key[1] === "anonymous")).toBe(false);
   });
 
+  it("排队时快速刷新额度，完成后恢复页面默认轮询", async () => {
+    const fetch = vi.fn().mockImplementationOnce(async () => jsonResponse({
+      credentials: [{ quota_probe_pending: true }],
+    })).mockImplementation(async () => jsonResponse({ credentials: [{ quota_remaining: 7 }] }));
+    vi.stubGlobal("fetch", fetch);
+    const { result } = renderCredentials("root", 30_000);
+    await waitFor(() => expect(result.current.data?.credentials[0].quota_remaining).toBe(7),
+      { timeout: 5000 });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it("不传 username 时保持向后兼容（落到 anonymous，请求不带身份参数）", async () => {
     const spy = vi.fn(async () => jsonResponse({ credentials: [] }));
     vi.stubGlobal("fetch", spy);

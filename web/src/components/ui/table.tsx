@@ -20,7 +20,7 @@ function Table({
   /** 滚动容器（table-container）附加样式：长列表用它设 max-height + 吸顶表头所需的高度约束。 */
   containerClassName?: string
   /**
-   * 窄屏（<768px）转卡片布局。只在**呈现层**生效：DOM 仍是标准 table，
+   * 窄容器（<56rem）转卡片布局。只在**呈现层**生效：DOM 仍是标准 table，
    * 表头变一排可换行的排序片、每个数据格用 `TableCell label` 在自己行首显示字段名。
    *
    * 之所以不做「按视口渲染两套 JSX」：表格被 6 个页面按 `xxx-table` / 行 testid

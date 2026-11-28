@@ -54,7 +54,7 @@ export function CredentialAccountGroupHeader({ section, providerLabel, collapsed
         <button type="button" aria-expanded={!collapsed} data-testid={`account-group-toggle-${section.key}`}
           onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 rounded py-2 text-left text-xs focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none">
           <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", !collapsed && "rotate-90")} aria-hidden />
-          <span className="min-w-0 break-all font-semibold">{section.name}</span>
+          <span className="min-w-0 whitespace-normal break-all font-semibold">{section.name}</span>
           <span className="shrink-0 text-muted-foreground tabular-nums">
             {section.membershipKnown && section.items.length !== section.memberCount ? `${section.items.length} / ${section.memberCount}` : section.memberCount} 个账号
           </span>
@@ -182,7 +182,7 @@ export function CredentialGroupHeader({
                                 焦点都会打架（点 checkbox 会连带展开/折叠该组）。
                                 只在**会话可写**时渲染（viewer 整张表都没有选择列，组头
                                 也不该多出这一格）。 */}
-                            <div className="flex items-center">
+                            <div className="flex flex-wrap items-center">
                               {canWrite && (
                                 <span className="pl-3">
                                   <Checkbox
@@ -199,7 +199,7 @@ export function CredentialGroupHeader({
                                 data-testid={`group-toggle-${group.key}`}
                                 aria-expanded={!isCollapsed}
                                 onClick={() => onToggleGroup(group.key)}
-                                className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                                className="flex min-w-0 flex-[1_1_22rem] cursor-pointer flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 text-left focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                               >
                               {/* 身份：折叠箭头 + 品牌图标 + 渠道名 + 账号数 */}
                               <span className="flex w-40 shrink-0 items-center gap-2">
@@ -355,7 +355,7 @@ export function CredentialGroupHeader({
                                 签到「已签 / 该签」是主数字；失败单独标红——那才是要处置
                                 的东西（失败在 30s 轮询里会随下一轮补签自动回落）。
                                 最近时刻只给 HH:MM，日期对「今天」是冗余的。 */}
-                            <span className="flex shrink-0 items-center">
+                            <span className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-y-1">
                               {showCheckin && (
                                 <span
                                   className="flex w-32 shrink-0 items-center gap-2 pr-3"

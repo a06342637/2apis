@@ -35,7 +35,8 @@ export function useCredentials(username?: string, refetchIntervalMs?: number,
     queryFn: () => api.credentials(sort, order),
     // 仪表盘/凭证页的冷却倒计时是「随时间变化」的观测量；页面停留时自动
     // 刷新，其余调用点不传即为默认（不轮询）。
-    refetchInterval: refetchIntervalMs,
+    refetchInterval: (query) => refetchIntervalMs && query.state.data?.credentials.some((row) => row.quota_probe_pending)
+      ? Math.min(refetchIntervalMs, 1500) : refetchIntervalMs,
   });
 }
 
