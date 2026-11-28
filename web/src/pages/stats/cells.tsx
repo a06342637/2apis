@@ -170,6 +170,12 @@ export function eventRowCells(row: UsageEventRow, showUser: boolean) {
       {timeCell(row)}
       {showUser && <TableCell label="用户">{row.username}</TableCell>}
       {sourceCell(row)}
+      <TableCell label="分组" className="max-w-36 break-words text-xs"
+        title={row.credential_groups == null ? "此记录未保存请求时的密钥分组" :
+          row.credential_groups.length ? "请求时密钥绑定且包含实际账号的分组；本请求仅计量一次" : "此请求未使用分组"}>
+        {row.credential_groups?.length ? row.credential_groups.map(group =>
+          <span key={group.id} className="block">{group.name}</span>) : <span className="text-muted-foreground">—</span>}
+      </TableCell>
       <TableCell label="模型">
         <span className="block max-w-44 truncate" title={row.model}>{row.model}</span>
       </TableCell>

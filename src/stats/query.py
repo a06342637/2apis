@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from ..sorting import parse_sort_order, sql_order
+from .groups import decode_group_attribution
 
 # 图表指标 → 取值语义。小时汇总只存 sum / count，因此**派生比率必须在聚合后
 # 相除**：先按小时求比率再平均是另一种口径（会被低量小时等权带偏），不能混用。
@@ -1039,7 +1040,7 @@ class StatsQuery:
             "e.reasoning_tokens, e.cached_tokens, e.credit, e.credit_estimated, "
             "e.cost_usd, e.cost_cny, e.latency_ms, "
             f"e.ttfb_ms, e.request_id, {_ROW_SPEED_VISIBLE} AS tps_visible, "
-            f"{_ROW_SPEED_TOTAL} AS tps, {name_expr} AS credential_name"
+            f"{_ROW_SPEED_TOTAL} AS tps, {name_expr} AS credential_name, e.group_attribution"
         )
         filters = {"provider": provider, "model": model, "credential_id": credential_id,
                    "ok": ok}
@@ -1057,7 +1058,7 @@ class StatsQuery:
             has_more = len(rows) > limit
             page = rows[:limit]
             return {
-                "events": [dict(row) for row in page],
+                "events": [self._event_row(row) for row in page],
                 "next_before": page[-1]["rowid"] if has_more and page else None,
                 "total": None,
             }
@@ -1075,10 +1076,16 @@ class StatsQuery:
             ORDER BY {clause} LIMIT ? OFFSET ?
             """, [*params, limit, max(0, offset)]).fetchall()
         return {
-            "events": [dict(row) for row in rows],
+            "events": [self._event_row(row) for row in rows],
             "next_before": None,
             "total": int(total),
         }
+
+    @staticmethod
+    def _event_row(row) -> dict[str, Any]:
+        result = dict(row)
+        result["credential_groups"] = decode_group_attribution(result.pop("group_attribution"))
+        return result
 
     def export_events(self, *, username: str | None = None, since: int | None = None,
                       until: int | None = None,
@@ -1106,13 +1113,13 @@ class StatsQuery:
                    e.reasoning_tokens, e.cached_tokens, e.credit, e.credit_estimated,
                    e.cost_usd, e.cost_cny, e.ttfb_ms, e.latency_ms, e.request_id,
                    {_ROW_SPEED_VISIBLE} AS tps_visible, {_ROW_SPEED_TOTAL} AS tps,
-                   {name_expr} AS credential_name
+                   {name_expr} AS credential_name, e.group_attribution
             FROM usage_events e
             LEFT JOIN credentials c ON c.id = e.credential_id
             {where}
             ORDER BY e.rowid ASC LIMIT ?
             """, [*params, limit + 1]).fetchall()
-        return [dict(row) for row in rows]
+        return [self._event_row(row) for row in rows]
 
     def errors(self, *, username: str | None = None, since: int | None = None,
                until: int | None = None, limit: int = ERROR_MAX_GROUPS,

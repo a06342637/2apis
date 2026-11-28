@@ -1,4 +1,4 @@
-import { act, screen, waitFor } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { StatsPage } from "../StatsPage";
 import { mockFetch, MockEventSource, renderPage, settle, userEvent } from "@/test-utils";
@@ -27,6 +27,33 @@ describe("StatsPage 实时明细", () => {
 
   beforeEach(() => {
     MockEventSource.reset();
+  });
+
+  it("历史和实时明细在渠道凭证后显示请求时密钥分组，旧记录显示未知占位", async () => {
+    const row = { ...EVENTS_PAGE1.events[0], credential_groups: [
+      { id: "g1", name: "生产组" }, { id: "g2", name: "备用组" },
+    ] };
+    mockFetch({ ...routes, "/api/stats/events": { ...EVENTS_PAGE1, events: [row,
+      { ...row, rowid: 998, credential_groups: null },
+      { ...row, rowid: 997, credential_groups: [] },
+    ] } });
+    renderPage(<StatsPage />, ADMIN);
+    await settle();
+    const table = await screen.findByTestId("events-table");
+    const headers = within(table).getAllByRole("columnheader").map(item => item.textContent);
+    expect(headers[headers.findIndex(value => value?.includes("渠道 / 凭证")) + 1]).toBe("分组");
+    const rows = screen.getAllByTestId("event-row");
+    const cell = rows[0].querySelector("[data-label='分组']")!;
+    expect(cell).toHaveTextContent("生产组");
+    expect(cell).toHaveTextContent("备用组");
+    expect(rows[1].querySelector("[data-label='分组']")).toHaveTextContent("—");
+    expect(rows[1].querySelector("[data-label='分组']")).toHaveAttribute("title", "此记录未保存请求时的密钥分组");
+    expect(rows[2].querySelector("[data-label='分组']")).toHaveAttribute("title", "此请求未使用分组");
+    await userEvent.click(screen.getByTestId("events-live-toggle"));
+    MockEventSource.last().emit({ ...row, rowid: 999 });
+    await waitFor(() => expect(screen.getAllByTestId("live-row")).toHaveLength(1));
+    expect(screen.getByTestId("live-row").querySelector("[data-label='分组']")).toHaveTextContent("生产组");
+    expect(within(screen.getByTestId("events-live-table")).getByRole("columnheader", { name: "分组" })).toBeInTheDocument();
   });
 
   it("默认不建连，勾上「实时」后订阅并展示新行", async () => {

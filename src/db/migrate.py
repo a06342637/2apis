@@ -112,10 +112,12 @@ SCHEMA_NAME = "schema.sql"
 # 41：api_keys 新增 key_enc，明文仅密码复核后回显，旧摘要行保持 NULL。
 # 42：正式账号分组+成员表；api_keys新增group_ids，默认 [] 保持原作用域。
 # 43：credentials 新增 quota_detail；订阅展示补充信息，老库 NULL 表示未知。
-SCHEMA_VERSION = 43
+# 44：usage_events 新增 group_attribution；旧记录 NULL，不按当前成员回填历史归属。
+SCHEMA_VERSION = 44
 
 # (表, 列定义)：历史库升级时逐条补列
 _MIGRATION_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("usage_events", "group_attribution TEXT"),
     ("usage_events",
      "cached_tokens INTEGER"),  # 输入中命中缓存的 token（上游可选，NULL=未上报）
     ("usage_hourly",

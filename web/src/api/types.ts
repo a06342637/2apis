@@ -335,6 +335,8 @@ export interface PercentileTimelineResponse {
 
 /** 逐请求明细（usage_events，仅保留 90 天）。 */
 export interface UsageEventRow {
+  /** 请求时的密钥组与实际账号交集；null/缺省为旧日志或未知，[] 为未使用分组。 */
+  credential_groups?: { id: string; name: string }[] | null;
   rowid: number;
   ts: number;
   username: string;
