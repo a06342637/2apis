@@ -375,7 +375,7 @@ export function AddCredentialDialog({
     setBusy(true);
     try {
       const created = await api.importCredential(
-        parsed.provider, parsed.credential, nickname);
+        parsed.provider, parsed.credential, nickname.trim() || parsed.nickname || "", parsed.tags);
       setRaw("");
       setNickname("");
       setManualProvider(null);

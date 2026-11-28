@@ -54,6 +54,27 @@ describe("凭证入口和登录表单交叉回归", () => {
     });
   });
 
+  it.each([
+    ["", "导出备注"], ["   ", "导出备注"], [" 手工备注 ", "手工备注"],
+  ])("导出凭证重新导入保留标签，输入备注 %j 时使用 %j", async (inputNickname, expectedNickname) => {
+    const fetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ id: "synthetic-codearts", merged: false }));
+    vi.stubGlobal("fetch", fetch);
+    const callbacks = dialog();
+    await userEvent.click(screen.getByTestId("add-credential-tab-import"));
+    const credential = { access_key_id: "synthetic-ak", secret_access_key: "synthetic-sk" };
+    fireEvent.change(screen.getByTestId("import-payload"), { target: { value: JSON.stringify({
+      provider: "codearts", nickname: "导出备注", tags: ["自己4594", "备用"], credential,
+    }) } });
+    fireEvent.change(screen.getByTestId("import-nickname"), { target: { value: inputNickname } });
+    await userEvent.click(screen.getByTestId("import-submit"));
+    await waitFor(() => expect(callbacks.onImported).toHaveBeenCalledOnce());
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({
+      provider: "codearts", nickname: expectedNickname, tags: ["自己4594", "备用"], credential,
+    });
+  });
+
   it("真实剪贴板拒绝并且旧接口失败时，不报告成功或留下临时 textarea", async () => {
     vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: vi.fn(() => false) });
