@@ -9,6 +9,8 @@ import { useSessionContext } from "../Layout";
 import type { RuntimeSetting, TaskRunResult, TaskStatus } from "../api/types";
 import { PageHeader } from "../components/PageHeader";
 import { PageSkeleton } from "../components/PageSkeleton";
+import { useSearchParams } from "react-router-dom";
+import { RemoteBackupPanel } from "../components/RemoteBackupPanel";
 import { SystemUpdatePanel } from "../components/SystemUpdatePanel";
 import { Badge, Button, Card, EmptyState, Field, Input, Notice, Panel, QueryErrorState, Select, Tabs } from "../ui";
 
@@ -269,7 +271,9 @@ export function SettingsPage() {
   const [busy, setBusy] = useState(false);
   // 一级（任务 / 配置 / 更新）→ 二级（任务业务分组或网关卡组）→ 任务。
   // 三个 key 分开存：切走再切回时各自的二级选择还在。
-  const [section, setSection] = useState<"tasks" | "gateway" | "updates">("tasks");
+  const [params] = useSearchParams();
+  const [section, setSection] = useState<"tasks" | "gateway" | "updates" | "remote-backup">(
+    params.get("tab") === "remote-backup" ? "remote-backup" : "tasks");
   const [taskGroupKey, setTaskGroupKey] = useState<string | null>(null);
   const [gatewayGroupKey, setGatewayGroupKey] = useState<string | null>(null);
   const [taskKey, setTaskKey] = useState<string | null>(null);
@@ -331,8 +335,9 @@ export function SettingsPage() {
     ...(gatewayGroupOptions.length > 0 || taskGroupOptions.length === 0
       ? [{ value: "gateway", label: "网关配置" }] : []),
     { value: "updates", label: "更新系统" },
+    { value: "remote-backup", label: "远端备份" },
   ];
-  const activeSection = section === "updates" ? "updates"
+  const activeSection = (section === "updates" || section === "remote-backup") ? section
     : taskGroupOptions.length > 0 && (section === "tasks" || gatewayGroupOptions.length === 0)
       ? "tasks" : "gateway";
 
@@ -519,12 +524,12 @@ export function SettingsPage() {
           <Tabs
             value={activeSection}
             options={sectionOptions}
-            onChange={(value) => setSection(value as "tasks" | "gateway" | "updates")}
+            onChange={(value) => setSection(value as typeof section)}
             testId="settings-sections"
             compact
           />
         </div>
-        {activeSection === "updates" ? (
+        {activeSection === "remote-backup" ? <RemoteBackupPanel /> : activeSection === "updates" ? (
           <SystemUpdatePanel />
         ) : isLoading ? (
           <PageSkeleton variant="table" rows={5} />

@@ -83,13 +83,14 @@ async def _stream_to_file(request: Request, target: Path, limit: int) -> int:
     return size
 
 
-def _verify_and_stage(pending: Path, temp: Path, *, filename: str, size: int) -> dict:
+def verify_and_stage(pending: Path, temp: Path, *, filename: str, size: int) -> dict:
     """校验临时文件 → 原子换到 pending 位置 → 写 meta（形态同 `db.backup.stage_restore`）。
 
     只差在数据来源：那边一次性收 bytes（全量进内存），这里收已经流式落盘的
     临时文件。校验与 meta 字段必须与 `stage_restore` 完全一致，否则重启时
     `pending_restore_info` / `apply_pending_restore` 的展示口径会漂移。
     """
+    secure_dir(pending.parent)
     secure_file(temp)
     verify_app_database(temp)
     os.replace(temp, pending)
@@ -198,7 +199,7 @@ def create_router(services: Services) -> APIRouter:
             if not size:
                 raise InvalidRequest("上传内容为空")
             meta = await asyncio.to_thread(
-                _verify_and_stage, pending, temp, filename=filename, size=size)
+                verify_and_stage, pending, temp, filename=filename, size=size)
         except (OSError, RuntimeError) as error:
             raise InvalidRequest(str(error)) from error
         finally:

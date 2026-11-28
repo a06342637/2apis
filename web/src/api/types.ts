@@ -72,6 +72,7 @@ export interface Credential {
   /** session 死亡硬禁用 */
   disabled: 0 | 1;
   disabled_reason: string | null;
+  miora_exhausted_at?: number | null;
   /** 手动指定（全局唯一一条为 1） */
   pinned: 0 | 1;
   health: Health;
@@ -513,7 +514,7 @@ export interface BatchImportEntry {
 /** 批量导入结果：下标对应提交数组，前端按行保留失败/跳过项供重试。 */
 export interface BatchImportResult {
   created: { index: number; id: string; tos: TosRisk }[];
-  skipped: { index: number; reason: string }[];
+  skipped: { index: number; reason: string; duplicate_type?: "batch" | "existing" }[];
   failed: { index: number; reason: string }[];
 }
 

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import math
 import time
 import uuid
 from collections.abc import Callable, Iterable
@@ -29,6 +31,9 @@ from ..provider.token_expiry import credential_token_times
 from ..request_context import get_request_id
 from ..sorting import sort_rows, sql_order
 from ..tags import tags_text, tags_value
+
+miora_lifecycle_log = logging.getLogger("src.credentials.miora_lifecycle")
+MIORA_EXHAUSTED_GRACE = 48 * 3600
 
 
 def _now(now: int | None) -> int:
@@ -372,7 +377,7 @@ class CredentialRepository:
                     *, now: int | None = None) -> bool:
         with self._db.transaction() as conn:
             cursor = conn.execute(
-                "UPDATE credentials SET enabled = ?, "
+                "UPDATE credentials SET enabled = ?, miora_exhausted_at = NULL, "
                 "updated_at = MAX(?, updated_at + 1) WHERE id = ?",
                 (1 if enabled else 0, _now(now), credential_id))
             if cursor.rowcount > 0:
@@ -837,8 +842,9 @@ class CredentialRepository:
             conn.execute(
                 "UPDATE credentials SET data_enc = ?, token_expires_at = ?, "
                 "token_issued_at = ?, login_secret = ?, "
+                "enabled = CASE WHEN miora_exhausted_at IS NULL THEN enabled ELSE 1 END, "
                 f"nickname = CASE WHEN ? = '' THEN nickname ELSE ? END, "
-                f"disabled = 0, disabled_reason = NULL, {cooling_sql}"
+                f"disabled = 0, disabled_reason = NULL, miora_exhausted_at = NULL, {cooling_sql}"
                 "err_count = 0 WHERE id = ?",
                 (self._cipher.encrypt(payload), expires_at, issued_at,
                  _login_secret_flag(credential_data), nickname, nickname,
@@ -856,9 +862,20 @@ class CredentialRepository:
         """
         with self._db.transaction() as conn:
             previous = conn.execute(
-                "SELECT provider, quota_remaining, quota_probed_at "
+                "SELECT provider, quota_remaining, quota_probed_at, enabled, disabled, "
+                "miora_exhausted_at, nickname, token_issued_at, token_expires_at, updated_at "
                 "FROM credentials WHERE id = ?",
                 (credential_id,)).fetchone()
+            if previous is not None and previous["provider"] == "miora":
+                observed = quota.probed_at
+                if (observed is not None and previous["quota_probed_at"] is not None
+                        and observed < previous["quota_probed_at"]):
+                    return
+                if any(value is not None and (not math.isfinite(value) or value < 0)
+                       for value in (quota.remaining, quota.total)):
+                    conn.execute("UPDATE credentials SET health = NULL WHERE id = ?",
+                                 (credential_id,))
+                    return
             conn.execute(
                 "UPDATE credentials SET quota_remaining = ?, quota_total = ?, "
                 "quota_cycle_end = ?, quota_expiry_ladder = ?, quota_packages = ?, "
@@ -876,7 +893,53 @@ class CredentialRepository:
                 self._record_credit_event(
                     conn, credential_id, ledger=quota_ledger(previous["provider"]),
                     before=previous["quota_remaining"], after=quota.remaining,
-                    probed_at=quota.probed_at, window_start=previous["quota_probed_at"])
+                    probed_at=_now(quota.probed_at), window_start=previous["quota_probed_at"])
+                if previous["provider"] == "miora":
+                    lifecycle = self._miora_quota_lifecycle(conn, credential_id, previous, quota)
+                else:
+                    lifecycle = None
+            else:
+                lifecycle = None
+        if lifecycle:
+            miora_lifecycle_log.info(
+                "Miora %s：账号=%s，ID=%s，剩余积分=%s，总积分=%s，"
+                "登录票据签发时间=%s，到期时间=%s%s",
+                lifecycle[0], json.dumps(previous["nickname"], ensure_ascii=False), credential_id,
+                quota.remaining, quota.total, previous["token_issued_at"],
+                previous["token_expires_at"], lifecycle[1])
+
+    @staticmethod
+    def _miora_quota_lifecycle(conn, credential_id: str, previous,
+                               quota: Quota) -> tuple[str, str] | None:
+        observed, balance = quota.probed_at, quota.remaining
+        if (quota.probe_failed or observed is None or balance is None
+                or previous["disabled"]
+                or observed < previous["updated_at"]):
+            return None
+        paused = previous["miora_exhausted_at"]
+        if balance > 0:
+            if paused is None:
+                return None
+            conn.execute("UPDATE credentials SET enabled = 1, miora_exhausted_at = NULL "
+                         "WHERE id = ?", (credential_id,))
+            _record_credential_event(conn, credential_id, "enabled", detail="Miora 积分恢复")
+            return "积分恢复，自动启用", ""
+        if previous["enabled"]:
+            conn.execute("UPDATE credentials SET enabled = 0, miora_exhausted_at = ? "
+                         "WHERE id = ?", (observed, credential_id))
+            _record_credential_event(conn, credential_id, "disabled", detail="Miora 积分耗尽")
+            return "积分耗尽，自动暂停", ""
+        if paused is None or observed - paused < MIORA_EXHAUSTED_GRACE:
+            return None
+        tokens = conn.execute(
+            "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0) "
+            "FROM usage_events WHERE credential_id = ? AND ts >= ?",
+            (credential_id, observed - 90 * 86400)).fetchone()
+        conn.execute("DELETE FROM credentials WHERE id = ?", (credential_id,))
+        _clear_model_cooldowns(conn, credential_id)
+        return ("暂停满 48 小时，复查仍为零积分，已自动删除",
+                f"，近90天输入词元数={tokens[0]}，输出词元数={tokens[1]}"
+                f"，合计词元数={tokens[0] + tokens[1]}")
 
     def quota_detail(self, credential_id: str) -> dict[str, Any] | None:
         row = self._db.connect().execute(
@@ -1155,7 +1218,7 @@ class CredentialRepository:
             "quota_total, quota_cycle_end, "
             "quota_probed_at, growth_last_run_at, growth_last_result, created_at, added_by, "
             "quota_expiry_ladder, quota_packages, quota_detail, data_enc, "
-            "web_cookie_state, routing_weight, login_secret, "
+            "web_cookie_state, routing_weight, login_secret, miora_exhausted_at, "
             "token_expires_at, token_issued_at, "
             # 编辑版本号 + 账号级模型白名单：管理台编辑对话框据此带
             # `expected_updated_at`（冲突检测）并回显 glob 列表。

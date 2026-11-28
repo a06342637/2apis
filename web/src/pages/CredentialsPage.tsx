@@ -260,8 +260,10 @@ export function CredentialsPage() {
   // 凭证增删 / 暂停会改变「哪些渠道还有可用凭证」，组头的模型清单（与 Playground
   // 共用的 `playground-models` 缓存）必须一起失效，否则凭证列表刷新了、模型块还
   // 停在旧数据上（新接入的渠道组头一直空着）。
+  // 后台刷新不阻塞按钮恢复；模型目录可能仍在等待上游。
   const refresh = () => Promise.all([
-    client.invalidateQueries({ queryKey: ["admin"] }),
+    client.invalidateQueries({ queryKey: ["admin", session.username, "credential-groups"] }),
+    client.invalidateQueries({ queryKey: ["admin", session.username, "credentials"] }),
     client.invalidateQueries({ queryKey: ["playground-models"] }),
     client.invalidateQueries({ queryKey: ["model-display"] }),
   ]);
@@ -299,7 +301,7 @@ export function CredentialsPage() {
     try {
       await task();
       if (successMessage) showNotice(successMessage);
-      await refresh();
+      void refresh();
     } catch (caught) {
       showError(errorText(caught, "操作失败"));
     } finally {
@@ -328,7 +330,7 @@ export function CredentialsPage() {
         content: <BatchToastContent result={result} names={credentialNames} done={button.done} />,
       });
       setSelected(new Set());
-      await refresh();
+      void refresh();
     } catch (caught) {
       showError(errorText(caught, "批量操作失败"));
     } finally {
@@ -386,7 +388,7 @@ export function CredentialsPage() {
       setConfirmBatchDelete(false);
       push({ tone: result.failed > 0 ? "warn" : "ok", testId: "credentials-batch-result",
         content: <BatchToastContent result={result} names={credentialNames} done="已删除" /> });
-      await refresh();
+      void refresh();
     } catch (caught) {
       showError(errorText(caught, "批量删除失败"));
     } finally {

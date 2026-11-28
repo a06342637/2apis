@@ -40,6 +40,12 @@ HEARTBEAT_SECONDS = 15.0
 # 非流式端点默认返回行数；上限由缓冲容量决定（不能超过实际保留的行）。
 DEFAULT_LOG_LIMIT = 200
 
+CATEGORIES = {
+    "backup": ("src.remote_backup.service", "src.db.backup", "src.api.admin_backups",
+               "src.tasks.backup"),
+    "miora-lifecycle": ("src.credentials.miora_lifecycle",),
+}
+
 _DISABLED = error_payload("log page disabled", "not_found", 404)
 
 
@@ -96,7 +102,7 @@ def create_router(services: Services) -> APIRouter:
                         limit: int = DEFAULT_LOG_LIMIT,
                         request_id: str | None = None,
                         since: int | None = None,
-                        level: str | None = None):
+                        level: str | None = None, category: str = ""):
         """最近 N 行（旧→新）；可按 `request_id` / 时间窗 / 级别过滤。
 
         三条数据路径，按优先级：
@@ -111,19 +117,22 @@ def create_router(services: Services) -> APIRouter:
         """
         require_admin(principal)
         sync_root_handler(buffer)          # 热更从 0 打开后无需重启即可挂上
+        loggers = CATEGORIES.get(category, ())
         repo = services.log_repo
         if repo is not None and repo.enabled:
             capacity = repo.capacity()
             clamped = max(1, min(limit, capacity))
             return {"lines": repo.query(limit=clamped, request_id=request_id,
-                                        since=since, level=level),
+                                        since=since, level=level, loggers=loggers),
                     "capacity": capacity, "limit": clamped,
                     "persisted": True}
         if not buffer.enabled:
             return JSONResponse(status_code=404, content=_DISABLED)
         capacity = buffer.capacity()
         clamped = max(1, min(limit, capacity))
-        lines = buffer.snapshot(limit=clamped)
+        lines = buffer.snapshot(limit=None if loggers else clamped)
+        if loggers:
+            lines = [line for line in lines if line["logger"] in loggers][-clamped:]
         if request_id:
             lines = [line for line in lines
                      if line.get("request_id") == request_id]

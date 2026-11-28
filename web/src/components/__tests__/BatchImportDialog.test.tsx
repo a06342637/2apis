@@ -122,6 +122,9 @@ describe("BatchImportDialog", () => {
 
     await waitFor(() => expect(onNotice).toHaveBeenCalledWith("全部为重复凭证（1 条），未新增"));
     expect(onImported).not.toHaveBeenCalled();
+    expect(screen.getByTestId("batch-result")).toHaveTextContent("跳过原因：账号或凭证已存在");
+    expect(screen.queryByTestId("batch-preview")).not.toBeInTheDocument();
+    expect(screen.getByTestId("batch-text")).toHaveValue("");
   });
 
   it("请求失败显示后端文案", async () => {
@@ -166,9 +169,6 @@ describe("BatchImportDialog", () => {
       "two@example.com Cookie: authToken=synthetic-two; refreshToken=r2",
       "synthetic-third-account",
     ].join("\r\n") } });
-    expect(screen.getByTestId("batch-preview")).toHaveTextContent("one@example.com");
-    expect(screen.getByTestId("batch-preview")).toHaveTextContent("two@example.com");
-    expect(screen.getByTestId("batch-preview")).toHaveTextContent("新增时自动编号");
     await userEvent.click(screen.getByTestId("batch-submit"));
     expect(spy).toHaveBeenCalledWith([
       expect.objectContaining({ provider: "miora", nickname: "one@example.com",
@@ -183,7 +183,7 @@ describe("BatchImportDialog", () => {
   it("邮箱紧贴Cookie或JSON作为备注，重复由服务端跳过且坏行保留原邮箱", async () => {
     const spy = vi.spyOn(api, "batchImportCredentials").mockResolvedValue({
       created: [{ index: 0, id: "new", tos: { level: "green", reason: "", basis: "" } }],
-      skipped: [{ index: 1, reason: "duplicate" }], failed: [],
+      skipped: [{ index: 1, reason: "duplicate", duplicate_type: "batch" }], failed: [],
     });
     const { onImported } = renderDialog();
     fireEvent.change(screen.getByTestId("batch-text"), { target: { value: [
@@ -191,8 +191,6 @@ describe("BatchImportDialog", () => {
       'duplicate@example.com{"authToken":"synthetic-account","refreshToken":"account-refresh"}',
       "bad@example.com{refreshToken=missing-own-auth}",
     ].join("\n") } });
-    expect(screen.getByTestId("batch-preview")).toHaveTextContent("first@example.com");
-    expect(screen.getByTestId("batch-preview")).toHaveTextContent("duplicate@example.com");
     expect(screen.getByTestId("batch-count")).toHaveTextContent("识别 2 条，1 行有问题");
     await userEvent.click(screen.getByTestId("batch-submit"));
     expect(spy).toHaveBeenCalledExactlyOnceWith([
@@ -203,6 +201,7 @@ describe("BatchImportDialog", () => {
     ]);
     await waitFor(() => expect(screen.getByTestId("batch-result")).toHaveTextContent("成功 1 条，跳过 1 条"));
     expect(onImported).toHaveBeenCalledWith("批量导入完成：成功 1 条");
+    expect(screen.getByTestId("batch-result")).toHaveTextContent("跳过原因：本批次重复");
     const retry = (screen.getByTestId("batch-text") as HTMLTextAreaElement).value;
     expect(retry).toContain("bad@example.com");
     expect(retry).not.toContain("first@example.com");

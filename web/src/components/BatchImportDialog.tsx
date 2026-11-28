@@ -49,7 +49,14 @@ export function BatchImportDialog({
   const [pending, setPending] = useState(false);
   const [readingFile, setReadingFile] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<BatchImportResult | null>(null);
+  const [result, setResult] = useState<(BatchImportResult & { parseFailures: number }) | null>(null);
+  const skipReasons = new Map<string, number>();
+  for (const row of result?.skipped ?? []) {
+    const reason = row.reason === "duplicate"
+      ? row.duplicate_type === "batch" ? "本批次重复" : "账号或凭证已存在"
+      : "服务端跳过";
+    skipReasons.set(reason, (skipReasons.get(reason) ?? 0) + 1);
+  }
   const parsed = useMemo(() => parseBatchCredentialInput(text, fallback), [text, fallback]);
   const providers = [...new Set(parsed.entries.map(entry => entry.provider))]
     .filter((provider): provider is Provider => IMPORT_PROVIDERS.includes(provider as Provider));
@@ -92,7 +99,7 @@ export function BatchImportDialog({
     setResult(null);
     try {
       const response = await api.batchImportCredentials(parsed.entries);
-      setResult(response);
+      setResult({ ...response, parseFailures: parsed.errors.length });
       if (response.created.length) {
         onImported(`批量导入完成：成功 ${response.created.length} 条`);
       }
@@ -102,7 +109,7 @@ export function BatchImportDialog({
           ...response.failed.map(({ index }) => JSON.stringify(parsed.entries[index])),
           ...parsed.unparsed,
         ].join("\n"));
-      }
+      } else setText("");
       if (response.skipped.length && !response.created.length && !response.failed.length) {
         onNotice(`全部为重复凭证（${response.skipped.length} 条），未新增`);
       }
@@ -135,7 +142,7 @@ export function BatchImportDialog({
           Miora 也支持每行粘贴 <code>{"邮箱{authToken=...; refreshToken=...}"}</code>，
           或让邮箱紧贴 JSON 对象。邮箱会作为账号备注（昵称），也可单独放在上一行。
           新 Miora 账号未填昵称时按北京时间自动编号，
-          重新导入保留旧昵称；同批重复凭证会跳过。
+          已有账号或重复凭证会跳过，导入后在下方显示结果和跳过原因。
         </p>
         <label className="flex items-center gap-2 text-xs text-muted-foreground">
           原始 token 默认渠道
@@ -200,14 +207,14 @@ export function BatchImportDialog({
           placeholder={'mail@example.com{authToken=TOKEN; refreshToken=REFRESH}\nanother@example.com{"authToken":"ANOTHER_TOKEN","refreshToken":"ANOTHER_REFRESH"}'}
           className="w-full resize-y rounded-md border border-border bg-background p-2 font-mono text-xs"
         />
-        {parsed.entries.length > 0 && (
-          <div data-testid="batch-preview" className="text-xs text-muted-foreground">
-            {parsed.entries.slice(0, 5).map((entry, index) => (
-              <div key={index}>
-                {index + 1}. {providerLabel(entry.provider as Provider)} ·{" "}
-                {entry.nickname || (entry.provider === "miora" ? "新增时自动编号" : "未设置昵称")}
-              </div>
-            ))}
+        {result && (
+          <div data-testid="batch-result" className="space-y-1 text-xs">
+            <Notice tone={result.failed.length + result.parseFailures ? "warn" : "ok"}>
+              成功 {result.created.length} 条，跳过 {result.skipped.length} 条，失败 {result.failed.length + result.parseFailures} 条
+              {result.failed.length + result.parseFailures > 0 && "（失败项已回填到输入框）"}
+              {[...skipReasons].map(([reason, count]) =>
+                <div key={reason}>跳过原因：{reason}（{count} 条）</div>)}
+            </Notice>
           </div>
         )}
         {parsed.entries.length > 100 && <Notice tone="warn">一次最多导入 100 条，请分批粘贴。</Notice>}
@@ -221,15 +228,6 @@ export function BatchImportDialog({
                 </div>
               ))}
               {parsed.errors.length > 5 && <div>…另有 {parsed.errors.length - 5} 行</div>}
-            </Notice>
-          </div>
-        )}
-
-        {result && (
-          <div data-testid="batch-result" className="text-xs">
-            <Notice tone={result.failed.length ? "warn" : "ok"}>
-              成功 {result.created.length} 条，跳过 {result.skipped.length} 条
-              {result.failed.length > 0 && `，失败 ${result.failed.length} 条（已回填到输入框）`}
             </Notice>
           </div>
         )}

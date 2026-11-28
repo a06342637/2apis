@@ -129,7 +129,7 @@ export function buildActions(deps: ActionsDeps): Actions {
               `探测失败：${probeFailureLabel(result.reason)}（健康度保持为「未探测」）`,
             );
           }
-          await refresh();
+          void refresh();
         } catch (caught) {
           showError(errorText(caught, "探测失败"));
         } finally {
@@ -158,7 +158,7 @@ export function buildActions(deps: ActionsDeps): Actions {
               `签到未成功（code=${result.code ?? "null"}）${result.message ? ` ${result.message}` : ""}`,
             );
           }
-          await refresh();
+          void refresh();
         } catch (caught) {
           showError(errorText(caught, "签到失败"));
         } finally {
@@ -177,7 +177,7 @@ export function buildActions(deps: ActionsDeps): Actions {
             duration: 12_000,
             content: <GrowthToastContent result={result} />,
           });
-          await refresh();
+          void refresh();
         } catch (caught) {
           showError(errorText(caught, "成长中心执行失败"));
         } finally {
@@ -226,7 +226,7 @@ export function buildActions(deps: ActionsDeps): Actions {
           showNotice(result.ok
             ? "活跃上报成功（已补发一条对话事件）"
             : `活跃上报失败：${result.message || "未知原因"}`);
-          await refresh();
+          void refresh();
         } catch (caught) {
           showError(errorText(caught, "活跃上报失败"));
         } finally {

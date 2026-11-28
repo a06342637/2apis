@@ -1,3 +1,5 @@
+import { useSearchParams } from "react-router-dom";
+import { RemoteBackupFiles } from "../components/RemoteBackupFiles";
 import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { DatabaseBackup, Download, RotateCcw, Trash2, Upload } from "lucide-react";
@@ -43,6 +45,8 @@ type Pending =
  * 就生效、立刻去验证数据。
  */
 export function BackupsPage() {
+  const [params] = useSearchParams();
+  const remote = params.get("remote");
   const session = useSessionContext();
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -110,7 +114,7 @@ export function BackupsPage() {
       <PageHeader
         eyebrow="运维"
         title="备份与恢复"
-        description="备份是整库一致性快照（VACUUM INTO + 完整性校验），只留在服务器 DATA_DIR/backups，下载后请自行保管。恢复采用「上传校验 → 暂存 → 下次启动生效」：运行中不换库，避免旧连接与 WAL 把新库拼坏；启动时若待恢复文件校验不过，会留档并继续用当前库。"
+        description="备份是整库一致性快照（VACUUM INTO + 完整性校验），本地快照保存在服务器，也可配置远端备份。恢复采用「上传校验 → 暂存 → 下次启动生效」：运行中不换库，避免旧连接与 WAL 把新库拼坏；启动时若待恢复文件校验不过，会留档并继续用当前库。"
         icon={<DatabaseBackup className="size-5" />}
         actions={
           <>
@@ -235,6 +239,9 @@ export function BackupsPage() {
           </Table>
         )}
       </Panel>
+
+      <RemoteBackupFiles key={remote} initial={remote === "oss" || remote === "sftp" ? remote : undefined}
+        onRestored={refresh} formatBytes={formatBytes} />
 
       {pending && (
         <ConfirmDialog

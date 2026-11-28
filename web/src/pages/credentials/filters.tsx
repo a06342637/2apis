@@ -169,7 +169,7 @@ export function BatchActionBar({
                     {button.verb}
                   </Button>
                 ))}
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button size="sm" variant="default" disabled={busy || confirmingDelete} data-testid="batch-export">
                       <Download className="size-3.5" /> 批量导出凭证 <ChevronDown className="size-3.5" />

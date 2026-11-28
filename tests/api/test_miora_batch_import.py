@@ -82,47 +82,44 @@ async def test_default_batch_names_use_beijing_time_and_only_unnamed_new_sequenc
     ])
     assert zones == ["Asia/Shanghai"]
     assert [row["index"] for row in response["created"]] == [0, 1, 3, 5]
-    assert response["skipped"] == [{"index": 2, "reason": "duplicate"}]
+    assert response["skipped"] == [{"index": 2, "reason": "duplicate", "duplicate_type": "batch"}]
     assert response["failed"][0]["index"] == 4
     assert list(names(batch_app).values()) == [
         "20261126-021530-001", "mail@example.com", "", "20261126-021530-002"]
     assert len(batch_app.probes) == 4
 
 
-async def test_reimport_keeps_custom_names_and_explicit_email_can_rename(batch_app, monkeypatch):
+async def test_existing_identity_is_skipped_without_changes(batch_app, monkeypatch):
     freeze_clock(monkeypatch)
-    first = await import_rows(batch_app, [item("synthetic-old", "my custom name", uid="user-1")])
+    first = await import_rows(batch_app, [item("synthetic-old", "custom", uid="user-1")])
     cid = first["created"][0]["id"]
+    before = batch_app.services.credentials.credential_data(cid)
     response = await import_rows(batch_app, [
-        item("synthetic-renewed", uid="user-1"), item("synthetic-new-account"),
+        item("synthetic-renewed", "different", uid="user-1"),
+        item("synthetic-rotated", uid="user-1"), item("synthetic-new-account"),
     ])
-    assert response["created"][0]["id"] == cid
-    assert response["created"][0]["merged"] is True
-    assert names(batch_app)[cid] == "my custom name"
-    assert list(names(batch_app).values())[1] == "20261126-021530-001"
-    response = await import_rows(batch_app, [
-        item("synthetic-renewed", "new@example.com", uid="user-1")])
-    assert response["created"][0]["id"] == cid and response["created"][0]["merged"] is True
-    assert names(batch_app)[cid] == "new@example.com"
-    skipped = await import_rows(batch_app, [item("synthetic-renewed", uid="user-1")])
-    assert skipped["created"] == [] and skipped["skipped"][0]["index"] == 0
-    assert names(batch_app)[cid] == "new@example.com"
+    assert [row["index"] for row in response["created"]] == [2]
+    assert response["skipped"] == [
+        {"index": 0, "reason": "duplicate", "duplicate_type": "existing"},
+        {"index": 1, "reason": "duplicate", "duplicate_type": "batch"},
+    ]
+    assert names(batch_app)[cid] == "custom"
+    assert len(batch_app.probes) == 2
+    assert batch_app.services.credentials.credential_data(cid) == before
 
 
-async def test_opaque_exact_reimport_renames_one_row_but_email_does_not_guess_identity(batch_app):
+async def test_opaque_exact_duplicate_is_skipped_but_email_does_not_guess_identity(batch_app):
     first = await import_rows(batch_app, [item("synthetic-opaque", "old-name", refreshToken="r1")])
     cid = first["created"][0]["id"]
     response = await import_rows(batch_app, [
-        item("synthetic-opaque", "mail@example.com", refreshToken="r1"),
-        item("synthetic-opaque", "duplicate@example.com", refreshToken="r1"),
-        item("synthetic-different", "mail@example.com", refreshToken="r2"),
+        item("synthetic-opaque", "same@example.com", refreshToken="r1"),
+        item("synthetic-opaque", "same@example.com", refreshToken="r1"),
+        item("synthetic-different", "same@example.com", refreshToken="r2"),
     ])
-    assert response["created"][0]["id"] == cid and response["created"][0]["merged"] is True
-    assert response["skipped"] == [{"index": 1, "reason": "duplicate"}]
-    assert names(batch_app)[cid] == "mail@example.com"
-    assert response["created"][1]["id"] != cid
+    assert [row["index"] for row in response["created"]] == [2]
+    assert [row["duplicate_type"] for row in response["skipped"]] == ["existing", "batch"]
+    assert names(batch_app)[cid] == "old-name"
     assert len(names(batch_app)) == 2
-    assert batch_app.services.credentials.credential_data(cid)["refresh_token"] == "r1"
 
 
 async def test_single_import_and_non_miora_batch_keep_old_nickname_contract(batch_app, monkeypatch):

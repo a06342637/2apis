@@ -35,6 +35,10 @@ from .deps import Services
 _login_locks: dict[str, asyncio.Lock] = {}
 
 
+class DuplicateCredential(ValueError):
+    """批量导入命中已有账号时跳过，不更新旧凭证。"""
+
+
 def _login_lock(provider_id: str) -> asyncio.Lock:
     lock = _login_locks.get(provider_id)
     if lock is None:
@@ -52,6 +56,7 @@ async def save_login_credential(
         tags: list[str] | None = None,
         new_nickname: Callable[[], str] | None = None,
         merge_identical: bool = False,
+        skip_existing: bool = False,
 ) -> tuple[str, bool]:
     """登录结果落库，返回 `(credential_id, 是否为合并更新)`。
 
@@ -93,6 +98,8 @@ async def save_login_credential(
         existing_id = services.credentials.find_login_credential(
             provider_id, identity, target)
         if existing_id is not None:
+            if skip_existing:
+                raise DuplicateCredential("duplicate")
             async with services.credentials.edit_lock(existing_id):
                 if services.credentials.merge_login_credential(
                         existing_id, credential_data, nickname):

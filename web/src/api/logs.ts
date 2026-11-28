@@ -25,9 +25,17 @@ export type LogLevel = "DEBUG" | "INFO" | "WARNING" | "ERROR" | "CRITICAL";
 export const LOG_LEVELS: LogLevel[] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 
 /** `GET /api/logs?limit=`：页面首次加载 / 不支持 SSE 时的兜底。 */
-export async function fetchLogs(limit?: number, signal?: AbortSignal): Promise<LogsResponse> {
+export function logMatchesCategory(line: LogLine, category: string) {
+  if (category === "backup") return line.logger.startsWith("src.remote_backup.") ||
+    ["src.db.backup", "src.api.admin_backups", "src.tasks.backup"].includes(line.logger);
+  if (category === "miora-lifecycle") return line.logger === "src.credentials.miora_lifecycle";
+  return true;
+}
+
+export async function fetchLogs(limit?: number, signal?: AbortSignal, category?: string): Promise<LogsResponse> {
   const search = new URLSearchParams();
   if (limit !== undefined) search.set("limit", String(limit));
+  if (category) search.set("category", category);
   const text = search.toString();
   const response = await fetch(`/api/logs${text ? `?${text}` : ""}`, {
     credentials: "same-origin",
