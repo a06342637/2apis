@@ -38,6 +38,9 @@ export type ParsedCredential =
       /** 实际用于导入的渠道（识别优先，其次下拉选中）。 */
       provider: Provider;
       credential: Record<string, unknown>;
+      /** 导出项的账号元数据，独立于上游凭证字段。 */
+      nickname?: string;
+      tags?: string[];
       /** 识别来源，供界面提示用。 */
       detected: Provider | null;
     }
@@ -287,6 +290,8 @@ export function parseCredentialInput(
         provider: declaredProvider ?? fallback,
         credential: nested as Record<string, unknown>,
         detected: declaredProvider,
+        ...(typeof object.nickname === "string" ? { nickname: object.nickname.trim() } : {}),
+        ...(Array.isArray(object.tags) ? { tags: object.tags.map(String) } : {}),
       };
     }
     const detected = detect ? providerFromObject(object) : null;

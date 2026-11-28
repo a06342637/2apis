@@ -1,6 +1,14 @@
-# 2apis · v0.1.8
+# 2apis · v0.1.9
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.9 导入元数据与分组标记
+
+- 单条 JSON 导入保留导出项外层的标签和备注；手工填写昵称时优先使用输入值，否则使用导出的备注。裸凭证、Cookie、cURL 和批量导入继续兼容。
+- 新增及编辑分组时，在账号名称和渠道后显示已加入的全部分组，未加入的显示「未分组」；账号仍可同时加入多个分组。
+- 批量导入可按渠道选择已有分组或新建分组，也可在窗口内查看分组人数、立即创建、改名和确认删除。只为成功导入的账号分配分组；追加最新成员并使用乐观锁，分组失败可单独重试，无需重新导入凭证。
+- 请求明细在「渠道 / 凭证」后增加「分组」列，历史列表、实时明细和 CSV 使用请求时的密钥分组快照。只展示密钥绑定且包含实际调用账号的组；同账号命中多个绑定组时请求仍只计量一次。旧记录无分组快照显示「—」，不按当前成员回填。
+- 已存在账号的重新登录凭证合并继续保留本地标签；本版不会自动恢复先前导入时已丢失的标签。
 
 ## v0.1.8 仓库入口与 ARM64 部署
 
@@ -280,7 +288,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.8`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.9`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

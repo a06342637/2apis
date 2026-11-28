@@ -34,6 +34,7 @@ EXPORT_HEADERS: tuple[str, ...] = (
     # 窗口可测的成功请求，不可测的行留空（不是 0）。
     "正文速度 tok/s", "总产出速度 tok/s",
     "请求 ID",
+    "分组",
 )
 
 # 文本单元格里会被表格软件当公式起点的前缀字符。
@@ -91,6 +92,7 @@ def event_cells(row: dict[str, Any]) -> list[str]:
         format_cell(row.get("tps_visible")),
         format_cell(row.get("tps")),
         format_cell(row.get("request_id")),
+        format_cell(" / ".join(group["name"] for group in row.get("credential_groups") or [])),
     ]
 
 

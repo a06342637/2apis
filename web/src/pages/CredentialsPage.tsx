@@ -612,6 +612,7 @@ export function CredentialsPage() {
         onChanged={() => client.invalidateQueries({ queryKey: ["admin", session.username, "credential-groups"] })} />}
 
       <CredentialDialogs
+        onGroupsChanged={() => void client.invalidateQueries({ queryKey: ["admin", session.username, "credential-groups"] })}
         canWrite={canWrite}
         limitsCredential={limitsCredential}
         setLimitsFor={setLimitsFor}

@@ -34,6 +34,7 @@ export function CredentialSelector({
   emptySummary = "当前渠道全部账号（含以后添加的账号）",
   selectionHint = "不勾选 = 当前渠道全部账号；勾选多个后只在这些账号中负载均衡，均不可用时返回错误。",
   clearText = "清空选择，允许当前渠道全部账号",
+  groupNames,
 }: {
   credentials: Credential[] | undefined;
   selected: string[];
@@ -47,6 +48,7 @@ export function CredentialSelector({
   emptySummary?: string;
   selectionHint?: string;
   clearText?: string;
+  groupNames?: ReadonlyMap<string, readonly string[]>;
 }) {
   const indexed = new Map((credentials ?? []).map((item) => [item.id, item]));
   const compatible = (credentials ?? []).filter((item) => !binding || item.provider === binding);
@@ -61,6 +63,7 @@ export function CredentialSelector({
   const row = (id: string, item: Credential | undefined, invalid = false) => {
     const state = item && credentialState(item);
     const expired = item && item.token_expires_at > 0 && item.token_expires_at <= Date.now() / 1000;
+    const names = groupNames?.get(id) ?? [];
     return (
       <label key={id} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-muted/40">
         <input
@@ -71,6 +74,11 @@ export function CredentialSelector({
         />
         <span className="min-w-0 flex-1 break-all">
           {item ? `${item.nickname || item.id} · ${PROVIDER_LABEL[item.provider]}` : id}
+          {item && groupNames && <span className="ml-2 inline-flex flex-wrap gap-1 align-middle"
+            data-testid={`${testidPrefix}-credential-${id}-groups`}>
+            {(names.length ? names : ["未分组"]).map((name) =>
+              <Badge key={name} tone="muted">{name}</Badge>)}
+          </span>}
         </span>
         {item && state && <Badge tone={STATE_TONE[state]}>{STATE_LABEL[state]}</Badge>}
         {expired && <Badge tone="warn">凭证已过期</Badge>}

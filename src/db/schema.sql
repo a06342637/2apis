@@ -145,7 +145,9 @@ CREATE TABLE IF NOT EXISTS usage_events (
     -- 发起请求的 API Key id（api_keys.id）。NULL = 老库历史行、Cookie 会话调用
     -- 或未带 Key 的调用。只由鉴权层写入（请求头不可信），供按 Key 计量与自助
     -- 用量查询；`usage_hourly` 刻意不加该维度（会炸维度，聚合走明细表）。
-    api_key_id       TEXT
+    api_key_id       TEXT,
+    -- 鉴权时的密钥组与实际凭证交集（id/name JSON 快照）；NULL=旧记录或未知。
+    group_attribution TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);

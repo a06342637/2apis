@@ -69,16 +69,28 @@ def resolve_request_id(header: str | None) -> str:
 # 字段污染所有中间层签名。**只由鉴权层设置**（`src/api/deps.py` 校验通过后），
 # 绝不从请求头读——入站头是客户端可写的，信它等于把归属权交给调用方。
 _api_key_id: ContextVar[str | None] = ContextVar("api_key_id", default=None)
+GroupScope = tuple[tuple[str, str, tuple[str, ...]], ...]
+_api_key_group_scope: ContextVar[GroupScope | None] = ContextVar("api_key_groups", default=())
 
 
 def set_api_key_id(value: str | None) -> None:
     """在当前上下文设置 API Key id（鉴权依赖在放行之前调用；None=复原）。"""
     _api_key_id.set(value)
+    _api_key_group_scope.set(())
 
 
 def get_api_key_id() -> str | None:
     """读当前上下文的 API Key id；无请求上下文（后台任务/脚本）返回 None。"""
     return _api_key_id.get()
+
+
+def set_api_key_group_scope(value: GroupScope | None) -> None:
+    """鉴权后的组名称/成员快照；None 表示快照不可用，绝不读客户端头。"""
+    _api_key_group_scope.set(value)
+
+
+def get_api_key_group_scope() -> GroupScope | None:
+    return _api_key_group_scope.get()
 
 
 # 当前请求使用的凭证 id（credentials.id）。executor 在每次调用上游前设置：

@@ -41,6 +41,21 @@ describe("parseCredentialInput", () => {
     if (!parsed.ok) expect(parsed.error).toContain("批量导入");
   });
 
+  it("导出对象保留账号备注和标签，不混入上游凭证", () => {
+    const credential = { access_key_id: "synthetic-ak", secret_access_key: "synthetic-sk", nickname: "upstream-name" };
+    expect(parseCredentialInput(JSON.stringify({ provider: "codearts", nickname: "  备份账号  ",
+      tags: ["自己4594", "备用"], credential }), "miora")).toEqual({
+      ok: true, provider: "codearts", detected: "codearts", credential,
+      nickname: "备份账号", tags: ["自己4594", "备用"],
+    });
+    expect(parseCredentialInput(JSON.stringify({ provider: "codearts", nickname: 42,
+      tags: "invalid", credential }), "miora", false)).toEqual({
+      ok: true, provider: "miora", detected: null, credential,
+    });
+    expect(parseCredentialInput(JSON.stringify({ provider: "codearts", nickname: "",
+      tags: [], credential }), "miora")).toMatchObject({ nickname: "", tags: [] });
+  });
+
   it("TRAE 凭证按字段名识别，即使下拉停在别的渠道", () => {
     const parsed = parseCredentialInput(
       '{"accessToken":"a","uid":"u","refreshToken":"r"}',

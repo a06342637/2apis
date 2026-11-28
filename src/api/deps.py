@@ -52,8 +52,9 @@ from ..engine.executor import Executor
 from ..engine.limits import LimitGuard
 from ..key_quota import KeyQuota, KeyQuotaGuard, load_key_quota
 from ..media.context import set_media_principal
-from ..request_context import set_api_key_id
+from ..request_context import set_api_key_group_scope, set_api_key_id
 from ..runtime_settings import RuntimeSettings
+from ..stats.groups import capture_group_scope
 from ..stats.live import LiveEventHub
 from ..stats.query import StatsQuery
 from ..webapp.log_buffer import LogBuffer
@@ -306,6 +307,8 @@ def _api_key_principal(services: Services, request: Request,
     # 归属权只认鉴权结果（绝不读入站头）：统计写入经 contextvar 现读，
     # 请求结束由 RequestIdMiddleware 复原（流式响应体也在中间件作用域内）。
     set_api_key_id(principal.key_id)
+    set_api_key_group_scope(capture_group_scope(
+        principal.group_ids, getattr(services, "credential_groups", None)))
     set_media_principal(principal)
     return principal
 

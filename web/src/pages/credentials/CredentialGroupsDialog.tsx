@@ -33,6 +33,14 @@ export function CredentialGroupsDialog({ provider, label, credentials, groups, l
   const close = () => { if (!working.current) { editingGeneration.current += 1; onClose(); } };
   const dialogRef = useDialogFocus<HTMLDivElement>(close);
   const visible = groups?.filter((group) => group.provider === provider);
+  const groupNames = new Map<string, string[]>();
+  for (const group of visible ?? []) {
+    for (const id of group.credential_ids ?? []) {
+      const names = groupNames.get(id) ?? [];
+      names.push(group.name);
+      groupNames.set(id, names);
+    }
+  }
   const issue = credentialSelectionIssue(members, credentials, provider);
 
   const openEditor = (group: CredentialGroup | null) => {
@@ -123,7 +131,8 @@ export function CredentialGroupsDialog({ provider, label, credentials, groups, l
         </Field>
         <fieldset disabled={busy}><CredentialSelector legend="组成员" credentials={credentials} selected={members} binding={provider}
           onChange={setMembers} testidPrefix="group-edit" emptySummary="当前分组无成员"
-          selectionHint="勾选同一渠道账号作为成员，暂停、禁用或过期账号仍可加入；不勾选会创建空组。"
+          groupNames={groupNames}
+          selectionHint="账号后显示已加入的分组，同一账号可加入多个分组。暂停、禁用或过期账号仍可加入；不勾选会创建空组。"
           clearText="清空组成员" /></fieldset>
         <div className="flex justify-end gap-2">
           <Button type="button" size="sm" variant="ghost" disabled={busy} onClick={() => {

@@ -259,10 +259,10 @@ export const api = {
     }
     return { blob: await response.blob(), rowCount: response.headers.get("X-Export-Row-Count") };
   },
-  importCredential: (provider: string, credential: unknown, nickname = "") =>
+  importCredential: (provider: string, credential: unknown, nickname = "", tags?: string[]) =>
     request<{ id: string; tos: TosRisk; merged?: boolean }>("/api/credentials", {
       method: "POST",
-      ...json({ provider, credential, nickname }),
+      ...json({ provider, credential, nickname, ...(tags !== undefined ? { tags } : {}) }),
     }),
   /** 单条凭证导出：返回 JSON 文件内容，页面触发下载（含明文令牌）。 */
   exportCredential: async (id: string) => {

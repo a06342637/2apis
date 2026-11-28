@@ -22,6 +22,7 @@ from typing import Any
 
 from ..pricing import PriceTable, estimate_cost_usd, to_cny
 from ..request_context import get_api_key_id, get_request_id
+from .groups import decode_group_attribution, event_group_attribution
 from .query import row_speed
 
 logger = logging.getLogger(__name__)
@@ -132,6 +133,7 @@ class UsageEvent:
     ttfb_ms: int | None
     request_id: str | None
     api_key_id: str | None
+    group_attribution: str | None = None
 
 
 class StatsCollector:
@@ -295,6 +297,7 @@ class StatsCollector:
             # Key 归属同上：由鉴权层写 contextvar，后台任务/管理台内部请求
             # 无 Key 归属 → None（该列可空，语义=未归属）。
             api_key_id=get_api_key_id(),
+            group_attribution=event_group_attribution(credential_id),
         )
 
     def _submit(self, event: UsageEvent) -> None:
@@ -362,13 +365,14 @@ class StatsCollector:
                     "INSERT INTO usage_events (id, ts, username, provider, credential_id, model, "
                     "ok, error_type, input_tokens, output_tokens, reasoning_tokens, cached_tokens, "
                     "credit, credit_estimated, cost_usd, cost_cny, latency_ms, ttfb_ms, "
-                    "request_id, api_key_id) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "request_id, api_key_id, group_attribution) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (event.id, event.ts, event.username, event.provider, event.credential_id,
                      event.model, int(event.ok), event.error_type, event.input_tokens,
                      event.output_tokens, event.reasoning_tokens, event.cached_tokens,
                      event.credit, int(event.credit_estimated), event.cost_usd, event.cost_cny,
-                     event.latency_ms, event.ttfb_ms, event.request_id, event.api_key_id),
+                     event.latency_ms, event.ttfb_ms, event.request_id, event.api_key_id,
+                     event.group_attribution),
                 )
                 # 当前小时增量累加：总览/图表都读小时表，不能等 5 分钟一轮的
                 # retention rollup 才可见（否则刚发生的请求统计页面显示 0）。
@@ -454,6 +458,7 @@ class StatsCollector:
             "tps": total_tps,
             "tps_visible": visible_tps,
             "request_id": event.request_id,
+            "credential_groups": decode_group_attribution(event.group_attribution),
         }
         try:
             self._on_record(payload)

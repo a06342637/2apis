@@ -61,6 +61,30 @@ describe("渠道账号分组", () => {
     expect(screen.queryByLabelText("分组名称")).not.toBeInTheDocument();
   });
 
+  it("新增和编辑显示已有全部分组，分过的账号仍可加入新组，标签随列表更新", async () => {
+    const shared = { ...GROUP, id: "g3", name: "备用组" };
+    const { rerender, changed, close, retry } = setup({ groups: [GROUP, shared, OTHER] });
+    await click("新建分组");
+    const label = screen.getByTestId("group-edit-credential-mi1-groups");
+    expect(label).toHaveTextContent("生产组");
+    expect(label).toHaveTextContent("备用组");
+    expect(label).not.toHaveTextContent("其他渠道");
+    expect(screen.getByTestId("group-edit-credential-mi2-groups")).toHaveTextContent("未分组");
+    expect(screen.getByTestId("group-edit-credential-mi1")).toBeEnabled();
+    fireEvent.click(screen.getByTestId("group-edit-credential-mi1"));
+    fireEvent.change(screen.getByLabelText("分组名称"), { target: { value: "新组" } });
+    await click("保存分组");
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toMatchObject({ credential_ids: ["mi1"] });
+    fireEvent.click(screen.getByTestId("edit-group-g1"));
+    expect(screen.getByTestId("group-edit-credential-mi1-groups")).toHaveTextContent("生产组");
+    expect(screen.getByTestId("group-edit-credential-mi1")).toBeChecked();
+    rerender(<CredentialGroupsDialog provider="miora" label="Miora" credentials={accounts}
+      groups={[{ ...GROUP, name: "改名组" }]} loading={false} canWrite
+      onRetry={retry} onChanged={changed} onClose={close} />);
+    expect(screen.getByTestId("group-edit-credential-mi1-groups")).toHaveTextContent("改名组");
+    expect(screen.getByTestId("group-edit-credential-mi1-groups")).not.toHaveTextContent("备用组");
+  });
+
   it("空组可创建，编辑清空成员不会代表全部账号", async () => {
     setup();
     await click("新建分组");

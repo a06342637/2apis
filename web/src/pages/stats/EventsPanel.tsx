@@ -120,6 +120,7 @@ export function EventsPanel(props: EventsPanelProps) {
                   <TableHead>时间</TableHead>
                   {isOperator && <TableHead>用户</TableHead>}
                   <TableHead>渠道 / 凭证</TableHead>
+                  <TableHead>分组</TableHead>
                   <TableHead>模型</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="text-right">Token</TableHead>
@@ -171,6 +172,7 @@ export function EventsPanel(props: EventsPanelProps) {
                               activeKey={eventSort.sort} direction={eventSort.order}
                               onToggle={toggleEventSort} align="left"
                               testId="event-sort-source" />
+                <TableHead>分组</TableHead>
                 <SortableHead label="模型" columnKey="model" active={eventSort.sort === "model"}
                               direction={eventSort.order} onToggle={toggleEventSort}
                               testId="event-sort-model" />
