@@ -28,8 +28,8 @@ export const MIORA_OFFICIAL_MEDIA = [
 
 const CHAT_ENDPOINTS = ["/v1/chat/completions", "/v1/responses", "/v1/messages"];
 export const MIORA_MODEL_GROUP_LABELS = {
-  chat: "文本/代码 · 可调用", image: "图片生成 · 可调用",
-  video: "视频生成 · 可调用", unconnected: "目录模型 · 未接入",
+  chat: "文本/代码 · 可调用", image: "媒体专用（图片） · 可调用",
+  video: "媒体专用（视频） · 可调用", unconnected: "目录模型 · 未接入",
 } as const;
 
 function endpoints(model: ModelInfo, provider?: string): string[] | undefined {
@@ -63,7 +63,7 @@ export function modelPurpose(model: ModelInfo, provider?: string): ModelPurpose 
     if (group === "image" || group === "video") {
       const endpoint = group === "image" ? "/v1/images/generations" : "/v1/videos";
       return { label: group === "image" ? "图片生成 · 文生图" : "视频生成 · 文生视频",
-        description: `通过 ${endpoint} 调用；模型可用性和参数按当前账号目录确定。`, route: "已接入生成接口" };
+        description: `通过 ${endpoint} 调用；模型可用性和参数按当前账号目录确定。`, route: "媒体专用" };
     }
     if (group === "unconnected") {
       return { label: "未接入调用接口", description: "该条目尚未声明可调用的网关端点。", route: "未接入" };

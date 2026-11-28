@@ -54,6 +54,7 @@ from ..audit.actions import ACTION_MODEL_PROBE, ACTION_MODEL_PROBE_MANUAL
 from ..auth.rbac import require_operator
 from ..compat.openai.request import InvalidRequest
 from ..model_match import match_keys
+from ..provider.model_policy import MIORA_RETIRED_MESSAGE, model_retired
 from ..provider.naming import normalize_model_key
 from ..tasks.model_probe import ModelProbeTask
 from .deps import Services, csrf_protected, principal_from_request
@@ -179,7 +180,7 @@ def create_router(services: Services) -> APIRouter:
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
             key = (row["provider"], row["model"])
-            if _blocked(row["model"], patterns):
+            if _blocked(row["model"], patterns) or model_retired(*key):
                 continue
             item = grouped.setdefault(key, {
                 "provider": row["provider"], "model": row["model"],
@@ -198,7 +199,7 @@ def create_router(services: Services) -> APIRouter:
         # 有人工接管标记但负缓存已被清掉的行也要露出（否则「恢复」之后那一行
         # 就从页面上消失了，用户无法把它交还给自动探活）。
         for key, probe in probes.items():
-            if key in merged or _blocked(key[1], patterns):
+            if key in merged or _blocked(key[1], patterns) or model_retired(*key):
                 continue
             merged[key] = {"provider": key[0], "model": key[1], "credentials": 0,
                            "until": 0, "hits": 0, **probe}
@@ -267,6 +268,8 @@ def _probe_target(payload: dict) -> tuple[str, str]:
     model = str(payload.get("model") or "").strip()
     if not provider or not model:
         raise InvalidRequest("provider and model are required")
+    if model_retired(provider, model):
+        raise InvalidRequest(MIORA_RETIRED_MESSAGE)
     return provider, model
 
 

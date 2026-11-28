@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from ..compat.openai.request import ChatRequest, InvalidRequest
-from ..engine.model_resolver import ordered_fallback_chain, parse_fallback_groups, resolve
+from ..engine.model_resolver import (
+    UnknownModelError,
+    ordered_fallback_chain,
+    parse_fallback_groups,
+    resolve,
+)
 from ..media.auto import builtin_options
 from ..provider.base import Model
 from ..provider.miora.client import validate_payload
 from ..provider.miora.tools import prepare_prompt
+from ..provider.model_policy import MIORA_RETIRED_MESSAGE, model_retired
 from .chat_media_gate import _lookup
 from .deps import ApiKeyPrincipal, Services
 
@@ -42,6 +48,23 @@ def miora_account_scope(services: Services, request: ChatRequest, binding: str) 
         ["miora"], selectable_only=True))
 
 
+def reject_retired_miora(services: Services, request: ChatRequest, binding: str) -> None:
+    """Fail closed for a retired model on explicitly selected Miora routes."""
+    try:
+        target = resolve(request.model, services.settings.default_model)
+    except UnknownModelError:
+        return  # Local token estimates did not require a resolvable upstream.
+    provider = target.providers[0] if target.forced else binding
+    if provider == "miora":
+        _reject_retired_miora_name(services, target.model)
+
+
+def _reject_retired_miora_name(services: Services, model: str) -> None:
+    raw_model = services.model_aliases.get("miora", {}).get(model.lower(), model)
+    if model_retired("miora", raw_model):
+        raise InvalidRequest(MIORA_RETIRED_MESSAGE)
+
+
 async def preflight_miora(
     services: Services,
     request: ChatRequest,
@@ -65,6 +88,7 @@ async def preflight_miora(
         rows = _scoped_rows(services, principal, account_tables)
         if not rows or {row.provider for row in rows} != {"miora"}:
             return
+    _reject_retired_miora_name(services, target.model)
     payload = {**request.raw, "messages": request.messages}
     try:
         validate_payload(payload)

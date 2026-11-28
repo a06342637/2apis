@@ -73,12 +73,16 @@ describe("Miora 模型用途", () => {
     await userEvent.hover(screen.getByTestId("group-miora-model-count"));
     const popover = await screen.findByTestId("group-miora-models");
     expect(within(popover).getAllByTestId("miora-model-section").map(node => node.textContent)).toEqual([
-      "文本/代码", "图片生成", "视频生成", "目录模型",
+      "文本/代码", "媒体专用（图片）", "媒体专用（视频）", "目录模型",
     ]);
     const rows = within(popover).getAllByTestId("group-miora-model");
     expect(rows).toHaveLength(6);
     expect(rows.find(row => row.textContent?.includes("Nano Banana 2"))).toHaveTextContent("/v1/images/generations");
     expect(rows.find(row => row.textContent?.includes("Vidu Q2 Pro"))).toHaveTextContent("/v1/videos");
+    for (const name of ["Nano Banana 2", "Vidu Q2 Pro"]) {
+      expect(within(rows.find(row => row.textContent?.includes(name))!).getByText("媒体专用"))
+        .toBeInTheDocument();
+    }
     expect(rows.find(row => row.textContent?.includes("3d-reference"))).toHaveTextContent("未接入调用接口");
   });
 

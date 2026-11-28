@@ -52,6 +52,7 @@ from ..model_alias import parse_model_aliases
 from ..pricing import PriceTable
 from ..provider.base import Model, UpstreamProtocolViolation
 from ..provider.miora.subscription import subscription_signature
+from ..provider.model_policy import model_retired
 from ..provider.naming import normalize_model_key
 from .account_models import account_model_tables, account_provider_tables, restricted_entries
 from .deps import ApiKeyPrincipal, Services, api_key_user_anthropic
@@ -179,7 +180,7 @@ def _hidden_aliases(services: Services,
     """
     aliases: dict[str, dict[str, str]] = {}
     for provider_id, lower in sorted(probed_out):
-        if provider_id not in connected:
+        if provider_id not in connected or model_retired(provider_id, lower):
             continue
         table = services.model_list_cache.get(provider_id) or {}
         entry = _hidden_entry(table.get(lower), lower, provider_id)

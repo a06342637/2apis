@@ -32,6 +32,7 @@ from .deps import (
     read_json_body,
 )
 from .endpoints import dispatch_compat, ensure_model_allowed
+from .miora_preflight import reject_retired_miora
 
 
 def create_router(services: Services) -> APIRouter:
@@ -61,6 +62,7 @@ def create_router(services: Services) -> APIRouter:
         """
         chat_request = parse_messages_request(await read_json_body(request))
         ensure_model_allowed(chat_request, principal, settings)
+        reject_retired_miora(services, chat_request, principal.provider_binding)
         return {"input_tokens": math.ceil(estimate_messages(chat_request.messages))}
 
     return router

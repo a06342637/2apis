@@ -1,10 +1,15 @@
-# 2apis · v0.1.11
+# 2apis · v0.1.12
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
 
 ## 未发布
 
 - 添加凭证、完成 OAuth 登录或批量导入后，会自动查询额度。新增账号按顺序逐个查询，关闭导入窗口不影响后台查询。凭证页显示「额度查询中」，查到后自动显示余额；查询失败不按零余额处理，无额度接口的渠道仍显示「无探测」。账号标签可悬浮、聚焦或点击查看全文。
+
+## v0.1.12 Miora 工具模型清理
+
+- 下架 Miora `gpt-6-sol`：它能完成聊天，但本地文件工具实测未通过。凭证弹窗、Playground、兼容 API 目录与模型探活同步隐藏；指定 Miora 直调也不会发往上游。同名的其他渠道和未测明的 Miora 模型不受影响。
+- Miora 图片、视频模型继续保留，账号模型弹窗及模型目录明确标记「媒体专用」，使用独立生成接口。
 
 ## v0.1.11 远端备份与凭证维护
 
@@ -304,7 +309,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.11`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.12`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

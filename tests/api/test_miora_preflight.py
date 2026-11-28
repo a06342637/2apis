@@ -8,13 +8,14 @@ from fastapi.testclient import TestClient
 
 from src import main
 from src.api.deps import ApiKeyPrincipal, Services
-from src.api.miora_preflight import preflight_miora
+from src.api.miora_preflight import preflight_miora, reject_retired_miora
+from src.api.models import publish_aliases
 from src.compat.openai.request import ChatRequest, InvalidRequest
 from src.provider.base import Event, EventKind, Model
 from src.provider.miora import MioraProvider
 from src.tasks.pacer import Pacer
 from tests.api.test_miora_integration import LocalMioraClient, token
-from tests.helpers.auth import isolated_settings
+from tests.helpers.auth import isolated_settings, set_session_cookie
 from tests.helpers.startup import wait_for_startup
 
 MODEL = Model("glm-5.3", name="GLM 5.3", supports_tool_call=True)
@@ -375,3 +376,109 @@ async def test_catalog_deadline_does_not_misclassify_inner_timeout():
     with pytest.raises(TimeoutError, match="inner timeout"):
         async with _http_catalog_deadline():
             raise TimeoutError("inner timeout")
+
+
+@pytest.mark.parametrize("path,body", [
+    ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}]}),
+    ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hi"}], "stream": True}),
+    ("/v1/responses", {"input": "hi"}),
+    ("/v1/messages", {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 32}),
+    ("/v1/messages/count_tokens", {"messages": [{"role": "user", "content": "hi"}]}),
+    ("/v1beta/models/GPT%206%20Sol:generateContent", {"contents": [{"parts": [{"text": "hi"}]}]}),
+    ("/v1beta/models/gpt-6-sol:countTokens", {"contents": [{"parts": [{"text": "hi"}]}]}),
+])
+def test_retired_miora_is_rejected_before_inference(gateway, path, body):
+    app, client, boundary, _, headers, key = gateway
+    response = client.post(path, json={"model": "gpt-6-sol", **body}, headers=headers)
+    assert response.status_code == 400, response.text
+    assert not boundary.posts
+    assert app.state.services.key_quota.inflight(key["id"]) == 0
+
+
+def test_miora_retirement_is_channel_specific_and_applies_to_stale_catalogs(gateway):
+    app, client, _, provider, headers, _ = gateway
+    services = app.state.services
+    hidden = Model("gpt-6-sol", name="GPT 6 Sol", supports_tool_call=True)
+    image = Model("sample-image", gateway_endpoints=("/v1/images/generations",),
+                  output_modalities=("image",), supports_tool_call=False)
+    services.model_list_cache["miora"] = {m.id: m for m in (hidden, MODEL, image)}
+    services.model_probes.record(provider="miora", model=hidden.id, state="failed", error="old")
+    publish_aliases(services, {"miora"})
+    assert hidden.id not in services.model_aliases.get("miora", {})
+    services.model_list_cache["trae"] = {hidden.id: hidden}
+    publish_aliases(services, {"miora", "trae"})
+    assert services.model_aliases["trae"][hidden.id] == hidden.id
+
+    # Exercise both the key account catalog and the UI's shared (potentially stale) catalog.
+    async def fetch(_credential):
+        return [hidden, MODEL, image]
+
+    provider.client.fetch_models = fetch
+    services.credential_model_cache.clear()
+    services.model_list_account_versions.clear()
+    assert client.get("/v1/models/gpt-6-sol", headers=headers).status_code == 404
+    scoped = client.get("/v1/models", headers={"x-api-key": headers["Authorization"][7:]})
+    assert {row["id"] for row in scoped.json()["data"]} == {MODEL.id, image.id, "friendly"}
+    set_session_cookie(client)
+    display = client.get("/api/playground/models?include_unavailable=true")
+    assert display.status_code == 200, display.text
+    assert {row["id"] for row in display.json()["data"]} == {MODEL.id, image.id, "friendly"}
+    media = next(row for row in display.json()["data"] if row["id"] == image.id)
+    assert media["gateway_endpoints"] == ["/v1/images/generations"]
+    response = client.post("/api/playground/chat/completions", json={
+        "model": "gpt-6-sol@miora", "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert response.status_code == 400
+    assert "retired" in response.json()["error"]["message"]
+
+
+def test_retirement_ignores_old_probe_rows_and_blocks_manual_probes(gateway):
+    app, client, boundary, _, _, _ = gateway
+    services = app.state.services
+    account, = services.credentials.candidates(["miora"])
+    with services.credentials._db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO credential_model_cooldowns "
+            "(credential_id, model, cooling_until, hits, reason) VALUES (?, ?, ?, 1, 'blocked')",
+            (account.credential_id, "gpt-6-sol", int(time.time()) + 3600))
+    services.model_probes.set_manual(provider="miora", model="GPT 6 Sol", manual="manual")
+    set_session_cookie(client)
+    assert client.get("/api/models/probes").json()["rows"] == []
+    for action, details in (("probe", {}), ("manual", {"manual": "off"})):
+        response = client.post(f"/api/models/probes/{action}", json={
+            "provider": "miora", "model": "gpt-6-sol", **details,
+        })
+        assert response.status_code == 400
+        assert "retired" in response.json()["error"]["message"]
+    assert not boundary.posts
+
+
+def test_executor_filters_removed_miora_route_in_unbound_and_stale_account_scope(gateway):
+    app, _client, _, _, _, _ = gateway
+    services = app.state.services
+    account, = services.credentials.candidates(["miora"])
+    services.model_aliases["miora"] = {"legacy": "gpt-6-sol"}
+    target = services.executor.resolve_target(chat("legacy"))
+    assert services.executor._registered(target) == []
+    scope = services.executor._new_scope(
+        "legacy", credential_ids=(account.credential_id,),
+        credential_models={account.credential_id: {"gpt-6-sol": Model("gpt-6-sol")}},
+    )
+    assert not scope.rows
+
+
+@pytest.mark.parametrize("model,binding,retired", [
+    ("gpt-6-sol@unknown-provider", "miora", False),
+    ("gpt-6-sol@trae", "", False),
+    ("gpt-6-sol", "", False),
+    ("legacy@miora", "", True),
+])
+def test_local_count_ignores_unrelated_routes_but_blocks_explicit_retired_alias(model, binding,
+                                                                            retired):
+    services = service()
+    services.model_aliases["miora"] = {"legacy": "gpt-6-sol"}
+    if retired:
+        with pytest.raises(InvalidRequest, match="retired"):
+            reject_retired_miora(services, chat(model), binding)
+    else:
+        reject_retired_miora(services, chat(model), binding)

@@ -12,7 +12,8 @@ from typing import Any
 import httpx
 
 from ...tasks.pacer import Pacer, paced
-from ..base import ErrKind, Event, Model, Quota, UpstreamProtocolViolation
+from ..base import ErrKind, Event, InvalidModelName, Model, Quota, UpstreamProtocolViolation
+from ..model_policy import MIORA_RETIRED_MESSAGE, model_retired
 from .client import CHAT_QUEUE_TIMEOUT_SECONDS, MioraClient, MioraHTTPError, MioraQueueTimeout
 from .credential import MioraCredential
 from .events import classify_status
@@ -73,7 +74,8 @@ class MioraProvider:
 
     async def list_models(self, credential_data: dict) -> list[Model]:
         credential = self.credential_from(credential_data)
-        text_models = await self.client.fetch_models(credential)
+        text_models = [model for model in await self.client.fetch_models(credential)
+                       if not model_retired(self.id, model.id)]
         try:
             media_models = await self.media_client.catalog(credential, include_unavailable=True)
         except (httpx.HTTPError, MioraHTTPError, UpstreamProtocolViolation) as failure:
@@ -89,6 +91,8 @@ class MioraProvider:
     async def stream_chat(
         self, credential_data: dict, payload: dict, model: str
     ) -> AsyncIterator[Event]:
+        if model_retired(self.id, model):
+            raise InvalidModelName(MIORA_RETIRED_MESSAGE)
         credential = MioraCredential.from_import(credential_data)
         # 先同步关闭内层 ACP 流，再归还节流名额，客户端断开不依赖 asyncgen GC。
         async with AsyncExitStack() as stack:

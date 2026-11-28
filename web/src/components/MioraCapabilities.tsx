@@ -33,7 +33,7 @@ export function MioraCapabilities({ compact = false }: { compact?: boolean }) {
       <p>生图接口：/v1/images/generations；按当前账号可用模型生成图片。</p>
       <p>视频接口：/v1/videos；提交任务后查询结果。</p>
       <p>3D、音频：官网独立创作入口，当前 API 未接入。</p>
-      <p>聊天选择器只列文本模型。生成模型通过独立接口使用，当前支持文字描述生成。</p>
+      <p>聊天选择器只列文本模型。标为「媒体专用」的模型保留，通过独立接口使用，不用于聊天或本地文件工具。</p>
       {!compact && <MioraOfficialMediaModels />}
     </div>
   );

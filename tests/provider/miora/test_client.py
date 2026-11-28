@@ -895,14 +895,14 @@ def test_catalog_metadata_and_alias_validation():
     assert mod._rate(0) == 0
 
 
-def test_public_catalog_keeps_all_routes_and_raw_ids():
+def test_public_catalog_keeps_supported_routes_and_raw_ids():
     from src.api.model_merge import _build_aliases, _merge_provider, _sort_key, _visible
 
     fixture = json.loads(
         (Path(__file__).parent / "fixtures/public-catalog.json").read_text(encoding="utf-8")
     )
     models, selections = catalog_models(fixture["loaded"], fixture["tiers"])
-    assert len(models) == 35
+    assert len(models) == 34
     patterns = ("custom_model_*", "*sub*agent*", "summary", "browser_use_*", "file_search_agent")
     grouped = {}
     _merge_provider(
@@ -910,8 +910,8 @@ def test_public_catalog_keeps_all_routes_and_raw_ids():
     )
     entries = sorted(grouped.values(), key=_sort_key)
     aliases = _build_aliases(entries)
-    assert len(entries) == 35
-    assert len({entry["id"] for entry in entries}) == 35
+    assert len(entries) == 34
+    assert len({entry["id"] for entry in entries}) == 34
     assert aliases["miora"]["hy4flash"] == "hy4flash"
     assert aliases["miora"]["hy4flash-free"] == "hy4flash-free"
     assert selections["hy4flash"][0] == "hy4flash"
@@ -1050,3 +1050,14 @@ def test_catalog_bad_locale_falls_back(locales):
 )
 def test_cloud_tool_is_not_client_tool(frame, expected):
     assert cloud_tool_requested(frame) == expected
+
+
+def test_retired_chat_model_and_its_tier_are_not_returned():
+    loaded = json.loads(json.dumps(RAW))
+    raw = loaded["models"]["_meta"]["codebuddy.ai"]["availableModels"]
+    raw.extend([{"id": "gpt-6-sol"}, {"id": "gpt-6.1-sol"}])
+    models, selections = catalog_models(loaded, [*TIERS,
+        {"category": "tier", "tierKey": "old-chat", "modelId": "gpt-6-sol"}])
+    ids = {m.id for m in models}
+    assert "gpt-6.1-sol" in ids and "gpt-6.1-sol" in selections
+    assert not {"gpt-6-sol", "miora-old-chat"} & (ids | selections.keys())

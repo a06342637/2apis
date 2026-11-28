@@ -37,6 +37,7 @@ from typing import Any
 from ..db.crypto import CredentialDecryptError
 from ..error_text import error_text
 from ..provider.base import ErrKind, EventKind, UpstreamHTTPError, event_error_kind
+from ..provider.model_policy import MIORA_RETIRED_MESSAGE, model_retired
 from . import TaskReport
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,9 @@ class ModelProbeTask:
                 # 是模型级的，清的时候也按渠道整片清。
                 continue
             seen.add(key)
+            if model_retired(key[0], self._model_name(*key)):
+                report.skipped += 1
+                continue
             if not self._chat_probe_allowed(*key):
                 # 不能把 ping 发到生成接口：周期探活不消耗媒体额度，也不误判 failed。
                 report.skipped += 1
@@ -140,6 +144,8 @@ class ModelProbeTask:
         与周期探活同一套判定，唯一差别是不看人工接管标记——按钮就是人来点的，
         再拦一次只会让按钮点了没反应。成功同样清负缓存。
         """
+        if model_retired(provider_id, self._model_name(provider_id, model)):
+            return "inconclusive", MIORA_RETIRED_MESSAGE
         if not self._chat_probe_allowed(provider_id, model):
             self._probes.record(provider=provider_id, model=model,
                                 state="inconclusive", error=NO_CHAT_PROBE)

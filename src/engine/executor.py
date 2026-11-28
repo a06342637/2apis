@@ -48,6 +48,7 @@ from ..provider.base import (
     business_codes,
     event_error_kind,
 )
+from ..provider.model_policy import MIORA_RETIRED_MESSAGE, model_retired
 from ..provider.naming import normalize_model_key
 from ..request_context import credential_scope, get_api_key_id, set_credential_id
 from . import privacy
@@ -628,7 +629,7 @@ class Executor:
                                         normalize_model_key(entry.id),
                                         normalize_model_key(entry.name or entry.id)}]
                         match = matching[0] if len(matching) == 1 else None
-                    if match is not None:
+                    if match is not None and not model_retired(row.provider, match.id):
                         raw_models[row.credential_id] = match.id
                         credit_rates[row.credential_id] = match.credit_rate
                 rows = tuple(row for row in rows if row.credential_id in raw_models)
@@ -963,7 +964,12 @@ class Executor:
                        provider_binding: str | None = None, *, account_bound: bool = False
                        ) -> ModelTarget:
         target = resolve(request.model, live(self._deps.default_model)())
-        return self._apply_binding(target, provider_binding, account_bound=account_bound)
+        target = self._apply_binding(target, provider_binding, account_bound=account_bound)
+        if target.providers == ("miora",) and model_retired(
+            "miora", self._upstream_model("miora", target.model)
+        ):
+            raise InvalidRequest(MIORA_RETIRED_MESSAGE)
+        return target
 
     def _fallback_chain(self, target: ModelTarget, *, account_bound: bool = False
                         ) -> tuple[ModelTarget, ...]:
@@ -2638,7 +2644,9 @@ class Executor:
     def _registered(self, target: ModelTarget) -> list[str]:
         """收窄后的候选渠道 ∩ 已注册渠道（决定「这个模型能不能发出去」）。"""
         return [pid for pid in self._narrow_providers(target)
-                if pid in self._deps.providers]
+                if pid in self._deps.providers
+                and (pid != "miora" or not model_retired(
+                    pid, self._upstream_model(pid, target.model)))]
 
     def _narrow_providers(self, target: ModelTarget) -> tuple[str, ...]:
         """模型目录能证明归属时，把候选上游收窄到登记了该模型的上游。

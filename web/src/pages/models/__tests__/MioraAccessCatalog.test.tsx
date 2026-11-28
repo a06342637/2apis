@@ -25,6 +25,7 @@ describe("Miora 目录页权限", () => {
     expect(within(screen.getByTestId("miora-access-vip")).getByText("VIP")).toBeInTheDocument();
     expect(screen.getByTestId("miora-access-vip")).toHaveTextContent("Standard 套餐；当前账号池不可用");
     expect(screen.getByTestId("miora-access-off")).toHaveTextContent("与 VIP 套餐权限无关");
+    expect(screen.getByTestId("miora-access-ordinary")).toHaveTextContent("媒体专用（视频）");
     expect(within(panel).queryByRole("button")).not.toBeInTheDocument();
   });
 

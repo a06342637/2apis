@@ -38,6 +38,7 @@ from ..base import (
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
+from ..model_policy import model_retired
 from ..proxy import SHORT_TIMEOUT, STREAM_TIMEOUT
 from .access import model_access
 from .acp import AcpConnection, AcpHTTPError
@@ -583,6 +584,8 @@ def catalog_models(loaded: Any, tiers: Any) -> tuple[list[Model], dict[str, tupl
             continue
         model_id = _text(item.get("id"))
         if not model_id or model_id in selections:
+            continue
+        if model_retired("miora", model_id):
             continue
         tier = by_model.get(model_id, {})
         name = _text(item.get("name")) or model_id

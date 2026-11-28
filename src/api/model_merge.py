@@ -68,6 +68,7 @@ from ..model_alias import ModelAlias
 from ..model_match import lookup
 from ..pricing import PriceTable
 from ..provider.base import Model
+from ..provider.model_policy import model_retired
 from ..provider.naming import display_model_name, normalize_model_key  # noqa: F401
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,8 @@ def _merge_provider(grouped: dict[str, dict[str, Any]],
     （raw_ids，请求转发时按渠道映射回去），供前端按渠道展示倍率。
     合并键见 `_merge_key`，别名表在定稿阶段统一登记（见 `_register_aliases`）。
     """
+    models_by_lower = {lower: model for lower, model in models_by_lower.items()
+                       if not model_retired(provider_id, model.id)}
     # 先数本渠道内的重名（按清洗后的展示名归一键），用于把冲突项退回 id 键。
     label_keys = [normalize_model_key(_model_label(model))
                   for model in models_by_lower.values()]

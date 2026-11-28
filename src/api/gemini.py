@@ -28,9 +28,11 @@ from .deps import (
     ApiKeyPrincipal,
     Services,
     api_key_user_gemini,
+    get_services,
     read_json_body,
 )
 from .endpoints import dispatch_compat, ensure_model_allowed
+from .miora_preflight import reject_retired_miora
 
 # 支持的动作（Gemini 的路径级 RPC 名）。
 _ACTIONS = {"generateContent", "streamGenerateContent", "countTokens"}
@@ -115,6 +117,7 @@ async def _count_tokens(request: Request, principal: ApiKeyPrincipal,
     chat_request = parse_gemini_request(
         await read_json_body(request), model=model, stream=False)
     ensure_model_allowed(chat_request, principal, settings)
+    reject_retired_miora(get_services(request), chat_request, principal.provider_binding)
     total = math.ceil(estimate_messages(chat_request.messages))
     return {
         "totalTokens": total,

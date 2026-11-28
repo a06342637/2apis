@@ -4,7 +4,15 @@ import httpx
 import pytest
 
 from src.compat.openai.request import InvalidRequest
-from src.provider.base import ErrKind, Event, EventKind, Model, Quota, UpstreamProtocolViolation
+from src.provider.base import (
+    ErrKind,
+    Event,
+    EventKind,
+    InvalidModelName,
+    Model,
+    Quota,
+    UpstreamProtocolViolation,
+)
 from src.provider.miora import MioraProvider
 from src.provider.miora.client import MioraHTTPError
 from src.provider.miora.credential import MioraCredential
@@ -160,3 +168,11 @@ async def test_outer_close_synchronously_cancels_client_before_releasing_slot():
     assert order == ["slot_reserved"]
     await stream.aclose()
     assert order == ["slot_reserved", "client_cancelled", "slot_released"]
+
+
+async def test_retired_model_rejected_before_credential_and_upstream():
+    client = Client()
+    provider = MioraProvider(client=client)
+    with pytest.raises(InvalidModelName, match="retired"):
+        await anext(provider.stream_chat({}, {}, "GPT 6 Sol"))
+    assert not client.seen

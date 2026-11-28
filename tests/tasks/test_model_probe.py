@@ -574,3 +574,17 @@ async def test_probe_now_records_inconclusive(repo):
     assert state == "inconclusive"
     assert error == "upstream status 429"
     assert _probes(db).get("codebuddy", "m")["state"] == "inconclusive"
+
+
+async def test_miora_retired_model_is_not_probed_or_rewritten(repo):
+    credentials, db = repo
+    cid = _add(credentials, provider="miora")
+    _seed_blocked(credentials, credential_id=cid, model="legacy")
+    provider = FakeProvider()
+    task = ModelProbeTask(credentials, {"miora": provider}, _probes(db),
+                          upstream_model=lambda _provider, _model: "gpt-6-sol")
+    result = await task.run_once()
+    assert result.skipped == 1 and result.attempted == 0
+    state, message = await task.probe_now("miora", "legacy")
+    assert state == "inconclusive" and "retired" in message
+    assert not provider.calls and _probes(db).get("miora", "legacy") is None
