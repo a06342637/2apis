@@ -104,6 +104,7 @@ export interface Credential {
   /** 生效中的模型级冷却（模型级限流/负缓存）；无则为空数组 */
   model_cooldowns: ModelCooldown[];
   quota_probed_at: number | null;
+  quota_zero_token?: string | null;
   quota_probe_pending?: boolean;
   /** access token 到期 epoch（秒）；0 = 未知（渠道没给到期信息，也可能是 JWT 不可解析） */
   token_expires_at: number;
@@ -711,7 +712,8 @@ export interface CheckinResult {
 }
 
 /** 批量动作：与后端 `BATCH_ACTIONS` 同口径（只收已有单条端点的动作）。 */
-export type BatchAction = "probe" | "toggle" | "checkin" | "revive" | "delete";
+export type BatchDeleteAction = "delete" | "delete_zero";
+export type BatchAction = "probe" | "toggle" | "checkin" | "revive" | BatchDeleteAction;
 
 /**
  * 批量执行结果的一行。
@@ -733,6 +735,7 @@ export interface BatchResult {
   total: number;
   succeeded: number;
   failed: number;
+  skipped?: number;
   results: BatchResultRow[];
 }
 

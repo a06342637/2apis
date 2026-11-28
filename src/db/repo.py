@@ -365,6 +365,28 @@ class CredentialRepository:
                 (weight, _now(now), credential_id))
         return cursor.rowcount > 0
 
+    def zero_snapshot(self, credential_id: str):
+        """私有 CAS 快照，含密文但绝不序列化给客户端；不跨网络请求持 DB 锁。"""
+        return self._db.connect().execute(
+            "SELECT * FROM credentials WHERE id = ?", (credential_id,)).fetchone()
+
+    def finish_zero_recheck(self, snapshot, quota: Quota | None) -> str | None:
+        """同一写事务内核对快照，再删除/刷新余额/撤销零余额证据。返回跳过原因。"""
+        cid = snapshot["id"]
+        with self._db.transaction() as conn:
+            if self.zero_snapshot(cid) != snapshot:
+                return "复查期间账号已更新"
+            if (quota is not None and quota.confirmed_zero
+                    and quota.probed_at >= snapshot["quota_probed_at"]):
+                self.delete(cid)
+                return None
+            if (quota is not None and not quota.probe_failed and quota.remaining is not None
+                    and math.isfinite(quota.remaining) and quota.remaining > 0):
+                self.save_quota(cid, quota)
+                return "余额已恢复"
+            conn.execute("UPDATE credentials SET quota_zero_token = NULL WHERE id = ?", (cid,))
+            return "未取得可信零余额（探测、认证失败或数据不完整）"
+
     def delete(self, credential_id: str) -> bool:
         with self._db.transaction() as conn:
             cursor = conn.execute("DELETE FROM credentials WHERE id = ?", (credential_id,))
@@ -471,7 +493,8 @@ class CredentialRepository:
         """
         with self._db.transaction() as conn:
             conn.execute(
-                "UPDATE credentials SET disabled = 1, disabled_reason = ?, err_count = 0, "
+                "UPDATE credentials SET disabled = 1, quota_zero_token = NULL, "
+                "disabled_reason = ?, err_count = 0, "
                 "cooling_until = NULL, cooling_kind = NULL WHERE id = ?", (reason, credential_id))
             _clear_model_cooldowns(conn, credential_id)
             _record_credential_event(
@@ -513,7 +536,8 @@ class CredentialRepository:
             if outcome.disabled:
                 disabled_reason = outcome.disabled_reason or "session dead"
                 conn.execute(
-                    "UPDATE credentials SET disabled = 1, disabled_reason = ?, err_count = 0, "
+                    "UPDATE credentials SET disabled = 1, quota_zero_token = NULL, "
+                    "disabled_reason = ?, err_count = 0, "
                     "cooling_until = NULL, cooling_kind = NULL WHERE id = ?",
                     (disabled_reason, credential_id))
                 _record_credential_event(
@@ -700,7 +724,8 @@ class CredentialRepository:
         issued_at, expires_at = credential_token_times(credential_data)
         with self._db.transaction() as conn:
             conn.execute(
-                "UPDATE credentials SET data_enc = ?, token_expires_at = ?, "
+                "UPDATE credentials SET data_enc = ?, quota_zero_token = NULL, "
+                "token_expires_at = ?, "
                 "token_issued_at = ?, login_secret = ? WHERE id = ?",
                 (self._cipher.encrypt(payload), expires_at, issued_at,
                  _login_secret_flag(credential_data), credential_id))
@@ -840,7 +865,8 @@ class CredentialRepository:
             cooling_sql = ("" if keep_cooldown
                            else "cooling_until = NULL, cooling_kind = NULL, ")
             conn.execute(
-                "UPDATE credentials SET data_enc = ?, token_expires_at = ?, "
+                "UPDATE credentials SET data_enc = ?, quota_zero_token = NULL, "
+                "token_expires_at = ?, "
                 "token_issued_at = ?, login_secret = ?, "
                 "enabled = CASE WHEN miora_exhausted_at IS NULL THEN enabled ELSE 1 END, "
                 f"nickname = CASE WHEN ? = '' THEN nickname ELSE ? END, "
@@ -873,21 +899,23 @@ class CredentialRepository:
                     return
                 if any(value is not None and (not math.isfinite(value) or value < 0)
                        for value in (quota.remaining, quota.total)):
-                    conn.execute("UPDATE credentials SET health = NULL WHERE id = ?",
+                    conn.execute("UPDATE credentials SET health = NULL, quota_zero_token = NULL "
+                                 "WHERE id = ?",
                                  (credential_id,))
                     return
             conn.execute(
                 "UPDATE credentials SET quota_remaining = ?, quota_total = ?, "
                 "quota_cycle_end = ?, quota_expiry_ladder = ?, quota_packages = ?, "
                 "web_cookie_state = ?, quota_detail = COALESCE(?, quota_detail), "
-                "quota_probed_at = ?, health = ? "
+                "quota_probed_at = ?, health = ?, quota_zero_token = ? "
                 "WHERE id = ?",
                 (quota.remaining, quota.total, quota.cycle_end,
                  _ladder_text(quota.expiry_ladder), _packages_text(quota.packages),
                  quota.web_cookie_state,
                  json.dumps(quota.detail, ensure_ascii=False) if quota.detail is not None else None,
                  quota.probed_at,
-                 health_score(quota), credential_id),
+                 health_score(quota), _new_id("zero") if quota.confirmed_zero else None,
+                 credential_id),
             )
             if previous is not None:
                 self._record_credit_event(
@@ -993,7 +1021,8 @@ class CredentialRepository:
 
     def mark_probe_failed(self, credential_id: str, now: int | None = None) -> None:
         with self._db.transaction() as conn:
-            conn.execute("UPDATE credentials SET quota_probed_at = ?, health = NULL WHERE id = ?",
+            conn.execute("UPDATE credentials SET quota_probed_at = ?, health = NULL, "
+                         "quota_zero_token = NULL WHERE id = ?",
                          (_now(now), credential_id))
 
     def save_growth_result(self, credential_id: str, report: str,
@@ -1216,7 +1245,8 @@ class CredentialRepository:
             "SELECT id, provider, nickname, enabled, disabled, disabled_reason, pinned, "
             "health, cooling_until, cooling_kind, err_count, quota_remaining, "
             "quota_total, quota_cycle_end, "
-            "quota_probed_at, growth_last_run_at, growth_last_result, created_at, added_by, "
+            "quota_probed_at, quota_zero_token, growth_last_run_at, growth_last_result, "
+            "created_at, added_by, "
             "quota_expiry_ladder, quota_packages, quota_detail, data_enc, "
             "web_cookie_state, routing_weight, login_secret, miora_exhausted_at, "
             "token_expires_at, token_issued_at, "

@@ -1,9 +1,10 @@
 import { ChevronDown, Download, Search, Trash2 } from "lucide-react";
 import { DEFAULT_FILTERS, ANY } from "../../lib/credentialList";
 import type { CountedOption, CredentialFilters, GroupSort } from "../../lib/credentialList";
+import type { BatchDeleteAction } from "../../api/types";
 import { Button, Input, Select } from "../../ui";
 import { BATCH_BUTTONS, type BatchButton } from "./helpers";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { CredentialExportOptions } from "./ExportOptions";
 import type { CredentialExportMode } from "./export";
 
@@ -134,6 +135,7 @@ export function BatchActionBar({
   onRun,
   onExport,
   confirmingDelete,
+  candidateCount,
   onDelete,
   onConfirmDelete,
   onCancelDelete,
@@ -143,8 +145,9 @@ export function BatchActionBar({
   busy: boolean;
   onRun: (button: BatchButton) => void;
   onExport: (mode: CredentialExportMode) => void;
-  confirmingDelete: boolean;
-  onDelete: () => void;
+  confirmingDelete: BatchDeleteAction | null;
+  candidateCount: number;
+  onDelete: (action: BatchDeleteAction) => void;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
   onClear: () => void;
@@ -162,7 +165,7 @@ export function BatchActionBar({
                     key={button.key}
                     size="sm"
                     variant="default"
-                    disabled={busy || confirmingDelete}
+                    disabled={busy || !!confirmingDelete}
                     data-testid={`batch-${button.key}`}
                     onClick={() => onRun(button)}
                   >
@@ -171,7 +174,7 @@ export function BatchActionBar({
                 ))}
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="default" disabled={busy || confirmingDelete} data-testid="batch-export">
+                    <Button size="sm" variant="default" disabled={busy || !!confirmingDelete} data-testid="batch-export">
                       <Download className="size-3.5" /> 批量导出凭证 <ChevronDown className="size-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
@@ -181,25 +184,34 @@ export function BatchActionBar({
                 </DropdownMenu>
                 {confirmingDelete ? <>
                   <span className="text-xs text-destructive" data-testid="batch-delete-question">
-                    确认删除选中的 {selectedCount} 个凭证？
+                    {confirmingDelete === "delete_zero"
+                      ? `已选 ${selectedCount} 个，其中 ${candidateCount} 个曾实测为零。逐个复查，只删除仍为零的账号，其余保留。`
+                      : `确认删除选中的 ${selectedCount} 个凭证？`}
                   </span>
                   <Button size="sm" variant="danger" disabled={busy}
                     data-testid="batch-delete-confirm" onClick={onConfirmDelete}>
-                    确认删除 {selectedCount} 个凭证
+                    {confirmingDelete === "delete_zero" ? "确认复查并删除" : `确认删除 ${selectedCount} 个凭证`}
                   </Button>
                   <Button size="sm" variant="ghost" disabled={busy}
                     data-testid="batch-delete-cancel" onClick={onCancelDelete}>
                     取消删除
                   </Button>
-                </> : <Button size="sm" variant="default" disabled={busy}
-                  className="text-destructive hover:text-destructive"
-                  data-testid="batch-delete" onClick={onDelete}>
-                  <Trash2 className="size-3.5" /> 批量删除
-                </Button>}
+                </> : <DropdownMenu modal={false}>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="default" disabled={busy}
+                      className="text-destructive hover:text-destructive" data-testid="batch-delete">
+                      <Trash2 className="size-3.5" /> 删除 <ChevronDown className="size-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="min-w-40">
+                    <DropdownMenuItem onSelect={() => onDelete("delete")}>批量删除</DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => onDelete("delete_zero")}>无额度账号删除</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>}
                 <Button
                   size="sm"
                   variant="ghost"
-                  disabled={busy || confirmingDelete}
+                  disabled={busy || !!confirmingDelete}
                   data-testid="batch-clear"
                   onClick={onClear}
                 >

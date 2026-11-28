@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS credentials (
     login_secret INTEGER,
     routing_weight   INTEGER,                   -- 调度权重：NULL/0=默认；正数越大越先被选中（仅管理员显式偏好）
     quota_probed_at  INTEGER,
+    quota_zero_token TEXT,                        -- 本次明确零余额的观测版本；老库/未知为 NULL
     token_expires_at INTEGER,                   -- access token 到期 epoch；NULL=老库未回填，0=未知
     token_issued_at  INTEGER,                   -- access token 签发 epoch（JWT iat）：进度条满量程与「最后续期」
     growth_last_run_at INTEGER,                    -- 成长中心最近一轮执行时间（仅 CodeBuddy）

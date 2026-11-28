@@ -40,6 +40,7 @@ from ...provider.base import (
     Quota,
     UpstreamProtocolViolation,
     Usage,
+    matching_amounts,
     parse_queue_hint,
 )
 from ..openai_chunk import first_choice, usage_from_openai
@@ -539,7 +540,10 @@ def parse_quota(payload: dict[str, Any], *, now: int) -> Quota:
          "used": _num(addon, "used"), "end": end},
     ]
     return Quota(remaining=max(0.0, remaining), total=total, cycle_end=end,
-                 packages=packages, probed_at=now)
+                 packages=packages, probed_at=now,
+                 zero_evidence=(payload.get("code", 0) == 0 and not payload.get("error")
+                                and all(matching_amounts(bucket.get("remaining"))
+                                        for bucket in (base, addon))))
 
 
 # 网页额度接口的容器：顺序即展示顺序。国内版实测三个容器都返回（额度为 0 的
@@ -613,11 +617,14 @@ def parse_web_quota(payload: dict[str, Any], *, now: int) -> Quota | None:
     packages: list[dict[str, Any]] = []
     ladder: list[tuple[int, float]] = []
     total = used = remaining = 0.0
+    zero_evidence = payload.get("code", 0) == 0 and not payload.get("error")
     for label, keys in _WEB_QUOTA_CONTAINERS:
         container = _obj(next((payload[key] for key in keys
                                if isinstance(payload.get(key), dict)), None))
         summary = _obj(container.get("quota_summary")
                        or container.get("quotaSummary"))
+        raw_balance = summary.get("remaining_value", summary.get("remainingValue"))
+        zero_evidence &= matching_amounts(raw_balance)
         total += _first_num(summary, "limit_value", "limitValue")
         used += _first_num(summary, "used_value", "usedValue")
         remaining += _first_num(summary, "remaining_value", "remainingValue")
@@ -635,6 +642,8 @@ def parse_web_quota(payload: dict[str, Any], *, now: int) -> Quota | None:
                 end = None
             source = str(item.get("source") or "")
             active = item.get("is_active", item.get("isActive"))
+            zero_evidence &= active is False or matching_amounts(
+                item.get("remaining_value", item.get("remainingValue")))
             packages.append({
                 "name": _WEB_QUOTA_SOURCES.get(source, label),
                 "total": limit,
@@ -652,7 +661,7 @@ def parse_web_quota(payload: dict[str, Any], *, now: int) -> Quota | None:
     return Quota(remaining=max(0.0, remaining), total=total,
                  cycle_end=cycle_end,
                  expiry_ladder=sorted(ladder) if ladder else None,
-                 packages=packages, probed_at=now)
+                 packages=packages, probed_at=now, zero_evidence=zero_evidence)
 
 
 def _claimed_today(value: Any, now: int) -> bool:

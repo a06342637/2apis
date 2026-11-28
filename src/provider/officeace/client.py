@@ -252,6 +252,7 @@ class OfficeAceClient(LazyClients):
             return Quota(probe_failed=True, probed_at=moment)
         return Quota(
             remaining=summary["remaining"],
+            zero_evidence=summary["zero_evidence"],
             total=summary["total"],
             cycle_end=summary["cycle_end"],
             expiry_ladder=summary["expiry_ladder"] or None,

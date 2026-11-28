@@ -43,6 +43,7 @@ from ...provider.base import (
     Model,
     Quota,
     UpstreamProtocolViolation,
+    matching_amounts,
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
@@ -238,6 +239,8 @@ class LingxiClient(LazyClients):
     async def fetch_balance(self, credential: LingxiCredential) -> dict[str, Any]:
         """GET 智点余额（`total_balance` 为主，`bonus_credits[]` 带到期时刻）。"""
         data = await self._account_json(credential, EP_BALANCE)
+        if data.get("code", "Success") not in ("Success", 0):
+            raise UpstreamProtocolViolation("灵犀余额查询被拒绝")
         payload = data.get("data")
         return payload if isinstance(payload, dict) else {}
 
@@ -248,9 +251,11 @@ class LingxiClient(LazyClients):
         因此健康度是**近似**比例（参考实现同口径，界面只展示剩余与批次）。
         """
         payload = await self.fetch_balance(credential)
-        remaining = _num(payload.get("total_balance"))
+        raw_balance = payload.get("total_balance")
+        remaining = _num(raw_balance)
         if remaining is None:
-            remaining = _num(payload.get("credits_balance"))
+            raw_balance = payload.get("credits_balance")
+            remaining = _num(raw_balance)
         if remaining is None:
             return Quota(probe_failed=True, probed_at=int(time.time()))
         batches = payload.get("bonus_credits")
@@ -276,6 +281,8 @@ class LingxiClient(LazyClients):
         return Quota(
             remaining=remaining,
             total=max(remaining, bonus_total),
+            zero_evidence=(matching_amounts(raw_balance) and matching_amounts(
+                payload.get("total_balance", raw_balance))),
             expiry_ladder=ladder or None,
             packages=packages or None,
             probed_at=now,

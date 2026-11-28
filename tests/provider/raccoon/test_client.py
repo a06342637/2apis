@@ -274,6 +274,7 @@ async def test_fetch_quota_zero_points_has_no_packages():
 
     quota = await _client(handler).fetch_quota("tok")
     assert (quota.remaining, quota.total, quota.packages) == (0.0, 0.0, None)
+    assert quota.confirmed_zero
     # 0/0 时 health_score 会判「已耗尽」，这正是想要的语义
     from src.provider.base import health_score
     assert health_score(quota) == -1

@@ -226,6 +226,8 @@ class RaccoonClient(LazyClients):
         # 不再用「发放额」（那样会把已消耗的部分也算成将要过期）。
         ladder = raccoon_activity.ladder_from_packages(packages)
         return Quota(remaining=remaining, total=remaining, packages=packages or None,
+                     zero_evidence=(items is not None and data.get("code", 0) == 0
+                                    and base.matching_amounts(points)),
                      expiry_ladder=ladder, probed_at=now)
 
     async def _fetch_income(self, token: str) -> list[Any] | None:

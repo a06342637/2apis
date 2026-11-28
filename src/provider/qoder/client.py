@@ -463,7 +463,10 @@ class QoderClient(LazyClients):
             if web is not None:
                 return web
         data = await self._get_json(f"{self.host}{EP_QUOTA}", credential)
-        return qoder_events.parse_quota(data, now=self._now())
+        quota = qoder_events.parse_quota(data, now=self._now())
+        # 已配置的网页会话探测失败：汇总可展示，但不授权删除。
+        quota.zero_evidence &= not credential.web_cookie
+        return quota
 
     async def _probe_web_quota(self, credential: QoderCredential) -> Quota | None:
         """网页额度接口；Cookie 失效/形状变化一律返回 None（由调用方回退）。"""

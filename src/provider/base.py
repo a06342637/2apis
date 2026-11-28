@@ -15,6 +15,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from enum import StrEnum
 from typing import Any, ClassVar, Protocol, runtime_checkable
@@ -784,6 +785,15 @@ def event_error_kind(event: Event) -> ErrKind:
     return event.error_kind if event.error_kind is not None else ErrKind.OTHER
 
 
+def matching_amounts(value: Any, other: Any = 0) -> bool:
+    """Exact nonnegative amounts from upstream, never a display fallback or rounded float."""
+    try:
+        left, right = Decimal(str(value)), Decimal(str(other))
+    except InvalidOperation:
+        return False
+    return left.is_finite() and right.is_finite() and left >= 0 and left == right
+
+
 @dataclass(slots=True)
 class Quota:
     """额度探测结果。probe_failed 与「探测到 0」必须区分（三态）。"""
@@ -806,6 +816,16 @@ class Quota:
     probe_failed: bool = False
     # 匿名化的展示补充信息；不进入健康度、调度或模型权限判断。
     detail: dict[str, Any] | None = None
+    # Destructive operations require explicit evidence from the provider parser.
+    # A clamped/calculated display value or health percentage is not evidence.
+    zero_evidence: bool = False
+
+    @property
+    def confirmed_zero(self) -> bool:
+        return (self.zero_evidence and not self.probe_failed and self.probed_at is not None
+                and type(self.remaining) in (int, float) and self.remaining == 0
+                and (self.total is None or (type(self.total) in (int, float)
+                                            and math.isfinite(self.total) and self.total >= 0)))
 
 
 UNKNOWN: int | None = None

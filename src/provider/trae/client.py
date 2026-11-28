@@ -28,6 +28,7 @@ from ...provider.base import (
     EventKind,
     Model,
     Quota,
+    matching_amounts,
 )
 from ...provider.token_expiry import normalize_epoch
 from ...tasks.pacer import paced
@@ -489,14 +490,18 @@ class TraeClient(LazyClients):
         used = 0.0
         ladder: list[tuple[int, float]] = []
         packages: list[dict[str, Any]] = []
+        zero_evidence = bool(packs) and data.get("code", 0) == 0
         for pack in packs:
             if not isinstance(pack, dict):
+                zero_evidence = False
                 continue
             base = (pack.get("entitlement_base_info") or {}).get("quota") or {}
             pack_limit = base.get("credits_limit")
             if not isinstance(pack_limit, (int, float)) or pack_limit <= 0:
+                zero_evidence = False
                 continue
             pack_used = (pack.get("usage") or {}).get("credits_amount")
+            zero_evidence &= matching_amounts(pack_limit, pack_used)
             used_value = float(pack_used) if isinstance(pack_used, (int, float)) else 0.0
             balance = max(0.0, float(pack_limit) - used_value)
             end = _pack_end(pack)
@@ -515,7 +520,7 @@ class TraeClient(LazyClients):
             ladder.append((end, balance))
         return Quota(remaining=max(0.0, limit - used), total=limit,
                      expiry_ladder=ladder, packages=packages or None,
-                     probed_at=int(now_epoch))
+                     probed_at=int(now_epoch), zero_evidence=zero_evidence)
 
     async def fetch_checkin_status(self, credential: TraeCredential,
                                    *, device_id: str = "") -> dict[str, Any]:

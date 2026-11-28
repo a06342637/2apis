@@ -409,6 +409,11 @@ export const api = {
       method: "POST",
       ...json(enabled === undefined ? { action, ids } : { action, ids, enabled }),
     }, BATCH_TIMEOUT_MS),
+  deleteZeroCredentials: (ids: string[], zeroTokens: Record<string, string>) =>
+    request<BatchResult>("/api/credentials/batch", {
+      method: "POST",
+      ...json({ action: "delete_zero", ids, confirmed: true, zero_tokens: zeroTokens }),
+    }, BATCH_TIMEOUT_MS),
   checkinCredential: (id: string) =>
     request<CheckinResult>(`/api/credentials/${id}/checkin`, { method: "POST" }),
   checkinStatus: (id: string) =>

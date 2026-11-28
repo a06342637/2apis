@@ -70,7 +70,11 @@ ACCOUNT_SORT_KEYS = {
 # - `refresh`（token 预刷新）没有单条入口，且一次性 refresh_token 由后台任务
 #   按 skew 窗口驱动，批量强刷会白耗票据；
 # - `delete` 由前端独立二次确认；后端沿用 operator/CSRF 和逐条结果边界。
-BATCH_ACTIONS = frozenset({"probe", "toggle", "checkin", "revive", "delete"})
+BATCH_ACTIONS = frozenset({"probe", "toggle", "checkin", "revive", "delete", "delete_zero"})
+
+# 只纳入能提供明确余额证据的适配器，新渠道默认不允许破坏性清理。
+ZERO_PROBE_PROVIDERS = frozenset({"miora", "codebuddy", "codebuddy_intl", "trae", "qoder",
+                                  "codearts", "officeace", "lingxi", "raccoon"})
 
 # 单次批量的上限：一次点「全部探测」最多打多少个上游。上限存在的原因是
 # 探测/签到都会真的出网，没有上限时前端一个「全选」就能把整池凭证的请求
@@ -100,6 +104,7 @@ MAX_SQLITE_INTEGER = 2**63 - 1
 # 节流；批量端点由操作员手动触发，若完全串行则 50 个号要等几分钟才返回。
 # 折中：限制同时在途的凭证数，既不打爆上游，也不至于让请求长时间挂住。
 BATCH_CONCURRENCY = 4
+ZERO_RECHECK_BUDGET_SECONDS = 8 * 60
 
 
 def _miora_batch_nickname_factory() -> Callable[[], str]:
@@ -122,6 +127,7 @@ BATCH_AUDIT_ACTIONS = {
     "toggle": ACTION_CREDENTIAL_TOGGLE,
     "revive": ACTION_CREDENTIAL_REVIVE,
     "delete": ACTION_CREDENTIAL_DELETE,
+    "delete_zero": ACTION_CREDENTIAL_DELETE,
 }
 
 
@@ -908,20 +914,58 @@ def create_router(services: Services) -> APIRouter:
             raise InvalidRequest("ids must be a non-empty list")
         if len(ids) > BATCH_MAX_IDS:
             raise InvalidRequest(f"too many credentials (max {BATCH_MAX_IDS})")
+        evidence = payload.get("zero_tokens")
+        if action == "delete_zero" and (payload.get("confirmed") is not True
+                                        or not isinstance(evidence, dict)):
+            raise InvalidRequest("delete_zero requires explicit confirmation and zero_tokens")
         enabled = bool(payload.get("enabled", True))
         # force 只对 revive 有效：清掉「上游点名恢复时刻」的冷却（见 repo.revive）
         force_revive = bool(payload.get("force"))
         semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
 
+        # Deadline leaves time to return every skipped row before the browser's batch timeout.
+        deadline = asyncio.get_running_loop().time() + ZERO_RECHECK_BUDGET_SECONDS
+
+        async def recheck_zero(cid: str) -> str | None:
+            snapshot = credentials.zero_snapshot(cid)
+            if snapshot is None:
+                return "凭证不存在"
+            if snapshot["provider"] not in ZERO_PROBE_PROVIDERS:
+                return "该渠道没有支持的额度接口"
+            if (not snapshot["quota_zero_token"] or snapshot["disabled"]
+                    or snapshot["quota_remaining"] != 0 or snapshot["health"] is None
+                    or snapshot["quota_zero_token"] != evidence.get(cid)):
+                return "没有已确认的零余额记录，或记录已变化"
+            if asyncio.get_running_loop().time() >= deadline:
+                return "本批复查时间已到，未执行"
+            lock = credentials.edit_lock(cid)
+            if lock.locked():
+                return "账号正在更新"
+            async with lock:
+                provider, data = provider_for(cid)
+                try:
+                    async with asyncio.timeout_at(deadline):
+                        with credential_scope(cid):
+                            quota = await provider.probe_quota(data)
+                except Exception:  # noqa: BLE001 - 认证/超时绝不授权删除，不回显上游正文
+                    quota = None
+                return credentials.finish_zero_recheck(snapshot, quota)
+
         async def run_one(credential_id: str) -> dict:
             try:
-                if action == "delete":
-                    if not credentials.delete(credential_id):
+                if action in ("delete", "delete_zero"):
+                    if action == "delete_zero":
+                        reason = await recheck_zero(credential_id)
+                        if reason:
+                            return {"id": credential_id, "ok": False, "skipped": True,
+                                    "error": reason}
+                    elif not credentials.delete(credential_id):
                         return {"id": credential_id, "ok": False, "error": "credential not found"}
                     try:
                         services.audit.record(actor=principal.username,
                                               action=ACTION_CREDENTIAL_DELETE,
-                                              target=credential_id, detail="批量删除")
+                                              target=credential_id, detail=("复查零余额删除"
+                                              if action == "delete_zero" else "批量删除"))
                     except Exception as error:  # noqa: BLE001 - 删除已生效，留痕失败不改结果
                         logger.warning("批量删除凭证 %s 审计写入失败: %s", credential_id, error)
                     return {"id": credential_id, "ok": True}
@@ -955,7 +999,10 @@ def create_router(services: Services) -> APIRouter:
                 logger.info("批量 %s 失败 %s: %s", action, credential_id, str(error)[:200])
                 return {"id": credential_id, "ok": False, "error": "action_failed"}
 
-        results = await asyncio.gather(*(run_one(credential_id) for credential_id in ids))
+        if action == "delete_zero":
+            results = [await run_one(cid) for cid in ids]
+        else:
+            results = await asyncio.gather(*(run_one(credential_id) for credential_id in ids))
         succeeded = sum(1 for result in results if result["ok"])
         # 状态修改审计记一条汇总；删除另记逐条目标。批量暂停是一次操作、一个意图，
         # 50 行审计会把流水刷成噪声，反而更难定位「谁在什么时候批量做了什么」。
@@ -974,8 +1021,10 @@ def create_router(services: Services) -> APIRouter:
                 logger.warning("批量 %s 审计写入失败: %s", action, error)
         logger.info("管理员 %s 批量 %s %d 个凭证（成功 %d）", principal.username, action,
                     len(results), succeeded)
+        skipped = sum(bool(row.get("skipped")) for row in results)
         return {"action": action, "total": len(results), "succeeded": succeeded,
-                "failed": len(results) - succeeded, "results": results}
+                "failed": len(results) - succeeded - skipped, "results": results,
+                **({"skipped": skipped} if action == "delete_zero" else {})}
 
     @router.get("/api/credentials/{credential_id}/checkin")
     async def checkin_status(credential_id: str,

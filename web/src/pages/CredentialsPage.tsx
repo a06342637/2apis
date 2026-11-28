@@ -5,7 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useCredentialGroups, useCredentials, useQueryClient } from "../api/hooks";
 import { useDisplayModels } from "../api/modelDisplay";
-import type { Credential, Provider } from "../api/types";
+import type { BatchDeleteAction, Credential, Provider } from "../api/types";
 import { PROVIDER_LABEL, providerLabel, providerRank } from "../api/providers";
 import { groupModelsByProvider } from "../components/ModelPicker";
 import { PageHeader } from "../components/PageHeader";
@@ -76,7 +76,9 @@ export function CredentialsPage() {
     setBusy(false);
   }, [exportIdentity]);
   const deleteInFlight = useRef(false);
-  const [confirmBatchDelete, setConfirmBatchDelete] = useState(false);
+  const [confirmBatchDelete, setConfirmBatchDelete] = useState<{
+    action: BatchDeleteAction; ids: string[]; tokens: Record<string, string>;
+  } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // 添加凭证对话框（登录渠道 / JSON 导入 / 免费层补回都收在里面）
   // `?new=1`：首启向导的深链，进来直接开新增对话框，随后把参数清掉
@@ -232,7 +234,7 @@ export function CredentialsPage() {
    * 组头始终可见，所以「先折叠、要看时点开」在无筛选时仍然成立。
    */
   const applyFilters = (next: typeof filters) => {
-    setConfirmBatchDelete(false);
+    setConfirmBatchDelete(null);
     setFilters(next);
     if (next.query.trim() !== "" || next.provider !== ANY ||
         next.state !== ANY || next.tag !== ANY) {
@@ -373,20 +375,34 @@ export function CredentialsPage() {
       "已导出凭证 JSON（含明文令牌，请妥善保管）");
   };
 
+  const prepareDelete = (action: BatchDeleteAction) => {
+    const tokens: Record<string, string> = {};
+    for (const row of selectedIds) {
+      if (row.quota_zero_token && !row.disabled && row.quota_remaining === 0) {
+        tokens[row.id] = row.quota_zero_token;
+      }
+    }
+    setConfirmBatchDelete({ action, ids: selectedIds.map((row) => row.id), tokens });
+  };
+
   const deleteSelected = async () => {
     if (!canWrite || busy || deleteInFlight.current || !confirmBatchDelete) return;
-    const ids = [...new Set(selectedIds.map((credential) => credential.id))];
+    // Polling must never expand the confirmed set; the backend also compares observation tokens.
+    const visible = new Set(selectedIds.map((row) => row.id));
+    const ids = confirmBatchDelete.ids.filter((id) => visible.has(id));
     if (!ids.length) return;
     deleteInFlight.current = true;
     setBusy(true);
     try {
-      const result = await api.batchCredentials("delete", ids);
+      const result = confirmBatchDelete.action === "delete_zero"
+        ? await api.deleteZeroCredentials(ids, confirmBatchDelete.tokens)
+        : await api.batchCredentials("delete", ids);
       const requested = new Set(ids);
       const deleted = new Set(result.results.filter((row) => row.ok && requested.has(row.id))
         .map((row) => row.id));
       setSelected((previous) => new Set([...previous].filter((id) => !deleted.has(id))));
-      setConfirmBatchDelete(false);
-      push({ tone: result.failed > 0 ? "warn" : "ok", testId: "credentials-batch-result",
+      setConfirmBatchDelete(null);
+      push({ tone: result.failed || result.skipped ? "warn" : "ok", testId: "credentials-batch-result",
         content: <BatchToastContent result={result} names={credentialNames} done="已删除" /> });
       void refresh();
     } catch (caught) {
@@ -399,7 +415,7 @@ export function CredentialsPage() {
 
   /** 勾选 / 取消勾选一条；用于行内 checkbox 与组头「全选本渠道」。 */
   const toggleSelected = (credentialId: string, checked: boolean) => {
-    setConfirmBatchDelete(false);
+    setConfirmBatchDelete(null);
     setSelected((previous) => {
       const next = new Set(previous);
       if (checked) next.add(credentialId);
@@ -410,7 +426,7 @@ export function CredentialsPage() {
 
   /** 组头「全选本渠道」：把该组所有行一次性纳入 / 移出选中集合。 */
   const toggleGroupSelected = (ids: string[], checked: boolean) => {
-    setConfirmBatchDelete(false);
+    setConfirmBatchDelete(null);
     setSelected((previous) => {
       const next = new Set(previous);
       for (const id of ids) {
@@ -549,11 +565,12 @@ export function CredentialsPage() {
                 busy={busy}
                 onRun={(button) => void runBatch(button)}
                 onExport={(mode) => void exportSelected(mode)}
-                confirmingDelete={confirmBatchDelete}
-                onDelete={() => setConfirmBatchDelete(true)}
+                confirmingDelete={confirmBatchDelete?.action ?? null}
+                candidateCount={confirmBatchDelete ? Object.keys(confirmBatchDelete.tokens).length : 0}
+                onDelete={prepareDelete}
                 onConfirmDelete={() => void deleteSelected()}
-                onCancelDelete={() => setConfirmBatchDelete(false)}
-                onClear={() => { setConfirmBatchDelete(false); setSelected(new Set()); }}
+                onCancelDelete={() => setConfirmBatchDelete(null)}
+                onClear={() => { setConfirmBatchDelete(null); setSelected(new Set()); }}
               />
             )}
 

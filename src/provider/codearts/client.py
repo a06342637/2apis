@@ -41,6 +41,7 @@ from ...provider.base import (
     Model,
     Quota,
     UpstreamReloginRequired,
+    matching_amounts,
 )
 from ..http_json import json_or_raise
 from ..lazy_clients import LazyClients
@@ -384,11 +385,11 @@ class CodeArtsClient(LazyClients):
             # 都换不出新会话，实测）。这里只打标记供管理台提示，额度继续用汇总。
             logger.warning("CodeArts 网页 Cookie 已失效（%s），额度详情节回退汇总口径；"
                            "请在管理台重新粘贴", error)
-            return replace(quota, web_cookie_state="expired")
+            return replace(quota, web_cookie_state="expired", zero_evidence=False)
         except (httpx.HTTPError, ValueError, UpstreamProtocolViolation) as error:
             logger.info("CodeArts 网页额度接口不可用（%s: %s），回退汇总口径",
                         type(error).__name__, error)
-            return quota
+            return replace(quota, zero_evidence=False)
         if detail is None:
             return replace(quota, web_cookie_state="ok")
         packages, ladder = detail
@@ -886,7 +887,9 @@ def parse_credits(data: dict[str, Any], *, now: int | None = None) -> Quota:
         [(stamp + CREDIT_EXPIRING_WINDOW_SECONDS, expiring_total)]
         if expiring_total > 0 and remaining and remaining > 0 else None)
     return Quota(remaining=remaining, total=total, cycle_end=end,
-                 expiry_ladder=ladder, packages=packages or None, probed_at=stamp)
+                 expiry_ladder=ladder, packages=packages or None, probed_at=stamp,
+                 zero_evidence=(not data.get("error_code") and
+                                matching_amounts(total_item.get("package_credit_remain"))))
 
 
 def _opt_number(obj: dict[str, Any], key: str) -> float | None:
@@ -971,7 +974,8 @@ def _merge_web_credits(
     return Quota(remaining=quota.remaining, total=quota.total,
                  cycle_end=quota.cycle_end, expiry_ladder=ladder,
                  packages=(kept + packages) or None, probed_at=quota.probed_at,
-                 probe_failed=quota.probe_failed, web_cookie_state=state)
+                 probe_failed=quota.probe_failed, web_cookie_state=state,
+                 zero_evidence=quota.zero_evidence)
 
 
 def _campaign_ids(overview: dict[str, Any]) -> list[int]:

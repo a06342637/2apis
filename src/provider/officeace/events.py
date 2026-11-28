@@ -53,6 +53,7 @@ from ...provider.base import (
     Usage,
     body_text,
     business_codes,
+    matching_amounts,
 )
 from ..openai_chunk import openai_event, openai_events, payload_of, usage_from_openai
 
@@ -301,6 +302,7 @@ def summarize_subscription(payload: Any, *, now: int | None = None) -> dict[str,
     """
     moment = int(now if now is not None else time.time())
     data = payload if isinstance(payload, dict) else {}
+    zero_evidence = isinstance(data.get("skus"), list) and isinstance(data.get("bonus_skus"), list)
     skus = data.get("skus")
     skus = skus if isinstance(skus, list) else []
     bonuses = data.get("bonus_skus")
@@ -313,15 +315,21 @@ def summarize_subscription(payload: Any, *, now: int | None = None) -> dict[str,
 
     for sku in skus:
         if not isinstance(sku, dict):
+            zero_evidence = False
             continue
         quotas = sku.get("quotas")
+        zero_evidence &= isinstance(quotas, list)
         quotas = quotas if isinstance(quotas, list) else []
         for quota in quotas:
-            if not isinstance(quota, dict) or quota.get("sku_attr_code") != POINTS_SKU:
+            if not isinstance(quota, dict) or not quota.get("sku_attr_code"):
+                zero_evidence = False
+                continue
+            if quota.get("sku_attr_code") != POINTS_SKU:
                 continue
             end = epoch_from_iso(quota.get("expired_time"))
             if end and end <= moment:
                 continue                       # 过期额度不计入（官方口径）
+            zero_evidence &= matching_amounts(quota.get("sku_value"), quota.get("current_value"))
             sku_total = _number(quota.get("sku_value"))
             sku_used = _number(quota.get("current_value"))
             total += sku_total
@@ -334,10 +342,12 @@ def summarize_subscription(payload: Any, *, now: int | None = None) -> dict[str,
 
     for bonus in bonuses:
         if not isinstance(bonus, dict):
+            zero_evidence = False
             continue
         end = epoch_from_iso(bonus.get("expired_time"))
         if end and end <= moment:
             continue
+        zero_evidence &= matching_amounts(bonus.get("points"), bonus.get("current_value"))
         bonus_total = _number(bonus.get("points"))
         bonus_used = _number(bonus.get("current_value"))
         total += bonus_total
@@ -351,6 +361,7 @@ def summarize_subscription(payload: Any, *, now: int | None = None) -> dict[str,
     remaining = max(0.0, total - used)
     cycle_end = min((end for end, _ in ladder), default=0) or None
     return {
+        "zero_evidence": bool(packages) and zero_evidence,
         "remaining": remaining,
         "total": total,
         "cycle_end": cycle_end,

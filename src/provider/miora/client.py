@@ -32,6 +32,7 @@ from ..base import (
     UpstreamProtocolViolation,
     UpstreamReloginRequired,
     ensure_public_host,
+    matching_amounts,
     read_body_bounded,
     retry_hints,
 )
@@ -410,7 +411,11 @@ class MioraClient(LazyClients):
                               if next_expiring is not None else None),
         }
         return Quota(remaining=remaining, total=total, cycle_end=ladder[0][0] if ladder else None,
-                     expiry_ladder=ladder, packages=packages, probed_at=moment, detail=detail)
+                     expiry_ladder=ladder, packages=packages, probed_at=moment, detail=detail,
+                     zero_evidence=(subscription is not None and packages_status == "ok"
+                                    and matching_amounts(data["totalAmount"], data["usedAmount"])
+                                    and not any(p["usable"] and p["total"] > p["used"]
+                                                for p in packages)))
 
     async def refresh_token(self, credential: MioraCredential) -> dict:
         if not credential.refresh_token:

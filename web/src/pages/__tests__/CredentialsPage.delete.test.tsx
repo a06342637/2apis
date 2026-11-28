@@ -13,10 +13,10 @@ function success(ids: string[]) {
     results: ids.map((id) => ({ id, ok: true })) });
 }
 function setup(response: () => Response | Promise<Response>, {
-  write = true, groups = [],
-}: { write?: boolean; groups?: CredentialGroup[] } = {}, session: typeof ADMIN | typeof VIEWER = ADMIN) {
+  write = true, groups = [], accounts = ACCOUNTS,
+}: { write?: boolean; groups?: CredentialGroup[]; accounts?: typeof ACCOUNTS } = {}, session: typeof ADMIN | typeof VIEWER = ADMIN) {
   const spy = mockCredentialsFetch({ "/api/credentials/batch": response,
-    "/api/credentials": { credentials: ACCOUNTS, is_operator: write },
+    "/api/credentials": { credentials: accounts, is_operator: write },
     "/api/credential-groups": { groups, is_operator: write } });
   renderPage(<CredentialsPage />, session);
   return spy;
@@ -25,8 +25,12 @@ function requests(spy: ReturnType<typeof setup>) {
   return spy.mock.calls.filter(([url]) => String(url) === "/api/credentials/batch")
     .map(([, init]) => JSON.parse(String(init?.body)));
 }
+async function chooseDelete(name = "批量删除") {
+  await userEvent.click(screen.getByRole("button", { name: "删除" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name }));
+}
 async function confirm() {
-  await userEvent.click(screen.getByTestId("batch-delete"));
+  await chooseDelete();
   await userEvent.click(screen.getByTestId("batch-delete-confirm"));
 }
 
@@ -45,8 +49,8 @@ describe("凭证批量删除确认", () => {
     await settle();
     await userEvent.click(screen.getByTestId("group-select-miora"));
     expect(screen.getByTestId("batch-export")).toHaveTextContent("批量导出凭证");
-    expect(screen.getByTestId("batch-delete")).toHaveTextContent("批量删除");
-    await userEvent.click(screen.getByTestId("batch-delete"));
+    expect(screen.getByTestId("batch-delete")).toHaveAccessibleName("删除");
+    await chooseDelete();
     expect(screen.getByTestId("batch-delete-question")).toHaveTextContent("确认删除选中的 2 个凭证");
     expect(screen.getByTestId("batch-delete-confirm")).toHaveTextContent("确认删除 2 个凭证");
     expect(requests(spy)).toEqual([]);
@@ -61,7 +65,7 @@ describe("凭证批量删除确认", () => {
     await settle();
     await userEvent.click(screen.getByTestId("group-toggle-miora"));
     await userEvent.click(screen.getByTestId(selection === "account" ? "select-mi-a" : "group-select-miora"));
-    await userEvent.click(screen.getByTestId("batch-delete"));
+    await chooseDelete();
     expect(screen.getByTestId("batch-delete-confirm")).toHaveTextContent(`确认删除 ${ids.length} 个凭证`);
     await userEvent.click(screen.getByTestId("batch-delete-confirm"));
     await screen.findByTestId("credentials-batch-result");
@@ -131,13 +135,36 @@ describe("凭证批量删除确认", () => {
     await settle();
     await userEvent.click(screen.getByTestId("group-toggle-miora"));
     await userEvent.click(screen.getByTestId("group-select-miora"));
-    await userEvent.click(screen.getByTestId("batch-delete"));
+    await chooseDelete();
     await userEvent.click(screen.getByTestId("select-mi-b"));
     expect(screen.queryByTestId("batch-delete-confirm")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("batch-delete"));
+    await chooseDelete();
     fireEvent.change(screen.getByTestId("credential-search"), { target: { value: "主号" } });
     expect(screen.queryByTestId("batch-delete-confirm")).not.toBeInTheDocument();
     expect(requests(spy)).toEqual([]);
+  });
+  it("无额度删除冻结所选账号的实测证据；只取消已删除项，跳过项说明原因", async () => {
+    const accounts = [
+      makeCredential({ id: "mi", provider: "miora", quota_remaining: 0, quota_zero_token: "observation" }),
+      makeCredential({ id: "old", provider: "miora", quota_remaining: 0, health: 0 }),
+      makeCredential({ id: "other", provider: "trae", quota_remaining: 0, quota_zero_token: "unselected" }),
+    ];
+    const spy = setup(() => jsonResponse({ action: "delete_zero", total: 2, succeeded: 1, skipped: 1, failed: 0,
+      results: [{ id: "mi", ok: true }, { id: "old", ok: false, skipped: true, error: "没有实测记录" }] }), { accounts });
+    await settle();
+    await userEvent.click(screen.getByTestId("group-select-miora"));
+    await chooseDelete("无额度账号删除");
+    expect(screen.getByTestId("batch-delete-question")).toHaveTextContent("已选 2 个，其中 1 个曾实测为零");
+    expect(requests(spy)).toEqual([]);
+    await userEvent.click(screen.getByRole("button", { name: "取消删除" }));
+    expect(requests(spy)).toEqual([]);
+    await chooseDelete("无额度账号删除");
+    await userEvent.click(screen.getByRole("button", { name: "确认复查并删除" }));
+    expect(await screen.findByTestId("credentials-batch-result")).toHaveTextContent("已删除 1 个，跳过 1 个");
+    expect(screen.getByTestId("batch-failure")).toHaveTextContent("没有实测记录");
+    expect(screen.getByTestId("batch-selected-count")).toHaveTextContent("已选 1 个");
+    expect(requests(spy)).toEqual([{ action: "delete_zero", ids: ["mi", "old"], confirmed: true,
+      zero_tokens: { mi: "observation" } }]);
   });
   it("删除期间所有批量按钮禁用，重复确认不提交第二次", async () => {
     let finish!: (response: Response) => void;

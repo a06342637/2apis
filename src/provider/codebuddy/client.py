@@ -438,7 +438,11 @@ class CodeBuddyClient(LazyClients):
         }
         body = await self._post_json(f"{self.endpoint}{EP_USER_RESOURCE}", payload,
                                      credential, quota_only=True)
-        accounts = _extract_accounts(body)
+        accounts, count = _extract_accounts(body)
+        complete = (len(accounts) < payload["PageSize"] if count is None
+                    else base.matching_amounts(count, len(accounts)))
+        zero_evidence = complete and body.get("code", 0) == 0
+        saw_balance = False
         now_epoch = time.time()
         total = 0.0
         remaining = 0.0
@@ -446,12 +450,19 @@ class CodeBuddyClient(LazyClients):
         ladder: list[tuple[int, float]] = []
         packages: list[dict[str, Any]] = []
         for account in accounts:
-            if not isinstance(account, dict) or account.get("Status") != 0:
+            if not isinstance(account, dict) or type(account.get("Status")) is not int:
+                zero_evidence = False
                 continue
-            package_total = _cycle_capacity(account, "CycleCapacitySize")
+            if account["Status"] != 0:
+                continue
+            package_total = _number(_capacity_field(account, "CycleCapacitySize")) or 0.0
             if package_total <= 0:
+                zero_evidence = False
                 continue
-            package_remaining = _cycle_capacity(account, "CycleCapacityRemain")
+            raw_remaining = _capacity_field(account, "CycleCapacityRemain")
+            saw_balance = True
+            zero_evidence &= base.matching_amounts(raw_remaining)
+            package_remaining = _number(raw_remaining) or 0.0
             total += package_total
             remaining += package_remaining
             end = _cycle_end_epoch(account.get("CycleEndTime"))
@@ -484,7 +495,7 @@ class CodeBuddyClient(LazyClients):
         #   CycleCapacityRemainPrecise。
         return Quota(remaining=remaining, total=total, cycle_end=cycle_end,
                      expiry_ladder=ladder, packages=packages or None,
-                     probed_at=int(time.time()))
+                     probed_at=int(time.time()), zero_evidence=saw_balance and zero_evidence)
 
     async def _fetch_enterprise_quota(self, credential: CodeBuddyCredential) -> Quota:
         data = await self._post_json(f"{self.endpoint}{EP_ENTERPRISE_USAGE}", {}, credential)
@@ -493,6 +504,8 @@ class CodeBuddyClient(LazyClients):
         if total is None:
             raise UpstreamProtocolViolation("enterprise quota missing limitNum")
         return Quota(remaining=max(0.0, total - (used or 0.0)), total=total,
+                     zero_evidence=(data.get("code", 0) == 0 and base.matching_amounts(
+                         data.get("limitNum"), data.get("credit"))),
                      probed_at=int(time.time()))
 
     async def fetch_models(self, credential: CodeBuddyCredential) -> list[Model]:
@@ -737,7 +750,7 @@ def _effort_field(value: object) -> str | None:
     return effort if isinstance(effort, str) and effort else None
 
 
-def _extract_accounts(body: dict[str, Any]) -> list[Any]:
+def _extract_accounts(body: dict[str, Any]) -> tuple[list[Any], Any]:
     """从上游响应里取出账户列表。
 
     真实结构是三层嵌套：``data.Response.Data.Accounts``。
@@ -762,29 +775,27 @@ def _extract_accounts(body: dict[str, Any]) -> list[Any]:
         ("Accounts",),                       # 兼容更早的扁平结构
     ):
         node: Any = data
-        for key in path:
+        for key in path[:-1]:
             node = node.get(key) if isinstance(node, dict) else None
+        holder = node
+        node = holder.get("Accounts") if isinstance(holder, dict) else None
         if isinstance(node, list):
-            return node
-        if node is None and path == ("Response", "Data", "Accounts"):
-            # 该路径存在但值为 null → 探测成功但无个人版额度
-            holder: Any = data
-            for key in path[:-1]:
-                holder = holder.get(key) if isinstance(holder, dict) else None
-            if isinstance(holder, dict) and path[-1] in holder:
-                return []
+            return node, holder.get("TotalCount")
+        # 明确的 null 可展示无套餐，但不能当删除证据。
+        if (node is None and path == ("Response", "Data", "Accounts")
+                and isinstance(holder, dict) and path[-1] in holder):
+            return [], None
     raise UpstreamProtocolViolation("quota response missing Accounts")
 
 
-def _cycle_capacity(account: dict[str, Any], field: str) -> float:
+def _capacity_field(account: dict[str, Any], field: str) -> Any:
     """优先 *Precise 字段（AGENTS.md：额度以 Precise 为准）。
 
     上游把 Precise 值返回成**字符串**（"500"），因此必须能解析数字字符串，
     否则整批额度都会被算成 0。
     """
     precise = account.get(f"{field}Precise")
-    value = precise if precise is not None else account.get(field)
-    return _number(value) or 0.0
+    return precise if precise is not None else account.get(field)
 
 
 def _number(value: Any) -> float | None:

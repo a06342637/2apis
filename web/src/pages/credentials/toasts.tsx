@@ -26,7 +26,9 @@ export function BatchToastContent({
   return (
     <div className="space-y-1">
       <div className="font-medium">
-        {done}：成功 {result.succeeded} / {result.total}
+        {result.action === "delete_zero"
+          ? `已删除 ${result.succeeded} 个，跳过 ${result.skipped ?? 0} 个`
+          : `${done}：成功 ${result.succeeded} / ${result.total}`}
         {result.failed > 0 && `，失败 ${result.failed}`}
       </div>
       {failures.length > 0 && (
@@ -37,7 +39,7 @@ export function BatchToastContent({
               {batchRowReason(result.action, row)}
             </li>
           ))}
-          {failures.length > 5 && <li>另有 {failures.length - 5} 条失败</li>}
+          {failures.length > 5 && <li>另有 {failures.length - 5} 条{result.action === "delete_zero" ? "未删除" : "失败"}</li>}
         </ul>
       )}
     </div>
