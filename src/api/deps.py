@@ -8,6 +8,7 @@ request 可用）。
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -150,6 +151,8 @@ class Services:
     model_list_account_versions: dict[str, tuple] = field(default_factory=dict)
     # 绑定 Key 的按账号目录缓存；策略过滤在每次响应现算，不混入渠道共享目录。
     credential_model_cache: dict[str, tuple[float, dict[str, Any]]] = field(default_factory=dict)
+    # Miora 冷目录并行拉取；此信号量跨所有列表、预检及后台刷新请求共享。
+    miora_catalog_slots: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(8))
     # 完整账号目录只供管理台展示，不能交给执行器；与可用目录共用版本与 LRU。
     credential_model_display_cache: dict[str, dict[str, Any]] = field(default_factory=dict)
     # 仅内部保存凭证指纹；登录轮转后目录缓存立即失效，不记录或回显该值。

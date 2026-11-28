@@ -45,6 +45,7 @@ from fastapi.responses import JSONResponse
 from ..benchmarks import BenchmarkTable
 from ..compat.openai.errors import error_payload
 from ..db.crypto import CredentialDecryptError
+from ..engine.executor import NoHealthyCredential
 from ..engine.reasoning import parse_effort_map
 from ..error_text import error_text
 from ..model_alias import parse_model_aliases
@@ -72,6 +73,8 @@ logger = logging.getLogger(__name__)
 # 时间戳记「上次尝试」（含失败）：失败也进 TTL，否则一次抖动之后每次请求
 # 都会重试，zen 探活的十几秒会叠加成一串慢请求。
 MODEL_LIST_TTL_SECONDS = 300
+# 目录是普通 JSON，尚未提交响应头，不能靠推理 SSE 心跳保护。
+HTTP_MODEL_CATALOG_TIMEOUT_SECONDS = 35.0
 
 # 连续失败退避上限：失败的重试间隔按 2^(连续失败次数-1) × TTL 拉长，到此封顶
 # （2h）。上游被长期封禁（如 zen 免费层按出口 IP 拦截）时，每 5 分钟重探一遍
@@ -709,6 +712,19 @@ async def list_models(services: Services,
     return _build_response(services, connected, "", benchmarks)
 
 
+@contextlib.asynccontextmanager
+async def _http_catalog_deadline():
+    timeout = asyncio.timeout(HTTP_MODEL_CATALOG_TIMEOUT_SECONDS)
+    try:
+        async with timeout:
+            yield
+    except TimeoutError as error:
+        if not timeout.expired():
+            raise
+        # 不把超时伪装成空目录/不存在，也不借用其他账号的模型权限。
+        raise NoHealthyCredential("model catalog timed out", retry_after=5) from error
+
+
 def create_router(services: Services) -> APIRouter:
     router = APIRouter()
 
@@ -717,10 +733,11 @@ def create_router(services: Services) -> APIRouter:
     @router.get("/v1/models")
     async def list_v1_models(request: Request,
                              principal: ApiKeyPrincipal = Depends(api_key_user_anthropic)):
-        return await serve_models(services, principal.allowed_models, request,
-                                  user_allowed_models=principal.user_allowed_models,
-                                  credential_ids=principal.credential_ids,
-                                  provider_binding=principal.provider_binding)
+        async with _http_catalog_deadline():
+            return await serve_models(services, principal.allowed_models, request,
+                                      user_allowed_models=principal.user_allowed_models,
+                                      credential_ids=principal.credential_ids,
+                                      provider_binding=principal.provider_binding)
 
     @router.get("/v1/models/{model_id:path}")
     async def get_v1_model(model_id: str, request: Request,
@@ -734,10 +751,11 @@ def create_router(services: Services) -> APIRouter:
         找不到（或不在该 Key 的白名单内）一律 404 + OpenAI 错误形状：白名单外
         的模型不能靠单查探测出「池子里有它」。
         """
-        item = await serve_model(services, model_id, principal.allowed_models, request,
-                                 user_allowed_models=principal.user_allowed_models,
-                                 credential_ids=principal.credential_ids,
-                                 provider_binding=principal.provider_binding)
+        async with _http_catalog_deadline():
+            item = await serve_model(services, model_id, principal.allowed_models, request,
+                                     user_allowed_models=principal.user_allowed_models,
+                                     credential_ids=principal.credential_ids,
+                                     provider_binding=principal.provider_binding)
         if item is None:
             return JSONResponse(
                 status_code=404,

@@ -264,6 +264,71 @@ async def test_fail_closed_and_cancel(acp, api, monkeypatch, failure):
         assert any(method == "session/cancel" for method, _ in acp.calls)
 
 
+@pytest.mark.parametrize("scenario", ["success", "blocked_again", "emitted", "project_change"])
+async def test_native_tool_retry_isolated_and_never_returns_cloud_tool(acp, api, monkeypatch,
+                                                                  scenario):
+    requests, transport = api
+    credential = MioraCredential("long", uid="account")
+    entered = []
+    safety_checks = []
+
+    def current(original, _reader):
+        if scenario == "project_change" and len(entered) == 1:
+            return MioraCredential("long", uid="account", project_id="changed")
+        return original
+
+    async def frames(self, method, params):
+        entered.append(params["prompt"][0]["text"])
+        if len(entered) == 1 or scenario == "blocked_again":
+            if scenario == "emitted":
+                yield update("agent_thought_chunk", "progress")
+            yield update("tool_call")
+        else:
+            yield update("agent_message_chunk",
+                         '{"content":null,"tool_calls":[{"name":"read_fixture","arguments":{}}]}')
+            yield {"result": {"stopReason": "end_turn"}}
+
+    monkeypatch.setattr(acp, "rpc_frames", frames)
+    monkeypatch.setattr(mod, "current_credential", current)
+    payload = {"messages": [], "tool_choice": "required", "tools": [
+        {"type": "function", "function": {"name": "read_fixture"}},
+    ]}
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = MioraClient(short_client=http, stream_client=http)
+        if scenario == "success":
+            client.before_inference = lambda: safety_checks.append(True)
+        seen = []
+
+        async def consume():
+            async for event in client.stream_chat(credential, payload, "hy4flash-free"):
+                seen.append(event)
+
+        if scenario == "success":
+            await consume()
+            assert seen[0].tool_calls[0]["function"]["name"] == "read_fixture"
+            assert seen[-1].finish_reason == "tool_calls"
+        elif scenario == "project_change":
+            with pytest.raises(InvalidModelName, match="project changed"):
+                await consume()
+        else:
+            with pytest.raises(mod.MioraCloudToolBlocked) as blocked:
+                await consume()
+            assert "instead of returning a client tool call" in blocked.value.summary
+            assert [event.kind for event in seen] == (
+                [EventKind.REASONING] if scenario == "emitted" else [])
+        expected_turns = 2 if scenario in ("success", "blocked_again") else 1
+        assert len(entered) == expected_turns
+        assert safety_checks == ([True, True] if scenario == "success" else [])
+        session_count = sum(r.url.path.endswith("/cloud-agent/sessions") for r in requests)
+        assert session_count == 1 + expected_turns
+        assert sum(method == "session/cancel" for method, _ in acp.calls) == (
+            2 if scenario == "blocked_again" else 1)
+        if expected_turns == 2:
+            assert "Gateway reminder" not in entered[0] and "Gateway reminder" in entered[1]
+        assert not client._account(credential).lock.locked()
+        await client.aclose()
+
+
 async def test_generator_close_cancels_upstream(acp, api):
     _, transport = api
     async with httpx.AsyncClient(transport=transport) as http:

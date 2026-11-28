@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 import pytest
@@ -178,3 +179,44 @@ def test_deleted_account_removes_hot_catalog_and_orphaned_fingerprint(miora_app)
     assert set(client.portal.call(account_model_tables, services, (first, second))) == {second}
     assert set(services.credential_model_cache) == {second}
     assert set(services.credential_model_versions) == {second}
+
+
+
+def test_parallel_miora_catalog_is_bounded_and_skips_stalled_account(miora_app, monkeypatch):
+    app, client, network = miora_app
+    services = app.state.services
+    ids = add_accounts(services, 3)
+    first_pair = asyncio.Event()
+    stall = asyncio.Event()
+    active = peak = 0
+    attempted = []
+    released = []
+
+    async def catalog(credential):
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        attempted.append(credential.uid)
+        if active == 2:
+            first_pair.set()
+        try:
+            await first_pair.wait()
+            if credential.uid == "account-0":
+                await stall.wait()
+            return [Model(id=credential.uid)]
+        finally:
+            active -= 1
+            released.append(credential.uid)
+
+    network.fetch_models = catalog
+    # Use two slots so the third account must wait, but can finish while the first stalls.
+    services.miora_catalog_slots = asyncio.Semaphore(2)
+    monkeypatch.setattr("src.api.account_models.MIORA_ACCOUNT_CATALOG_SECONDS", 0.15)
+    tables = client.portal.call(account_model_tables, services, tuple(ids))
+    assert tables == {ids[0]: {}, ids[1]: {"account-1": Model(id="account-1")},
+                      ids[2]: {"account-2": Model(id="account-2")}}
+    assert attempted == ["account-0", "account-1", "account-2"]
+    assert released == ["account-1", "account-2", "account-0"]
+    assert active == 0 and peak == 2
+    assert client.portal.call(account_model_tables, services, tuple(ids)) == tables
+    assert len(attempted) == 3

@@ -346,3 +346,32 @@ def test_non_miora_bound_compat_request_keeps_account_catalog_scope(gateway, mon
     assert response.status_code == 400, response.text
     assert "reached selected non-Miora catalog" in response.text
     assert found == [((account,), "raccoon")]
+
+
+@pytest.mark.parametrize("path,method", [("/v1/models", "serve_models"),
+                                         ("/v1/models/glm-5.3", "serve_model")])
+def test_public_catalog_has_a_retryable_deadline(gateway, monkeypatch, path, method):
+    _, client, _, _, headers, _ = gateway
+    closed = []
+
+    async def slow(*_args, **_kwargs):
+        try:
+            await asyncio.sleep(10)
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr("src.api.models.HTTP_MODEL_CATALOG_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(f"src.api.models.{method}", slow)
+    response = client.get(path, headers=headers)
+    assert response.status_code == 503, response.text
+    assert response.headers["Retry-After"] == "5"
+    assert "model catalog timed out" in response.json()["error"]["message"]
+    assert closed == [True]
+
+
+async def test_catalog_deadline_does_not_misclassify_inner_timeout():
+    from src.api.models import _http_catalog_deadline
+
+    with pytest.raises(TimeoutError, match="inner timeout"):
+        async with _http_catalog_deadline():
+            raise TimeoutError("inner timeout")

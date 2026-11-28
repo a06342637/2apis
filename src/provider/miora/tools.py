@@ -145,9 +145,10 @@ def prepare_prompt(payload: dict) -> list[dict]:
         prompt += "Do not request any client function. Return an ordinary text answer.\n"
     elif definitions:
         prompt += (
-            "Never invoke native tools, even if a native tool has the same name as a client "
-            "function. To ask the caller to execute a client function, put the request in your "
-            "final answer as exactly one JSON object with no surrounding prose or markdown: "
+            "Local paths and shell commands always refer to the caller's machine, never to "
+            "your workspace. Never invoke native tools, even if a native tool has the same name "
+            "as a client function. Put any request for a caller function in your final answer as "
+            "exactly one JSON object with no surrounding prose or markdown: "
             '{"content": "answer text or null", "tool_calls": '
             '[{"name": "declared function", "arguments": {"parameter": "value"}}]}. '
             "Function arguments must be JSON objects conforming to their parameter schemas. "

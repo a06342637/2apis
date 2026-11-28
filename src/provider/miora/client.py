@@ -65,6 +65,12 @@ class MioraQueueTimeout(UpstreamProtocolViolation):
         return ErrKind.UPSTREAM_PROTOCOL
 
 
+class MioraCloudToolBlocked(UpstreamProtocolViolation):
+    """A native tool can never stand in for a caller-declared tool."""
+
+    summary = "Miora attempted a cloud tool instead of returning a client tool call"
+
+
 class MioraHTTPError(UpstreamHTTPError):
     classify_status = staticmethod(classify_status)
 
@@ -464,10 +470,33 @@ class MioraClient(LazyClients):
                 selected = account.selections.get(model)
                 if selected is None:
                     raise InvalidModelName("Miora 模型目录已更新，不再提供指定模型")
-                async with aclosing(self._stream_session(
-                        current, account, payload, prompt, selected)) as stream:
-                    async for event in stream:
-                        yield event
+                emitted = False
+                try:
+                    async with aclosing(self._stream_session(
+                            current, account, payload, prompt, selected)) as stream:
+                        async for event in stream:
+                            emitted = True
+                            yield event
+                except MioraCloudToolBlocked:
+                    if emitted or not payload.get("tools"):
+                        raise
+                    # 云端回合已取消。仅在尚未发出事件时，用全新会话重试一次；
+                    # 不复用被拒绝的工具状态，也不拼接两次回复。
+                    current = current_credential(credential, self.reload_credential)
+                    if current.project_id != credential.project_id:
+                        raise InvalidModelName("Miora project changed before tool retry") from None
+                    if self.before_inference is not None:
+                        self.before_inference()
+                    retry_prompt = [{**prompt[0], "text": prompt[0]["text"] + (
+                        "\nGateway reminder: local paths and commands refer only to the caller's "
+                        "machine. Do not inspect or act on them in your own workspace. If an "
+                        "allowed caller function is needed, write the JSON request as your final "
+                        "text instead of invoking any native tool. Respect the stated tool_choice."
+                    )}]
+                    async with aclosing(self._stream_session(
+                            current, account, payload, retry_prompt, selected)) as stream:
+                        async for event in stream:
+                            yield event
 
     async def _stream_session(self, credential: MioraCredential, account: _Account,
                               payload: dict, prompt: list[dict],
@@ -505,7 +534,7 @@ class MioraClient(LazyClients):
                                 and params.get("sessionId") not in (None, session)):
                             continue
                         if cloud_tool_requested(frame):
-                            raise UpstreamProtocolViolation(
+                            raise MioraCloudToolBlocked(
                                 "Miora 尝试执行云端内置工具；该通路仅允许客户端工具桥接")
                         for event in parse_update(frame):
                             if tools and event.kind == EventKind.CONTENT:
