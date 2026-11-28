@@ -761,6 +761,49 @@ describe("PlaygroundPage（会话鉴权，无需 API Key）", () => {
     return JSON.parse((chat!.init as RequestInit).body as string) as Record<string, unknown>;
   }
 
+  it("小浣熊筛选显示共享 DeepSeek，选择后按小浣熊路由", async () => {
+    const rawId = "sn-deepseek-v4-1-flash-1017";
+    const id = "deepseek-v4.1-flash";
+    const calls = spyChat({
+      object: "list",
+      data: [
+        ...MODELS.data,
+        { id, name: "DeepSeek V4.1 Flash", providers: ["raccoon", "trae"],
+          by_provider: { raccoon: { raw_id: rawId }, trae: { raw_id: id } } },
+        { id: "raccoon-only", providers: ["raccoon"] },
+      ],
+    });
+    renderPage(<PlaygroundPage />, { username: "root", is_admin: true });
+    await waitForModelLoaded();
+
+    const shared = screen.getByTestId(`model-option-${id}`);
+    await userEvent.click(shared);
+    expect(screen.getByTestId("provider-pin-auto")).toHaveAttribute("aria-pressed", "true");
+    const list = screen.getByRole("listbox");
+    list.scrollTop = 200;
+    await userEvent.click(screen.getByTestId("model-filter-raccoon"));
+    expect(list.scrollTop).toBe(0);
+    expect(screen.getByTestId("provider-pin-auto")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("model-section-auto")).toHaveTextContent("小浣熊可用（多渠道）");
+    expect(screen.getByTestId("model-section-raccoon")).toHaveTextContent("仅 小浣熊");
+    expect(screen.queryByTestId("model-option-glm-5.2")).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByTestId("model-search"), rawId);
+    expect(screen.getAllByRole("option")).toEqual([shared]);
+    expect(within(shared).getByTestId("channel-pill-raccoon")).toHaveAttribute("title", rawId);
+    await userEvent.click(shared);
+    expect(shared).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("provider-pin-raccoon")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("model-current-pinned")).toHaveTextContent("小浣熊");
+
+    await userEvent.click(screen.getByTestId("stream-toggle"));
+    await fillPromptAndSend("hi");
+    expect(chatBody(calls).model).toBe(`${id}@raccoon`);
+
+    await userEvent.click(screen.getByTestId("provider-pin-auto"));
+    expect(screen.getByTestId("provider-pin-auto")).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("高级参数留空时请求体不含这三个键（交给渠道默认）", async () => {
     const calls = spyChat(MODELS);
     renderPage(<PlaygroundPage />, { username: "root", is_admin: true });

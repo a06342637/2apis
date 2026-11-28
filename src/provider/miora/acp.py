@@ -205,50 +205,53 @@ class AcpConnection:
         result: dict | None = None
         end_params: dict | None = None
         post_eof = False
+        deadline = asyncio.get_running_loop().time() + self.timeout
         try:
-            async with asyncio.timeout(self.timeout):
-                while True:
+            while True:
+                # 调用方可能在另一 task 拉取下一帧，timeout 不能跨生成器 yield。
+                async with asyncio.timeout_at(deadline):
                     frame = await self._queue.get()
-                    if isinstance(frame, Exception):
-                        raise frame
-                    if isinstance(frame, _PromptPostEOF):
-                        if frame.request_id == request_id:
-                            post_eof = True
-                    else:
-                        if "method" in frame and "id" in frame:
+                if isinstance(frame, Exception):
+                    raise frame
+                if isinstance(frame, _PromptPostEOF):
+                    if frame.request_id == request_id:
+                        post_eof = True
+                else:
+                    if "method" in frame and "id" in frame:
+                        async with asyncio.timeout_at(deadline):
                             await self._reject_request(frame)
-                            continue
-                        if frame.get("id") == request_id:
-                            result = frame
-                            if method != "session/prompt" or "error" in frame:
-                                yield frame
-                                return
-                        else:
-                            if frame.get("method") == "session/endTurn":
-                                candidate = frame.get("params")
-                                if (isinstance(candidate, dict)
-                                        and candidate.get("sessionId") == params.get("sessionId")):
-                                    end_params = candidate
-                                    reason = candidate.get("stopReason")
-                                    if reason is not None and reason not in (
-                                        "end_turn", "stop", "max_tokens", "length"
-                                    ):
-                                        # GET 明确宣告失败时立即结束；不能等待或借用
-                                        # POST 的成功 result 将本轮部分回答收成成功。
-                                        raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
+                        continue
+                    if frame.get("id") == request_id:
+                        result = frame
+                        if method != "session/prompt" or "error" in frame:
                             yield frame
-                    # GET endTurn 是内容已全部送达的栅栏；POST result 先到也不丢尾帧。
-                    if result is not None and end_params is not None:
-                        yield result
-                        return
-                    if (post_eof and end_params is not None and self._queue.empty()):
-                        # 与网页客户端相同：POST 断尾可由完整、成功的 GET endTurn 收尾。
-                        # 先消费已有队列，确保不吞掉已抵达的 RPC error。
-                        if end_params.get("stopReason") != "end_turn":
-                            raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
-                        yield {"jsonrpc": "2.0", "id": request_id,
-                               "result": {"stopReason": "end_turn"}}
-                        return
+                            return
+                    else:
+                        if frame.get("method") == "session/endTurn":
+                            candidate = frame.get("params")
+                            if (isinstance(candidate, dict)
+                                    and candidate.get("sessionId") == params.get("sessionId")):
+                                end_params = candidate
+                                reason = candidate.get("stopReason")
+                                if reason is not None and reason not in (
+                                    "end_turn", "stop", "max_tokens", "length"
+                                ):
+                                    # GET 明确宣告失败时立即结束；不能等待或借用
+                                    # POST 的成功 result 将本轮部分回答收成成功。
+                                    raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
+                        yield frame
+                # GET endTurn 是内容已全部送达的栅栏；POST result 先到也不丢尾帧。
+                if result is not None and end_params is not None:
+                    yield result
+                    return
+                if (post_eof and end_params is not None and self._queue.empty()):
+                    # 与网页客户端相同：POST 断尾可由完整、成功的 GET endTurn 收尾。
+                    # 先消费已有队列，确保不吞掉已抵达的 RPC error。
+                    if end_params.get("stopReason") != "end_turn":
+                        raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
+                    yield {"jsonrpc": "2.0", "id": request_id,
+                           "result": {"stopReason": "end_turn"}}
+                    return
         except TimeoutError as error:
             raise UpstreamProtocolViolation("Miora ACP 请求超时") from error
         finally:

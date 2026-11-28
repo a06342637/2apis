@@ -12,7 +12,7 @@ import type { BatchImportEntry, Provider } from "../api/types";
  *    头，HttpOnly cookie 也能拿到，这是浏览器里唯一零安装的取凭据方式。
  *
  * 渠道识别只认**无歧义特征**：`wps_sid` → 灵犀、`xhx_token` 或
- * `iss=xiaohuanxiong` → 小浣熊、`authToken` / `iss=https://miora.design` → Miora、
+ * `iss=xiaohuanxiong.com/iam` → 小浣熊、`authToken` / `iss=https://miora.design` → Miora、
  * `accessToken`/`refreshToken` → TRAE、
  * AK/SK → CodeArts、`model_app_key` → OfficeAce。CodeBuddy / Qoder 的
  * `token` / `access_token` 长得一样，故意不猜，沿用下拉选中的渠道——猜错
@@ -69,7 +69,7 @@ function jwtClaims(token: string): Record<string, unknown> | null {
 function providerFromToken(token: string): Provider | null {
   const claims = jwtClaims(token.trim());
   const issuer = claims?.iss;
-  if (typeof issuer === "string" && issuer.toLowerCase().includes("xiaohuanxiong")) {
+  if (typeof issuer === "string" && /^(?:https:\/\/)?xiaohuanxiong\.com\/iam\/?$/i.test(issuer)) {
     return "raccoon";
   }
   if (issuer === "https://miora.design") return "miora";
@@ -104,7 +104,27 @@ function providerFromObject(value: Record<string, unknown>): Provider | null {
   if (typeof provider === "string" && IMPORT_PROVIDERS.includes(provider as Provider)) {
     return provider as Provider;
   }
+  // 参考账号文件用 access_token；其他别名按后端取 token 的顺序判断。
+  const raccoonToken = [value.access_token, value.token, value.jwt, value.xhx_token]
+    .find((candidate) => typeof candidate === "string" && candidate.trim().length > 0);
+  if (typeof raccoonToken === "string" && providerFromToken(raccoonToken) === "raccoon") {
+    return "raccoon";
+  }
   return null;
+}
+
+function raccoonImportNickname(account: Record<string, unknown>): string | undefined {
+  for (const value of [account.nickname, account.name]) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** 只展开 accounts.json 的封套，不动凭证对象本身的 accounts 元数据。 */
+function accountsFromEnvelope(value: unknown): unknown[] | null {
+  if (typeof value !== "object" || value === null || !("accounts" in value)
+      || Object.keys(value).length !== 1) return null;
+  return Array.isArray(value.accounts) ? value.accounts : null;
 }
 
 /** 只认 cURL 的目标主机，不能被其他站点头或请求体里的链接误导。 */
@@ -251,7 +271,7 @@ export function parseCredentialInput(
     return wrapRaw(detected ?? fallback, { cookie, token }, detected !== null);
   }
 
-  // JSON：单个对象继续；数组提示走批量导入
+  // JSON：单个对象继续；账号文件和数组提示走批量导入
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     let parsed: unknown;
     try {
@@ -262,7 +282,7 @@ export function parseCredentialInput(
         error: "凭证必须是合法 JSON（也可粘贴整段 Cookie 或 Copy as cURL）",
       };
     }
-    if (Array.isArray(parsed)) {
+    if (Array.isArray(parsed) || accountsFromEnvelope(parsed)) {
       return {
         ok: false,
         error: "检测到多条凭证：请用凭证页右上角的「批量导入」",
@@ -295,11 +315,14 @@ export function parseCredentialInput(
       };
     }
     const detected = detect ? providerFromObject(object) : null;
+    const provider = detected ?? fallback;
+    const nickname = provider === "raccoon" ? raccoonImportNickname(object) : undefined;
     return {
       ok: true,
-      provider: detected ?? fallback,
+      provider,
       credential: object,
       detected,
+      ...(nickname ? { nickname } : {}),
     };
   }
 
@@ -468,10 +491,12 @@ export function parseBatchCredentialInput(
       }
       credential = parsed.credential;
     }
+    const nickname = provider === "raccoon" ? raccoonImportNickname(item)
+      : typeof item.nickname === "string"
+        ? (provider === "miora" ? item.nickname.trim() : item.nickname) : "";
     result.entries.push({
       provider, credential,
-      nickname: email || (typeof item.nickname === "string"
-        ? (provider === "miora" ? item.nickname.trim() : item.nickname) : ""),
+      nickname: email || nickname || "",
       tags: Array.isArray(item.tags) ? item.tags.map(String) : [],
     });
   };
@@ -561,12 +586,13 @@ export function parseBatchCredentialInput(
         reject(recordLine, "JSON 解析失败", emailSource + source);
         continue;
       }
-      if (Array.isArray(parsed)) {
-        if (email && parsed.length !== 1) {
+      const items = Array.isArray(parsed) ? parsed : accountsFromEnvelope(parsed);
+      if (items) {
+        if (email && items.length !== 1) {
           reject(recordLine, "一个邮箱只能对应一条凭证，请为数组各条设置 nickname",
             emailSource + source);
         } else {
-          parsed.forEach((raw, index) => accept(raw, recordLine + index, email,
+          items.forEach((raw, index) => accept(raw, recordLine + index, email,
             emailSource + JSON.stringify([raw])));
         }
       } else accept(parsed, recordLine, email, emailSource + source);

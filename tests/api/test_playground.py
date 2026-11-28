@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.auth.session import create_session_token
 from src.config import Settings
 from src.main import build_app
+from src.provider.base import Model
 from tests.helpers.constants import SECRET
 from tests.helpers.events import GOOD_EVENTS
 
@@ -14,12 +16,15 @@ from tests.helpers.events import GOOD_EVENTS
 class _PlaygroundProvider:
     id = "trae"
 
-    def __init__(self, script=None) -> None:
+    def __init__(self, script=None, *, models=None) -> None:
         # script 是「按尝试次数」分组的段：每段是一批 Event（或一个异常）
         self.script = script or []
         self.calls = 0
+        self.requested_models: list[str] = []
+        self.models = models if models is not None else [Model(id="glm-5.3"), Model(id="trae-only")]
 
-    async def stream_chat(self, _data, _payload, _model):
+    async def stream_chat(self, _data, _payload, model):
+        self.requested_models.append(model)
         index = min(self.calls, len(self.script) - 1)
         self.calls += 1
         segment = self.script[index]
@@ -31,9 +36,7 @@ class _PlaygroundProvider:
             yield item
 
     async def list_models(self, _data):
-        from src.provider.base import Model
-
-        return [Model(id="glm-5.3"), Model(id="trae-only")]
+        return self.models
 
     def import_credential(self, raw):  # pragma: no cover - 非本测试路径
         return raw
@@ -104,6 +107,46 @@ def test_v1_models_and_playground_models_are_consistent(tmp_path):
         client.cookies.set("coding2api_session", create_session_token("root", SECRET))
         playground = client.get("/api/playground/models").json()
     assert v1 == playground
+
+
+@pytest.mark.parametrize("raw_id", ["sn-deepseek-v4-1-flash-1017", "sn-deepseek-v4-1-flash", None])
+def test_playground_shared_deepseek_uses_only_raccoon_catalog_raw_id(tmp_path, raw_id):
+    settings = Settings(_env_file=None, APP_SECRET=SECRET, DATA_DIR=str(tmp_path),
+                        ADMIN_USERNAMES="root")
+    canonical_id = "deepseek-v4.1-flash"
+
+    class Raccoon(_PlaygroundProvider):
+        id = "raccoon"
+
+    trae = _PlaygroundProvider([GOOD_EVENTS], models=[Model(id=canonical_id)])
+    catalog_id = raw_id or "sn-raccoon-only"
+    raccoon = Raccoon([GOOD_EVENTS], models=[Model(id=catalog_id, name=catalog_id)])
+    app = build_app(settings, providers={"trae": trae, "raccoon": raccoon})
+    for provider in (trae, raccoon):
+        app.state.credentials.add(provider=provider.id, credential_data={"token": "stub"})
+
+    with TestClient(app) as client:
+        client.cookies.set("coding2api_session", create_session_token("root", SECRET))
+        response = client.get("/api/playground/models")
+        assert response.status_code == 200
+        entries = response.json()["data"]
+        if raw_id is None:
+            assert {entry["id"]: entry["providers"] for entry in entries} == {
+                canonical_id: ["trae"], "raccoon-only": ["raccoon"],
+            }
+            assert canonical_id not in app.state.services.model_aliases["raccoon"]
+        else:
+            assert [entry["id"] for entry in entries] == [canonical_id]
+            entry = entries[0]
+            assert entry["name"] == "DeepSeek V4.1 Flash"
+            assert set(entry["providers"]) == {"raccoon", "trae"}
+            assert entry["by_provider"]["raccoon"]["raw_id"] == raw_id
+
+            chat = _post_chat(client, f"{canonical_id}@raccoon")
+            assert chat.status_code == 200
+            assert chat.json()["choices"][0]["message"]["content"] == "hi"
+            assert raccoon.requested_models == [raw_id]
+            assert trae.requested_models == []
 
 
 def test_playground_models_filters_by_user_allowlist(tmp_path):

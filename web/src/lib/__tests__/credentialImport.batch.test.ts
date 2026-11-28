@@ -217,3 +217,44 @@ describe("批量凭证边界和邮箱昵称", () => {
     expect(parsed.entries.map((entry) => entry.nickname)).toEqual(["", "my account"]);
   });
 });
+
+describe("xiaohuanxiong2api 账号批量导入", () => {
+  function account(id: string, name: string) {
+    const payload = btoa(JSON.stringify({ iss: "xiaohuanxiong.com/iam", sub: id })).replace(/=+$/, "");
+    return {
+      id: `user-${id}`, name, user_id: id, access_token: `eyJhbGciOiJub25lIn0.${payload}.sig`,
+      refresh_token: `refresh-${id}`, expires_at: 1791529021000,
+      enabled: false, priority: 100, custom_metadata: { keep: true },
+    };
+  }
+
+  it.each(["账号文件", "裸数组"])("%s 展开成独立行，原样保留各自凭证", (format) => {
+    const first = account("41", "  账号一  ");
+    const second = { ...account("42", "账号二"), nickname: "  备用账号  ", tags: ["测试"] };
+    const accounts = [first, second];
+    const text = JSON.stringify(format === "账号文件" ? { accounts } : accounts, null, 2);
+    expect(parseBatchCredentialInput(text)).toEqual({
+      entries: [
+        { provider: "raccoon", credential: first, nickname: "账号一", tags: [] },
+        { provider: "raccoon", credential: second, nickname: "备用账号", tags: ["测试"] },
+      ],
+      errors: [], unparsed: [],
+    });
+  });
+
+  it("按每行识别渠道，不把其它渠道归入小浣熊；错误行保留供重试", () => {
+    const first = account("41", "账号一");
+    const other = { access_token: "opaque", name: "非小浣熊" };
+    const wrapped = { provider: "qoder", credential: first };
+    const last = account("44", "账号四");
+    const parsed = parseBatchCredentialInput(JSON.stringify({ accounts: [first, null, other, wrapped, last] }), "qoder");
+    expect(parsed.entries).toEqual([
+      { provider: "raccoon", credential: first, nickname: "账号一", tags: [] },
+      { provider: "qoder", credential: other, nickname: "", tags: [] },
+      { provider: "qoder", credential: first, nickname: "", tags: [] },
+      { provider: "raccoon", credential: last, nickname: "账号四", tags: [] },
+    ]);
+    expect(parsed.errors).toEqual([{ line: 2, message: "必须是对象" }]);
+    expect(parseBatchCredentialInput(parsed.unparsed.join("\n"), "qoder").entries).toEqual([]);
+  });
+});

@@ -37,6 +37,7 @@ EP_BILLS = "/api/web/points/v2/bills"
 #: 流水过滤口径：`all` 混消费；`income` 只留发放（签到/到期阶梯用后者）
 BILL_TYPE_ALL = "all"
 BILL_TYPE_INCOME = "income"
+EP_REFRESH = "/api/web/auth/v1/refresh"
 EP_HEARTBEAT = "/api/web/auth/v1/devices_current_heartbeat"
 #: 网页会话级「页面访问」：每日积分延期/账单物化的触发点（心跳不算）
 EP_USER_INFO = "/api/web/auth/v1/user_info"
@@ -295,8 +296,23 @@ class RaccoonClient(LazyClients):
             response, UpstreamHTTPError, "heartbeat",
             message="non-JSON heartbeat response",
             violation_cls=UpstreamProtocolViolation)
+        if isinstance(data, dict) and data.get("code", 0) != 0:
+            raise UpstreamProtocolViolation("heartbeat returned a business error")
         payload = data.get("data") if isinstance(data, dict) else None
         return payload if isinstance(payload, dict) else {}
+
+    async def refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        """仅提交刷新票据；不把访问令牌当成刷新失败时的隐式替代。"""
+        response = await self._short.post(
+            f"{self.host}{EP_REFRESH}", json={"refresh_token": refresh_token})
+        data = await json_or_raise(response, UpstreamHTTPError, "refresh",
+                                   violation_cls=UpstreamProtocolViolation)
+        if not isinstance(data, dict) or data.get("code", 0) != 0:
+            raise UpstreamProtocolViolation("raccoon refresh returned a business error")
+        payload = data.get("data")
+        if not isinstance(payload, dict) or not RaccoonCredential.from_dict(payload).access_token:
+            raise UpstreamProtocolViolation("raccoon refresh response missing access_token")
+        return payload
 
     async def bind_device(self, token: str, device_id: str) -> dict[str, Any] | None:
         """把当前会话绑定到一台设备（浏览器登录后立刻做的动作，幂等）。
@@ -336,6 +352,8 @@ class RaccoonClient(LazyClients):
         try:
             data = response.json()
         except ValueError:
+            return None
+        if isinstance(data, dict) and data.get("code", 0) != 0:
             return None
         body = data.get("data") if isinstance(data, dict) else None
         return body if isinstance(body, dict) else {}
@@ -403,7 +421,8 @@ class RaccoonClient(LazyClients):
         await self.confirm_iam(token)
         return payload
 
-    async def page_boot(self, token: str, device_id: str) -> dict[str, Any] | None:
+    async def page_boot(self, token: str, device_id: str, *,
+                        bind: bool = True) -> dict[str, Any] | None:
         """模拟浏览器打开 `/work/home` 的启动序列 —— 每日积分的**实际入账点**。
 
         为什么登录之外还要这一步（2026-11-19 实测，勿删）：拿 IAM 登录得到的新
@@ -434,7 +453,7 @@ class RaccoonClient(LazyClients):
             with contextlib.suppress(httpx.HTTPError):
                 await self._short.get(f"{self.host}{path}", headers=headers)
         # ③ 绑定 + 心跳：把新会话变成 trusted，同日才认「登录过」
-        bound = await self.bind_device(token, device_id)
+        bound = await self.bind_device(token, device_id) if bind else None
         if isinstance(bound, dict) and isinstance(bound.get("device_id"), str) \
                 and bound["device_id"]:
             device_id = bound["device_id"]
@@ -530,6 +549,21 @@ class RaccoonProvider:
                 "or {\"access_token\": \"...\"}")
         return credential.to_dict()
 
+    def credential_from(self, credential_data: dict) -> RaccoonCredential:
+        return RaccoonCredential.from_dict(credential_data)
+
+    async def refresh(self, credential_data: dict) -> dict:
+        """RefreshTask 持编辑锁调用，并在锁内保存上游轮转后的票据。"""
+        credential = self.credential_from(credential_data)
+        payload = await self.client.refresh_token(credential.refresh_token)
+        updated = RaccoonCredential.from_import(payload)
+        updated.uid = credential.uid or updated.uid
+        updated.nickname = credential.nickname
+        updated.phone = credential.phone
+        updated.password = credential.password
+        updated.refresh_token = updated.refresh_token or credential.refresh_token
+        return updated.to_dict()
+
     def credential_expires_at(self, credential_data: dict) -> int:
         """JWT `exp`：供管理台提示「30 天后要重新取」；0 = 未知。"""
         return RaccoonCredential.from_dict(credential_data).expires_at
@@ -557,6 +591,21 @@ class RaccoonProvider:
         return await self.client.fetch_quota(credential.access_token)
 
     # ---------------------------------------------------------- 签到 / 活跃
+
+    async def _bind_unbound_session(
+            self, credential: RaccoonCredential,
+            user_info: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not credential.uid or not raccoon_activity.session_can_bind(user_info):
+            return user_info
+        token = credential.access_token
+        bound = await self.client.bind_device(
+            token, raccoon_credential.derive_device_id(credential.uid))
+        if bound is not None:
+            # 绑定端点的 200 未必代表已信任；以重新读取的会话状态为准。
+            with contextlib.suppress(httpx.HTTPError, UpstreamHTTPError,
+                                     UpstreamProtocolViolation):
+                return await self.client.visit(token)
+        return user_info
 
     async def checkin(self, credential_data: dict) -> CheckinResult:
         """「签到」= 页面访问 + （未到账时）页面启动 + 核对流水。
@@ -592,6 +641,7 @@ class RaccoonProvider:
                 items, raccoon_activity.now_cst()) is not None:
             return raccoon_activity.checkin_result(
                 items, started, user_info=user_info)
+        user_info = await self._bind_unbound_session(credential, user_info)
         # ③ 还没到账 → 补一遍**页面启动**（每日积分的实际入账点，见
         #    `client.page_boot`）。这一步而不是「重新登录」才是当天已登录却没
         #    拿到积分时的正解：token 有效时新登录未必被上游当作「又一天登录」。
@@ -600,10 +650,12 @@ class RaccoonProvider:
             with contextlib.suppress(httpx.HTTPError):
                 await self.client.page_boot(
                     credential.access_token,
-                    raccoon_credential.derive_device_id(credential.uid))
+                    raccoon_activity.session_device_id(user_info)
+                    or raccoon_credential.derive_device_id(credential.uid), bind=False)
         # ④ 触达积分服务并重读流水核对（必须用 `income` 过滤——`all` 里消费
         #    流水占绝大多数，活跃账号的每日发放会被挤出条数窗口）。
-        await self.client.fetch_quota(credential.access_token)
+        with contextlib.suppress(httpx.HTTPError, UpstreamHTTPError, UpstreamProtocolViolation):
+            await self.client.fetch_quota(credential.access_token)
         try:
             items = await self.client.fetch_bills(credential.access_token,
                                                   bill_type=BILL_TYPE_INCOME)
@@ -667,6 +719,7 @@ class RaccoonProvider:
         payload = await self.client.login(credential.phone, credential.password)
         refreshed = RaccoonCredential.from_import({
             "access_token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token"),
             "phone": credential.phone,
             "password": credential.password,
             "nickname": credential.nickname,
@@ -702,6 +755,7 @@ class RaccoonProvider:
             visit_error = f"页面访问失败（HTTP {error.status}）"
         except UpstreamProtocolViolation:
             visit_error = "页面访问响应格式异常"
+        user_info = await self._bind_unbound_session(credential, user_info)
         relogin = raccoon_activity.session_needs_relogin(user_info)
         if relogin:
             # 心跳在这种会话下必然 400：不再白发一次，直接报可操作原因。
@@ -710,7 +764,8 @@ class RaccoonProvider:
             return ActivityResult(ok=False, user_id=credential.uid, message=relogin)
         try:
             payload = await self.client.heartbeat(
-                token, raccoon_credential.derive_device_id(credential.uid))
+                token, raccoon_activity.session_device_id(user_info)
+                or raccoon_credential.derive_device_id(credential.uid))
         except UpstreamHTTPError as error:
             message = f"心跳失败（HTTP {error.status}）"
             if raccoon_activity.heartbeat_needs_relogin(error.body):

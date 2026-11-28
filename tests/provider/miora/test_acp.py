@@ -6,6 +6,7 @@ import json
 import httpx
 import pytest
 
+from src.engine.executor import _TimedReader
 from src.provider.base import ErrKind, UpstreamProtocolViolation
 from src.provider.miora.acp import AcpConnection, AcpHTTPError, _PromptPostEOF, jsonrpc_frames
 
@@ -193,6 +194,28 @@ async def test_timeout():
                 AcpConnection(client, URL, "private", timeout=.01) as connection):
         with pytest.raises(UpstreamProtocolViolation, match="超时"):
             await connection.call("initialize", {})
+
+
+async def test_prompt_deadline_survives_timed_reader_task_switch():
+    incoming = QueueStream()
+    progress = {"jsonrpc": "2.0", "method": "session/update", "params": {}}
+    async def handle(request):
+        if request.method == "GET":
+            return httpx.Response(200, headers={"Acp-Connection-Id": "c"}, stream=incoming)
+        if request.method == "POST":
+            await incoming.queue.put(packet(progress))
+        return httpx.Response(202)
+
+    async with (httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client,
+                AcpConnection(client, URL, "private", timeout=.05) as connection):
+        reader = _TimedReader(connection.rpc_frames("session/prompt", {"sessionId": "s"}))
+        try:
+            assert await reader.next(.5) == progress
+            with pytest.raises(UpstreamProtocolViolation, match="请求超时"):
+                await reader.next(.5)
+        finally:
+            await reader.aclose()
+    assert incoming.closed
 
 
 async def test_json_result_and_rpc_error():

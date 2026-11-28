@@ -16,6 +16,7 @@ from typing import Any
 from ..base import ErrKind, Event, EventKind, UpstreamProtocolViolation
 
 _FENCED_JSON = re.compile(r"\A```(?:json)?\s*\n(.*)\n```\s*\Z", re.DOTALL)
+_STRUCTURED_REPLY = re.compile(r'\A(?:\{|```json\b)|"tool_calls"\s*:', re.IGNORECASE)
 _INSTRUCTION = (
     "You are serving a text-only coding API client. Answer the final user request using "
     "the supplied conversation history and application instructions. Do not execute any "
@@ -140,18 +141,22 @@ def prepare_prompt(payload: dict) -> list[dict]:
         if type(budget) is not int or budget <= 0:
             raise MioraToolRequestError("Miora 输出 token 预算必须是正整数")
         prompt += f"Keep the final output within {budget} tokens (best-effort output budget).\n"
-    if definitions:
+    if choice == "none":
+        prompt += "Do not request any client function. Return an ordinary text answer.\n"
+    elif definitions:
         prompt += (
-            "Use only the client function definitions below. Do not actually execute functions. "
-            "Return exactly one JSON object, with no prose or markdown outside it: "
+            "Never invoke native tools, even if a native tool has the same name as a client "
+            "function. To ask the caller to execute a client function, put the request in your "
+            "final answer as exactly one JSON object with no surrounding prose or markdown: "
             '{"content": "answer text or null", "tool_calls": '
             '[{"name": "declared function", "arguments": {"parameter": "value"}}]}. '
-            "Use an empty tool_calls list for an ordinary text answer. Function arguments "
-            "must be JSON objects conforming to their parameter schemas. "
+            "Function arguments must be JSON objects conforming to their parameter schemas. "
             f"tool_choice={choice}; forced_function={json.dumps(forced)}. "
-            "When choice is none, tool_calls must be empty. When required, request at least "
-            "one tool. When forced, request only the specified function. "
         )
+        if choice == "auto":
+            prompt += "If no function is needed, use ordinary text or an empty tool_calls list. "
+        else:
+            prompt += "Request a client function. If forced, use only the specified name. "
         if payload.get("parallel_tool_calls") is False:
             prompt += "Request at most one tool. "
         prompt += "\nClient functions: " + json.dumps(
@@ -278,6 +283,11 @@ def parse_response(text: str, payload: dict) -> list[Event]:
         response = json.loads(raw, parse_constant=_reject_json_constant,
                               parse_float=_finite_json_float)
     except ValueError as error:
+        # auto/none 不承诺调用工具；正常终态的普通文本可以直接返回。
+        # 疑似桥接信封（含截断、混有前后缀）不得降级成正文，更不能放行调用。
+        if (choice in ("auto", "none") and text.strip()
+                and not _STRUCTURED_REPLY.search(raw.lstrip())):
+            return [Event(kind=EventKind.CONTENT, content=text)]
         raise _response_error() from error
     if not isinstance(response, dict) or set(response) != {"content", "tool_calls"}:
         raise _response_error()

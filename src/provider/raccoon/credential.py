@@ -67,6 +67,7 @@ class RaccoonCredential:
     #: 只能走短信/扫码，故默认留空、不影响纯 token 凭证。
     phone: str = ""
     password: str = ""
+    refresh_token: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +77,7 @@ class RaccoonCredential:
             "expires_at": self.expires_at,
             "phone": self.phone,
             "password": self.password,
+            **({"refresh_token": self.refresh_token} if self.refresh_token else {}),
         }
 
     @classmethod
@@ -90,6 +92,7 @@ class RaccoonCredential:
                 expires, bool) else 0,
             phone=_text(raw.get("phone")),
             password=_text(raw.get("password")),
+            refresh_token=_text(raw.get("refresh_token")),
         )
 
     @classmethod
@@ -119,12 +122,21 @@ class RaccoonCredential:
         credential.uid = _text(raw.get("uid")) or _text(raw.get("user_id")) \
             or credential.uid
         credential.nickname = _text(raw.get("nickname")) or _text(
-            raw.get("user_name")) or credential.nickname
+            raw.get("user_name")) or _text(raw.get("name")) or credential.nickname
+        # JWT exp 始终优先；参考账号文件的 expires_at 是毫秒。
+        if credential.expires_at <= 0:
+            expires = raw.get("expires_at")
+            if type(expires) is int and expires > 0:
+                credential.expires_at = expires // 1000 if expires >= 10**12 else expires
+        credential.refresh_token = _text(raw.get("refresh_token"))
         # 登录凭据原样保留（不做手机号格式纠错：调用登录前统一归一）
         credential.phone = _text(raw.get("phone")) or _text(
             raw.get("phone_number"))
         credential.password = _text(raw.get("password"))
         return credential
+
+    def needs_refresh(self, skew_seconds: int, now: int) -> bool:
+        return bool(self.refresh_token and 0 < self.expires_at <= now + skew_seconds)
 
     @classmethod
     def _from_token(cls, token: str) -> RaccoonCredential:

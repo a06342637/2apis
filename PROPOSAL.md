@@ -122,7 +122,7 @@
 - 控制面 `/api/ai/workflow/create` → `/api/ai/cloud-agent/runtimes` → `/api/ai/cloud-agent/sessions`，推理通过上游签发的 CloudStudio ACP 链接。每账号复用专用项目、每请求新建独立会话；同账号整轮串行防止运行时 `tierKey` / `effort` 配置交叉覆盖，不同账号并行。ACP 先 GET 领取连接 ID，再 POST JSON-RPC；内容与控制结果可能分别在 GET / POST 流中，终态栅栏必须等两边完成。
 - 模型清单从 ACP `session/load` 动态读取，网页 `/api/ai/public/cloud-agent/tiers` 补充计费倍率及三档模式。2026-11-25 实测 32 个真实目录条目 + 3 个模式。真实 `session/set_model` 负责选模，未知 ID 明确拒绝，不回落自动模型。
 - token 预热分两层：模型目录启动/导入预热领取短运行时票，连接前重新获取短票；长登录票进入既有刷新窗口后由共享任务续期。仅尚未发推理的短票 401 可重建一次；流中断不自动重放已计费对话，并发送 `session/cancel`。
-- 当前 ACP 没有可验证的 OpenAI 函数注册入口，采用严格 JSON 工具模拟；函数白名单及常见参数 schema 校验后输出中立 `TOOL_CALLS`，客户端函数由客户端执行并回传结果。Film Studio 图片/视频工具由网关独立执行，返回真实资源链接，云端文件执行事件不能冒充客户端工具。工具响应需要缓冲校验，异常响应按协议违规处理。
+- 当前 ACP 没有可验证的 OpenAI 函数注册入口，采用严格 JSON 工具模拟；函数白名单及常见参数 schema 校验后输出中立 `TOOL_CALLS`，客户端函数由客户端执行并回传结果。Film Studio 图片/视频工具由网关独立执行，返回真实资源链接，云端文件执行事件不能冒充客户端工具。工具响应需要缓冲校验：`auto` / `none` 可返回正常完成的普通文本，但疑似畸形工具信封和无有效调用的 `required` / 指定工具响应仍按协议违规处理。ACP 如报告自动批准权限模式，推理前切回询问模式，并继续拒绝云端工具回调。ACP 请求截止时间跨拉帧 task 保持有效；兼容出口给 Miora 账号目录预检 35 秒总预算，超时报可重试的 503。
 - ACP `max_tokens` 仅提示预算，不是硬上限；不支持的采样/结构化输出参数返回 400，非文本输入/输出在联网前拒绝。每轮推理档位明确设置，省略时使用本服务默认 `medium`；同账号跨项目别名共享锁。工具定义的常见 schema 格式在请求阶段校验，坏定义不会先产生上游推理费用。额度查询使用 `POST /api/miora-billing/credit` 的 `totalAmount - usedAmount`，未知/失败不伪造零余额。
 - 本地抓包、真实会话票据和验证环境位于 `.local/`，该目录被 Git 忽略。公开代码与测试只使用合成凭证和注入网络边界。
 - 部署验证补强：控制面 JSON 逻辑 HTTP 状态保留缺失运行时的 404 创建路径；Hy4 Flash 标准/免费路由使用独立目录键，原始 ID 不被合并重写；手工导入与刷新持相同编辑锁，服务启动先刷新再探测额度。ACP 建链纳入超时，POST 无结果断流可在 GET 已明确报告成功终态后恢复，错误终态及 RPC 错误仍失败，不重放推理。工具 JSON 禁止非有限数值，枚举按 JSON 类型比较。
@@ -173,6 +173,8 @@
 | `lingxi` | WPS `wps_sid` cookie，一次对话三条请求 | 按 run 计费 → 缓存 1h；`usage.total_tokens` 是上下文大小需自算 |
 | `zen` / `kilo` | 标准 OpenAI，虚拟凭证 | zen 需门禁伪装（UA / session / tools），充值后可落 Console API Key 切付费档（单槽覆盖）；kilo 有 `isFree` 无需探活 |
 | `generic` | 标准 OpenAI，部署者自己的 key | 401/403 → `DEAD`（与 zen / kilo 相反） |
+
+小浣熊兼容 xiaohuanxiong2api 单账号 JSON 与账号文件批量导入；保留刷新票据，过期时间归一为秒，由标准刷新任务在凭证编辑锁内轮换。只对 `session_without_bound_device` 且上游明确允许首次绑定的会话补绑定；不重绑会话不匹配的设备，签到以当天发放流水确认为准。DeepSeek V4.1 Flash 的小浣熊目录异名合并到规范 ID，在 Playground 按渠道筛选选中后可锁定路由，转发仍使用真实目录的原始 ID。
 
 **跨渠道事实**：
 

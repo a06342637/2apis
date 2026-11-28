@@ -186,7 +186,11 @@ def test_calls_text_and_fenced_json():
 @pytest.mark.parametrize(
     "text",
     [
-        "bad secret output",
+        "",
+        "   ",
+        ' {"content":"truncated"',
+        'Here is the result: {"tool_calls": [',
+        '```json\n{"content":',
         "[]",
         "null",
         "{}",
@@ -208,6 +212,30 @@ def test_invalid_output(text):
     with pytest.raises(UpstreamProtocolViolation) as error:
         parse_response(text, payload())
     assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("choice", ["auto", "none"])
+@pytest.mark.parametrize("text", [
+    "普通回答", "[a link](https://example.test)", "```python\npass\n```",
+])
+def test_ordinary_reply_is_text_and_never_a_tool(choice, text):
+    events = parse_response(text, payload(tool_choice=choice))
+    assert [(e.kind, e.content) for e in events] == [(EventKind.CONTENT, text)]
+
+
+@pytest.mark.parametrize("choice", [
+    "required", {"type": "function", "function": {"name": "read_file"}},
+])
+def test_ordinary_reply_cannot_fulfill_required_or_forced_tool(choice):
+    with pytest.raises(UpstreamProtocolViolation, match="JSON 格式"):
+        parse_response("ordinary text", payload(tool_choice=choice))
+
+
+def test_none_prompt_does_not_offer_function_definitions():
+    text = prepare_prompt(payload(tool_choice="none"))[0]["text"]
+    assert "ordinary text answer" in text
+    assert "read_file" not in text
+    assert "Client functions" not in text
 
 
 def test_choices_and_parallel_limit():

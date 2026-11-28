@@ -123,6 +123,58 @@ describe("parseCredentialInput", () => {
     });
   });
 
+  it("单个 xiaohuanxiong2api 账号按 issuer 识别，凭证字段一个都不改", () => {
+    const credential = {
+      id: "user-42", name: "  小浣熊-1  ", user_id: "42",
+      access_token: jwt({ iss: "xiaohuanxiong.com/iam" }),
+      refresh_token: "synthetic-refresh", expires_at: 1791529021000,
+      enabled: false, priority: 100, accounts: ["custom metadata"],
+      metadata: { source: "sample" },
+    };
+    const text = JSON.stringify(credential);
+    expect(parseCredentialInput(text, "codebuddy")).toEqual({
+      ok: true, provider: "raccoon", detected: "raccoon", nickname: "小浣熊-1", credential,
+    });
+    expect(detectProvider(text)).toBe("raccoon");
+    expect(parseCredentialInput(text, "qoder", false)).toEqual({
+      ok: true, provider: "qoder", detected: null, credential,
+    });
+  });
+
+  it("明确指定的小浣熊渠道也用账号名，昵称优先于 name", () => {
+    const credential = { access_token: "opaque", name: "account", nickname: "  alias  " };
+    expect(parseCredentialInput(JSON.stringify(credential), "raccoon", false)).toEqual({
+      ok: true, provider: "raccoon", detected: null, nickname: "alias", credential,
+    });
+  });
+
+  it("不凭共享字段或含小浣熊名字的其它 issuer 选择小浣熊", () => {
+    for (const access_token of ["opaque", jwt({ iss: "https://other.example/iam" }),
+      jwt({ iss: "https://xiaohuanxiong.com.other.example/iam" }),
+      jwt({ iss: "https://other.example/xiaohuanxiong.com/iam" })]) {
+      const credential = { access_token, refresh_token: "synthetic-refresh", name: "account" };
+      expect(parseCredentialInput(JSON.stringify(credential), "qoder")).toEqual({
+        ok: true, provider: "qoder", detected: null, credential,
+      });
+    }
+  });
+
+  it("已有的明确渠道和包装声明优先，不被小浣熊 JWT 提示覆盖", () => {
+    const access_token = jwt({ iss: "https://xiaohuanxiong.com/iam" });
+    const credential = { access_token, name: "account" };
+    expect(detectProvider(JSON.stringify({ ...credential, provider: "qoder" }))).toBe("qoder");
+    expect(detectProvider(JSON.stringify({ ...credential, authToken: "miora" }))).toBe("miora");
+    expect(detectProvider(JSON.stringify({ ...credential, secret_access_key: "codearts" }))).toBe("codearts");
+    expect(detectProvider(JSON.stringify({ provider: "codebuddy", credential }))).toBe("codebuddy");
+  });
+
+  it("账号文件提示走批量导入，即使文件里只有一条记录", () => {
+    const accounts = [{ access_token: jwt({ iss: "xiaohuanxiong.com/iam" }) }];
+    expect(parseCredentialInput(JSON.stringify({ accounts }), "raccoon", false)).toEqual({
+      ok: false, error: expect.stringContaining("批量导入"),
+    });
+  });
+
   it("裸 token 无识别特征时落到选中渠道", () => {
     const parsed = parseCredentialInput("abcdefghijklmnopqrstuvwxyz", "qoder");
     expect(parsed).toEqual({

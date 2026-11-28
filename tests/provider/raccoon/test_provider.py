@@ -216,8 +216,9 @@ class CheckinFakeClient(FakeClient):
             raise self.error
         return self.heartbeat_payload
 
-    async def page_boot(self, token, device_id):
+    async def page_boot(self, token, device_id, *, bind=True):
         """页面启动序列（`checkin` 当天未到账时调用；本用例按需断言）。"""
+        assert bind is False
         self.calls.append(("page_boot", token, device_id))
         return {"device_id": device_id}
 
@@ -338,8 +339,9 @@ class BillsErrorClient(FakeClient):
         self.calls.append(("quota", token))
         return self.quota
 
-    async def page_boot(self, token, device_id):
+    async def page_boot(self, token, device_id, *, bind=True):
         """首读流水就失败 → 不会走到页面启动（本用例不调用）。"""
+        assert bind is False
         self.calls.append(("page_boot", token, device_id))
         return {}
 
@@ -526,7 +528,7 @@ class LoginFakeClient(CheckinFakeClient):
         self.binds.append((token, device_id))
         return {"device_id": device_id}
 
-    async def page_boot(self, token, device_id):
+    async def page_boot(self, token, device_id, *, bind=True):
         """按需登录后必须走的页面启动（绑设备 + 首页加载 + 活动上报）。"""
         self.binds.append((token, device_id))
         return {"device_id": device_id}
@@ -593,3 +595,86 @@ async def test_relogin_binds_device_after_login():
     bound_token, device_id = fake.binds[0]
     assert bound_token == token
     assert device_id.startswith("dev") and len(device_id) <= 64
+
+
+UNBOUND = {"trusted_device": {"device_bind_state": "unbound", "trusted": False,
+                             "reason": "session_without_bound_device", "needs_bind": True,
+                             "needs_relogin": False}}
+
+
+class BindableClient(CheckinFakeClient):
+    def __init__(self, *, binds=True, recheck_error=None, **kwargs):
+        super().__init__(user_info=UNBOUND, **kwargs)
+        self.binds = binds
+        self.recheck_error = recheck_error
+
+    async def bind_device(self, token, device_id):
+        self.calls.append(("bind", token, device_id))
+        if not self.binds:
+            return None
+        self.user_info = {"trusted_device": {"device_id": "upstream-device",
+                                             "trusted": True, "device_bind_state": "bound"}}
+        self.visit_error = self.recheck_error
+        return {}
+
+    async def page_boot(self, token, device_id, *, bind=True):
+        await super().page_boot(token, device_id, bind=bind)
+        self.bills = [_grant()]
+
+
+@pytest.mark.parametrize("error", [None, UpstreamHTTPError(503, b""),
+                                  UpstreamProtocolViolation("bad recheck")])
+async def test_activity_binds_only_first_session_then_uses_authoritative_device(error):
+    fake = BindableClient(recheck_error=error)
+    result = await RaccoonProvider(client=fake).activity(DATA)
+    assert result.ok is (error is None)
+    expected = ["visit", "bind", "visit"] + (["heartbeat"] if error is None else [])
+    assert [call[0] for call in fake.calls] == expected
+    if error is None:
+        assert fake.calls[-1] == ("heartbeat", TOKEN, "upstream-device")
+
+
+@pytest.mark.parametrize("uid", ["", "u"])
+async def test_activity_does_not_report_success_when_binding_is_rejected(uid):
+    fake = BindableClient(binds=False)
+    result = await RaccoonProvider(client=fake).activity({**DATA, "uid": uid})
+    assert not result.ok and "重新登录" in result.message
+    assert [call[0] for call in fake.calls] == (["visit", "bind"] if uid else ["visit"])
+
+
+async def test_checkin_recovers_unbound_session_then_uses_grant_ledger(frozen_now):
+    fake = BindableClient()
+    result = await RaccoonProvider(client=fake).checkin(DATA)
+    assert result.ok and result.credit == 300
+    assert [call[0] for call in fake.calls] == [
+        "visit", "bills", "bind", "visit", "page_boot", "quota", "bills"]
+    assert fake.calls[4] == ("page_boot", TOKEN, "upstream-device")
+
+
+async def test_checkin_uses_grant_even_when_balance_probe_fails(frozen_now):
+    class Client(BindableClient):
+        async def fetch_quota(self, token):
+            raise UpstreamHTTPError(503, b"")
+
+    result = await RaccoonProvider(client=Client()).checkin(DATA)
+    assert result.ok and result.credit == 300
+
+
+@pytest.mark.parametrize("rotated,uid", [("new-refresh", ""), ("", "same-account")])
+async def test_refresh_keeps_account_metadata_and_last_valid_refresh_token(rotated, uid):
+    from tests.provider.raccoon.test_credential import BOX
+
+    class Client:
+        async def refresh_token(self, token):
+            assert token == "old-refresh"
+            return {"access_token": BOX, "refresh_token": rotated}
+
+    provider = RaccoonProvider(client=Client())
+    previous = {**DATA, "refresh_token": "old-refresh", "uid": uid,
+                "phone": "1234", "password": "test-password"}
+    assert provider.credential_from(previous).needs_refresh(3, 2)
+    refreshed = await provider.refresh(previous)
+    assert refreshed == {"access_token": BOX, "refresh_token": rotated or "old-refresh",
+                         "uid": uid or "pu-01a", "nickname": DATA["nickname"],
+                         "expires_at": 1796391693, "phone": "1234",
+                         "password": "test-password"}

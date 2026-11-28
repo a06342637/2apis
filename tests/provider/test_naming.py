@@ -6,6 +6,8 @@
 全 free 路径）、上游已给的可读名。
 """
 
+import pytest
+
 from src.provider.naming import (
     MODEL_SYNONYMS,
     display_model_name,
@@ -268,26 +270,20 @@ class TestCrossChannelAlignment:
         assert normalize_model_key("MiMo-V2.6-Flash") == "mimo-v2.6-flash"
 
     def test_synonym_table_collapses_raccoon_sn_prefix(self):
-        """小浣熊的连字符版本号 / 快照日期收敛到其余渠道的写法。
-
-        `sn-` 前缀由 `_strip_noise` 通用剥掉（不依赖本表），这里验证剩下的
-        「版本号用连字符（`5-3`）而非点号（`5.3`）」与快照日期两种异名。
-        其中 `sn-deepseek-v4-1-flash-1017` 的 `1017` 是**快照日期**、不是模型
-        身份——它就是 DeepSeek V4.1 Flash 本身（与 CodeArts 同倍率 0.18x），
-        故收敛到 `deepseek-v4.1-flash` 而不是带 `-1017` 的键。
-        """
+        """小浣熊的连字符版本号收敛到其余渠道的写法。"""
         assert normalize_model_key("sn-glm-5-3") == "glm-5.3"
         assert normalize_model_key("sn-glm-5-3") == normalize_model_key("glm-5.3")
         assert display_model_name("sn-glm-5-3") == "GLM 5.3"
         assert normalize_model_key("sn-sensenova-6-8-flash") == "sensenova-6.8-flash"
-        # 快照日期不是身份：1017 档收敛到不带日期的规范键
-        assert normalize_model_key("sn-deepseek-v4-1-flash-1017") == \
-            "deepseek-v4.1-flash"
-        assert display_model_name("sn-deepseek-v4-1-flash-1017") == \
-            "DeepSeek V4.1 Flash"
-        # 收敛后与 CodeArts 的同名模型是同一键（合并成一条对外条目）
-        assert normalize_model_key("sn-deepseek-v4-1-flash-1017") == \
-            normalize_model_key("deepseek-v4.1-flash")
+
+    @pytest.mark.parametrize("raw_id", ["sn-deepseek-v4-1-flash-1017", "sn-deepseek-v4-1-flash"])
+    def test_raccoon_deepseek_v41_flash_synonyms(self, raw_id):
+        assert normalize_model_key(raw_id) == "deepseek-v4.1-flash"
+        assert display_model_name(raw_id) == "DeepSeek V4.1 Flash"
+
+    @pytest.mark.parametrize("raw_id", ["sn-deepseek-v4-flash", "sn-deepseek-v4-1-flash-9999"])
+    def test_raccoon_does_not_merge_other_deepseek_variants(self, raw_id):
+        assert normalize_model_key(raw_id) != "deepseek-v4.1-flash"
 
     def test_raccoon_sn_prefix_is_stripped_generically(self):
         """小浣熊**所有**模型都去 `sn-` 前缀，未登记同义词的也去。

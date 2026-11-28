@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Check, RefreshCw, Search, Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ModelBenchmarks, ModelInfo } from "../api/types";
@@ -452,6 +452,7 @@ export function ModelPicker({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("all");
+  const listRef = useRef<HTMLDivElement>(null);
   const models = useMemo(() => suppliedModels.filter(item => isChatModel(item)), [suppliedModels]);
 
   const options = useMemo(() => filterOptions(models), [models]);
@@ -460,6 +461,15 @@ export function ModelPicker({
     [models, query, filter],
   );
   const sections = useMemo(() => buildSections(visible), [visible]);
+  const filteredProvider = filter !== "all" && filter !== "auto" ? filter : null;
+  // 筛选本身不改当前选择；从指定渠道的结果选中共享模型时才锁定渠道。
+  const selectModel = (item: PickableModel) => {
+    if (onPin && filteredProvider && item.providers.length > 1) {
+      onPin(`${item.id}@${filteredProvider}`);
+    } else {
+      onChange(item.value);
+    }
+  };
   // 强制指定渠道后值为 `id@provider`（没有对应行），高亮其基础模型行，
   // 否则列表看起来像什么都没选中。
   const baseValue = value.includes("@") ? value.split("@")[0] : value;
@@ -495,7 +505,11 @@ export function ModelPicker({
               type="button"
               data-testid={`model-filter-${option.value}`}
               aria-pressed={filter === option.value}
-              onClick={() => setFilter(option.value)}
+              onClick={() => {
+                setFilter(option.value);
+                // 离开旧筛选时不要停在「仅某渠道」的滚动位置，先显示多渠道组。
+                if (listRef.current) listRef.current.scrollTop = 0;
+              }}
               className={cn(
                 "rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
                 filter === option.value
@@ -508,6 +522,12 @@ export function ModelPicker({
           ))}
         </div>
       </div>
+
+      {filteredProvider && onPin && (
+        <p className="text-xs text-muted-foreground">
+          显示 {providerLabel(filteredProvider)} 可用的模型（含多渠道）；从列表选择后仅走该渠道。
+        </p>
+      )}
 
       {selectedItem && (
         /* 三栏：当前选择 | 渠道 | 强制。三栏同一行（窄屏堆叠），中间渠道栏吃剩余
@@ -624,6 +644,7 @@ export function ModelPicker({
       )}
 
       <div
+        ref={listRef}
         role="listbox"
         data-testid="model-list"
         className="max-h-80 space-y-4 overflow-y-auto rounded-lg border border-border/60 p-2"
@@ -639,7 +660,9 @@ export function ModelPicker({
                   data-testid={`model-section-${section.key}`}
                   className="text-xs font-semibold text-foreground"
                 >
-                  {section.label}
+                  {filteredProvider && section.key === "auto"
+                    ? `${providerLabel(filteredProvider)}可用（多渠道）`
+                    : section.label}
                 </span>
                 <span className="text-[11px] text-muted-foreground">
                   {section.items.length} 个
@@ -651,7 +674,7 @@ export function ModelPicker({
                     key={item.value}
                     item={item}
                     selected={item.value === baseValue || item.id === baseValue}
-                    onSelect={() => onChange(item.value)}
+                    onSelect={() => selectModel(item)}
                   />
                 ))}
               </div>

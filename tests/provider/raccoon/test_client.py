@@ -23,6 +23,7 @@ from src.provider.raccoon.client import (
     EP_MODELS,
     EP_OFFICE_SETTING,
     EP_ONLINE_ACTIVITY,
+    EP_REFRESH,
     EP_USER_INFO,
     LOGIN_UA,
     LoginRejected,
@@ -640,3 +641,37 @@ async def test_page_boot_tolerates_bind_without_device_id():
 
     await _client(handler).page_boot("tok", "dev-x")
     assert EP_HEARTBEAT in seen
+
+
+@pytest.mark.parametrize("body", [[], {"code": 42}, {"code": 0}, {"data": {"access_token": " "}}])
+async def test_refresh_rejects_business_or_shape_errors(body):
+    with pytest.raises(UpstreamProtocolViolation, match="refresh"):
+        await _client(lambda _: httpx.Response(200, json=body)).refresh_token("refresh")
+
+
+async def test_refresh_uses_only_refresh_token():
+    def handler(request):
+        assert request.url.path == EP_REFRESH
+        assert request.method == "POST" and "authorization" not in request.headers
+        assert json.loads(request.content) == {"refresh_token": "previous"}
+        return httpx.Response(200, json={"data": {"access_token": "new", "refresh_token": "next"}})
+
+    assert await _client(handler).refresh_token("previous") == {
+        "access_token": "new", "refresh_token": "next"}
+
+
+async def test_binding_and_heartbeat_dont_mask_http_200_business_errors():
+    client = _client(lambda _: httpx.Response(200, json={"code": 200811, "data": {}}))
+    assert await client.bind_device("tok", "dev") is None
+    with pytest.raises(UpstreamProtocolViolation, match="business error"):
+        await client.heartbeat("tok", "dev")
+
+
+async def test_page_boot_with_existing_binding_never_rebinds():
+    def handler(request):
+        assert request.url.path != EP_BIND_DEVICE
+        if request.url.path == EP_HEARTBEAT:
+            assert request.headers["x-client-device-id"] == "known-device"
+        return httpx.Response(200, json={"data": {}})
+
+    assert await _client(handler).page_boot("tok", "known-device", bind=False) is None

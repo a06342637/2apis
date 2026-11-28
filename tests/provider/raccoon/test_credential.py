@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import json
 
+import pytest
+
 from src.provider.raccoon.credential import (
     RaccoonCredential,
     jwt_claims,
@@ -150,3 +152,26 @@ def test_import_keeps_optional_login_credentials():
 def test_from_dict_without_login_credentials_defaults_empty():
     credential = RaccoonCredential.from_dict({"access_token": "t"})
     assert credential.phone == "" and credential.password == ""
+
+
+@pytest.mark.parametrize("expires, seconds", [
+    (1798455885000, 1798455885), (1798455885, 1798455885),
+    (0, 0), (-1, 0), (True, 0), ("1798455885000", 0)])
+def test_reference_account_import_falls_back_to_exported_expiry(expires, seconds):
+    raw = {"access_token": "plain", "refresh_token": "refresh", "name": " account ",
+           "user_id": "known-user", "expires_at": expires, "id": "acct-other",
+           "enabled": False, "priority": 100, "cooldown_until": 123}
+    stored = RaccoonCredential.from_import(raw).to_dict()
+    assert stored == {"access_token": "plain", "refresh_token": "refresh", "uid": "known-user",
+                      "nickname": "account", "expires_at": seconds, "phone": "", "password": ""}
+    assert RaccoonCredential.from_dict(stored).refresh_token == "refresh"
+
+
+def test_reference_account_prefers_jwt_sub_and_exp_and_refreshes_only_in_window():
+    credential = RaccoonCredential.from_import({"access_token": BOX, "user_id": "",
+                                               "expires_at": 1, "refresh_token": " refresh "})
+    assert credential.uid == "pu-01a" and credential.expires_at == 1796391693
+    assert not credential.needs_refresh(10, 1796391682)
+    assert credential.needs_refresh(10, 1796391683)
+    assert not RaccoonCredential.from_import(BOX).needs_refresh(10, 1796391683)
+    assert not RaccoonCredential(refresh_token="refresh").needs_refresh(10, 1)

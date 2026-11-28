@@ -157,6 +157,25 @@ def grant_grace_at(now: datetime) -> datetime:
                            second=0, microsecond=0)
 
 
+def _trusted_device(user_info: dict[str, Any] | None) -> dict[str, Any]:
+    device = user_info.get("trusted_device") if isinstance(user_info, dict) else None
+    return device if isinstance(device, dict) else {}
+
+
+def session_can_bind(user_info: dict[str, Any] | None) -> bool:
+    """只补首次绑定；不重绑被拒绝、会话不匹配或已经绑定的设备。"""
+    device = _trusted_device(user_info)
+    return (device.get("device_bind_state") == "unbound"
+            and device.get("reason") == "session_without_bound_device"
+            and device.get("needs_bind") is True
+            and device.get("needs_relogin") is False)
+
+
+def session_device_id(user_info: dict[str, Any] | None) -> str:
+    device_id = _trusted_device(user_info).get("device_id")
+    return device_id.strip() if isinstance(device_id, str) else ""
+
+
 def session_needs_relogin(user_info: dict[str, Any] | None) -> str:
     """`user_info.data` → 「会话需重登」的可操作原因；不需要时返回空串。
 
@@ -165,17 +184,14 @@ def session_needs_relogin(user_info: dict[str, Any] | None) -> str:
     * `needs_relogin=true` / `trusted=false` / `device_bind_state` ∈
       {`suspicious`, `unbound`} —— 会话与设备对不上，上游拒绝心跳
       （`400 200811 device_bind_required`），当天也不会补发 `daily_grant`；
-    * 此时**没有**自愈通道：`devices_current_bind` 对 `device_session_mismatch`
+    * 首次未绑定的会话可先尝试绑定；若仍未绑定，则返回人工处理提示。
+    * 其余情况**没有**自愈通道：`devices_current_bind` 对 `device_session_mismatch`
       同样回 400，`refresh` 也只是原样换同一张 token（sid 不变）。只能让用户
       在网页重新登录后重新导入凭据。
 
     字段缺失（老账号 / 上游改版）时不猜，返回空串走原有判定。
     """
-    if not isinstance(user_info, dict):
-        return ""
-    device = user_info.get("trusted_device")
-    if not isinstance(device, dict):
-        return ""
+    device = _trusted_device(user_info)
     reason = device.get("reason")
     state = device.get("device_bind_state")
     needs = bool(device.get("needs_relogin")) or device.get("trusted") is False \

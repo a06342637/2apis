@@ -339,3 +339,13 @@ def test_heartbeat_headers_include_required_client_headers():
     assert headers["x-client-device-id"] == "dev-abc"
     assert headers["x-client-platform"] == "web"
     assert headers["Content-Type"] == "application/json"
+
+
+def test_only_explicit_unbound_session_can_be_bound():
+    device = {"device_bind_state": "unbound", "reason": "session_without_bound_device",
+              "needs_bind": True, "needs_relogin": False}
+    assert raccoon_activity.session_can_bind({"trusted_device": device})
+    for key, other in [("device_bind_state", "suspicious"), ("reason", "device_session_mismatch"),
+                       ("needs_bind", False), ("needs_relogin", True)]:
+        assert not raccoon_activity.session_can_bind({"trusted_device": {**device, key: other}})
+    assert not raccoon_activity.session_can_bind(None)

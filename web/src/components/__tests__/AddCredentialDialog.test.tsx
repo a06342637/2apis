@@ -50,14 +50,68 @@ describe("AddCredentialDialog", () => {
     expect(screen.getByTestId("add-raccoon")).toBeDisabled();
 
     await userEvent.click(screen.getByTestId("raccoon-token"));
-    await userEvent.paste("eyJhbGciOi.payload.sig");
+    await userEvent.paste(" short ");
     await userEvent.click(screen.getByTestId("add-raccoon"));
 
     const posted = calls.find((call) => call.url.includes("/api/credentials"));
     expect(posted?.body).toMatchObject({
       provider: "raccoon",
-      credential: { access_token: "eyJhbGciOi.payload.sig" },
+      credential: { access_token: "short" },
     });
+    expect(props.onImported).toHaveBeenCalledWith("已添加小浣熊渠道");
+  });
+
+  const raccoonAccount = {
+    name: "  小浣熊账号  ", user_id: "42",
+    access_token: `eyJhbGciOiJub25lIn0.${btoa(JSON.stringify({ iss: "xiaohuanxiong.com/iam" })).replace(/=+$/, "")}.sig`,
+    refresh_token: "synthetic-refresh", expires_at: 1791529021000, priority: 100,
+  };
+
+  it.each([false, true])("导入单账号 JSON 使用昵称，尊重手选渠道（override=%s）", async (override) => {
+    const post = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ id: "rc" }));
+    vi.stubGlobal("fetch", post);
+    renderDialog();
+    await userEvent.click(screen.getByTestId("add-credential-tab-import"));
+    await userEvent.click(screen.getByTestId("import-payload"));
+    await userEvent.paste(JSON.stringify(raccoonAccount));
+    expect(screen.getByTestId("import-provider")).toHaveValue("raccoon");
+    expect(screen.getByTestId("import-detected")).toHaveTextContent("小浣熊");
+    if (override) {
+      await userEvent.selectOptions(screen.getByTestId("import-provider"), "qoder");
+      await userEvent.type(screen.getByTestId("import-nickname"), "My nickname");
+      expect(screen.getByTestId("import-detected")).toHaveTextContent("当前按手选渠道导入");
+    }
+    await userEvent.click(screen.getByTestId("import-submit"));
+    const request = post.mock.calls.find(([url]) => url === "/api/credentials");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      provider: override ? "qoder" : "raccoon",
+      nickname: override ? "My nickname" : "小浣熊账号",
+      credential: raccoonAccount,
+    });
+  });
+
+  it("小浣熊手工入口可粘贴多行单账号 JSON，把刷新凭证一并提交", async () => {
+    const post = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => jsonResponse({ id: "rc" }));
+    vi.stubGlobal("fetch", post);
+    const props = renderDialog();
+    await userEvent.click(screen.getByTestId("manual-raccoon-summary"));
+    await userEvent.click(screen.getByTestId("raccoon-token"));
+    await userEvent.paste(JSON.stringify({ accounts: [raccoonAccount] }, null, 2));
+    await userEvent.click(screen.getByTestId("add-raccoon"));
+    expect(props.onError).toHaveBeenCalledWith(expect.stringContaining("批量导入"));
+    expect(post.mock.calls.some(([url]) => url === "/api/credentials")).toBe(false);
+
+    const field = screen.getByTestId("raccoon-token");
+    const text = JSON.stringify(raccoonAccount, null, 2);
+    await userEvent.clear(field);
+    await userEvent.paste(text);
+    expect(field).toHaveValue(text);
+    await userEvent.click(screen.getByTestId("add-raccoon"));
+    const request = post.mock.calls.find(([url]) => url === "/api/credentials");
+    expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+      provider: "raccoon", nickname: "小浣熊账号", credential: raccoonAccount,
+    });
+    expect(field).toHaveValue("");
     expect(props.onImported).toHaveBeenCalledWith("已添加小浣熊渠道");
   });
 

@@ -1,3 +1,4 @@
+import asyncio
 import time
 from types import SimpleNamespace
 
@@ -222,6 +223,31 @@ def test_real_http_with_15_second_keepalive_and_full_pacer_rejects_before_post(g
         client.portal.call(provider.pacer.release, identity)
 
 
+@pytest.mark.parametrize("stream", [False, True])
+def test_slow_miora_account_catalog_returns_503_before_start(gateway, monkeypatch, stream):
+    app, client, boundary, _provider, headers, key = gateway
+    closed = []
+
+    async def slow_catalog(_services, ids, binding):
+        assert ids and binding == "miora"
+        try:
+            await asyncio.sleep(10)
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr("src.api.endpoints.account_model_tables", slow_catalog)
+    monkeypatch.setattr("src.api.endpoints.MIORA_CATALOG_PREFLIGHT_SECONDS", 0.02)
+    response = client.post("/v1/chat/completions", headers=headers, json={
+        "model": "glm-5.3@miora", "stream": stream,
+        "messages": [{"role": "user", "content": "hi"}],
+    })
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "5"
+    assert "Miora account model catalog timed out" in response.json()["error"]["message"]
+    assert closed == [True] and not boundary.posts
+    assert app.state.services.key_quota.inflight(key["id"]) == 0
+
+
 @pytest.mark.parametrize("model", ["glm-5.3@miora", "friendly", "auto"])
 def test_real_http_valid_explicit_and_auto_models_still_reach_upstream(gateway, model):
     app, client, boundary, _provider, headers, key = gateway
@@ -300,3 +326,23 @@ def test_responses_valid_builtin_media_options_preserve_normal_text_route(gatewa
     assert response.status_code == 200, response.text
     assert boundary.posts == ["/mock-inference"]
     assert app.state.services.key_quota.inflight(key["id"]) == 0
+
+
+
+def test_non_miora_bound_compat_request_keeps_account_catalog_scope(gateway, monkeypatch):
+    app, client, _boundary, _provider, _headers, _key = gateway
+    account = app.state.credentials.add(provider="raccoon", credential_data={"access_token": "t"})
+    key = app.state.api_keys.create("root", provider_binding="raccoon", credential_ids=[account])
+    found = []
+
+    async def catalog(_services, ids, binding):
+        found.append((ids, binding))
+        raise InvalidRequest("reached selected non-Miora catalog")
+
+    monkeypatch.setattr("src.api.endpoints.account_model_tables", catalog)
+    response = client.post("/v1/chat/completions", headers={
+        "Authorization": "Bearer " + key["api_key"],
+    }, json={"model": "anything@raccoon", "messages": [{"role": "user", "content": "hi"}]})
+    assert response.status_code == 400, response.text
+    assert "reached selected non-Miora catalog" in response.text
+    assert found == [((account,), "raccoon")]

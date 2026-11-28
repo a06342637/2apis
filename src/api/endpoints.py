@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import Any
 
@@ -18,7 +19,7 @@ from ..auth.access import model_allowed
 from ..compat.openai.request import ChatRequest, InvalidRequest
 from ..config import Settings
 from ..engine.compress import estimate_messages
-from ..engine.executor import Executor, StreamSink
+from ..engine.executor import Executor, NoHealthyCredential, StreamSink
 from ..engine.sse import SSE_COMMENT
 from ..key_quota import Lease, QuotaExceeded
 from ..provider.base import aclose_stream
@@ -28,6 +29,9 @@ from .chat_media_gate import chat_account_tables, ensure_chat_endpoint, force_im
 from .deps import ApiKeyPrincipal, get_services, read_json_body
 from .miora_preflight import miora_account_scope, preflight_miora
 from .streaming import respond_with_keepalive, respond_with_stream_start, with_keepalive
+
+# 目录在响应头/保活之前加载；为默认 60 秒准入排队留出代理超时余量。
+MIORA_CATALOG_PREFLIGHT_SECONDS = 35.0
 
 
 def ensure_model_allowed(chat_request: ChatRequest, principal: ApiKeyPrincipal,
@@ -127,8 +131,17 @@ async def dispatch_compat(
                           validate_only=True)
     account_ids = principal.credential_ids or miora_ids
     if account_ids:
-        tables = await account_model_tables(get_services(request),
-                                            account_ids, binding)
+        if miora_ids:
+            try:
+                async with asyncio.timeout(MIORA_CATALOG_PREFLIGHT_SECONDS):
+                    tables = await account_model_tables(get_services(request), account_ids, binding)
+            except TimeoutError as error:
+                # 尚未推理或占用 Key 配额；不能回退到全池目录放宽账号权限。
+                raise NoHealthyCredential(
+                    "Miora account model catalog timed out", retry_after=5,
+                ) from error
+        else:
+            tables = await account_model_tables(get_services(request), account_ids, binding)
         execution_scope = {"credential_ids": account_ids,
                            "credential_models": tables,
                            "credential_model_policy": (

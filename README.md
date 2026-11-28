@@ -191,7 +191,7 @@ copy(JSON.stringify({authToken: localStorage.getItem("authToken"), refreshToken:
 
 ### OpenAI 客户端接入
 
-明确选择 Miora 的请求会在账号排队和响应保活前校验参数、文本输入、工具定义及可信目录中的模型。错误请求返回 400；慢请求已开始保活后的真实上游失败仍以 JSON 错误正文返回。
+明确选择 Miora 的请求会在账号排队和响应保活前校验参数、文本输入、工具定义及可信目录中的模型。错误请求返回 400；Miora 账号目录预检累计等待超过 35 秒时返回可重试的 503，不借用其他账号的权限。慢请求已开始保活后的真实上游失败仍以 JSON 错误正文返回。
 
 Base URL：`http://127.0.0.1:8000/v1`，API Key 使用本服务「API Key」页创建的 `sk-…`，模型选择 `glm-5.3@miora` 等目录条目。
 
@@ -222,7 +222,7 @@ response = client.messages.create(
 print(response.content)
 ```
 
-两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用严格 JSON 模拟**：传入客户端工具定义，校验函数白名单、参数对象及常见类型/必填/属性约束，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`；客户端函数由原客户端执行。支持 `auto` / `none` / `required` / 指定函数与关闭并行调用。网关另提供 Film Studio 图片/视频工具，由服务器执行并返回真实资源链接；云端文件操作仍不开放。异常断流会取消未完成的上游推理。
+两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用 JSON 模拟**：工具调用必须通过函数白名单、参数对象及常见类型/必填/属性约束校验，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`，由原客户端执行。`auto` / `none` 也接受正常完成的普通文本；`required` / 指定函数仍必须返回有效调用。支持关闭并行调用。报告为自动批准的 ACP 会话会先切回询问模式，网关不批准云端工具。网关另提供 Film Studio 图片/视频工具，由服务器执行并返回真实资源链接；云端文件操作仍不开放。异常断流会取消未完成的上游推理。
 
 ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completion_tokens` 会作为提示中的输出预算，**不能保证硬 token 上限**；非默认 `temperature` / `top_p` / penalties 及 `stop`、`logprobs`、`seed`、`response_format`、`prediction` 等无法兑现的参数会明确返回 400。图片、音频、文件输入及音频输出在联网前返回能力不支持的 400。`reasoning_effort` 支持 `low` / `medium` / `high`，每轮显式设置，省略时使用 `medium`，不会继承上一位调用者的档位。工具响应需缓冲后校验，调用帧会在校验通过后发出。
 
@@ -350,7 +350,7 @@ python3 scripts/create_user.py alice --role admin --init   # 库还不存在时�
    - **TRAE**：粘凭证 JSON（`accessToken`/`uid`/`refreshToken`）或回调链接（`apiHost` 只收官方地址）。
    - **Qoder / CodeArts**：设备码 / OAuth2 授权码登录（CodeArts 授权后把打不开的本地回调链接粘回页面）。
    - **OfficeAce**：点「登录 OfficeAce」走华为云授权（回调由云端承接）。
-   - **小浣熊 / 灵犀**：无登录按钮，只能粘网页会话凭据（小浣熊 `{"access_token":"<xhx_token>"}`，灵犀整段 Cookie 或裸 `wps_sid`）。
+   - **小浣熊 / 灵犀**：无登录按钮，只能粘网页会话凭据（小浣熊支持 `xhx_token` 或 `xiaohuanxiong2api` 账号 JSON，灵犀支持整段 Cookie 或裸 `wps_sid`）。
    - **通用粘法**：「JSON 导入」接受整段 Cookie，或 DevTools → Network → 右键请求 → **Copy as cURL (bash)**（HttpOnly cookie 也能拿到）；有明确特征（`wps_sid` / `xhx_token` / TRAE 字段 / AK·SK）时自动识别渠道并记住。
    - **OpenCode Zen / Kilo**：无需添加，启动自动出虚拟凭证（删了可在同面板补回）；Zen 已充值时可在同面板粘贴 Console API Key 切付费档。
 2. 「API Key」建 `sk-...`（明文仅显示一次）。
@@ -443,13 +443,15 @@ curl http://127.0.0.1:8000/v1/chat/completions \
 
 [商汤小浣熊](https://xiaohuanxiong.com)，需真实账号。**没有登录按钮**：凭据是网页会话 JWT，DevTools → Application → Cookies → 复制 `xhx_token`，粘 `{"access_token":"<值>"}`（也接受裸 JWT、整段 cookie、Copy as cURL）。约 30 天到期；**重取后再导入即可**：同 `uid`（JWT `sub`）就地更新并解除硬禁用，不会多出重复行（重复行会被当成两个号并发，翻倍统计又绕过节流）。
 
+- **兼容 xiaohuanxiong2api 导出**：单条在「JSON 导入」粘贴，整份 `{"accounts":[…]}` 或数组走「批量导入」。支持 `access_token`、`refresh_token`、`user_id`、`name` 和毫秒 `expires_at`；JWT 的 `exp` 优先，空 `user_id` 回落到 JWT `sub`。`name` 用作默认账号昵称，不迁移其他反代的 ID、启停、优先级或冷却状态。导入了刷新令牌的账号在标准预刷新窗口自动续期并保存轮换结果；旧的 access-token-only 导入仍支持。不要让两套系统同时轮转同一刷新票据。
+- **Playground**：在模型筛选里选择「小浣熊」，多渠道共有的 `DeepSeek V4.1 Flash` 也会出现；选中该行即锁定 `deepseek-v4.1-flash@raccoon`，转发使用小浣熊目录当时返回的原始 ID。
 - **协议**：标准 OpenAI 兼容（`/api/web/llm/v2/chat/completions`），无签名、无设备指纹；`tool_calls`、`role=tool` 回传、`include_usage` 实测通过（411K token 输入 14.2 秒）。
 - **未知模型静默回落默认模型**（实测）→ 两层拦截：发请求前按目录校验，回包首帧比对 `model` 回显，不一致直接失败。
 - **额度＝积分**：每笔请求扣 1 分（与 token 无关），每日 00:00 发 300 分（7 天有效）。`billing_effective_multiplier` 当倍率，**0 = 限免**（如 `sn-sensenova-6-8-flash`），调度优先选。
 - **额度明细**：上游分四个池（每日 / 奖励 / 月度 / 充值），套餐明细按发放流水逐笔展开（`type=income` 的 `daily_grant` / `reward_grant`）。上游不给逐笔剩余 → 每日积分按「到期早的先消耗」分摊（推断）；奖励积分实测「每日额度用光后才扣」，按发放额列。流水拿不到才退回四池。到期阶梯与明细同源，参与「快过期先用」排序。
-- **每日签到**：上游没有领取接口——300 积分在**当天第一次网页登录**时补发一笔 `daily_grant`（旧结论「00:00 自动发放、登录只是延期」已于 2026-11-18 真号复测推翻）。故「签到」= 页面访问 → 摸余额 → 读流水核对，**只认流水不看 HTTP 200**；**今天没有 `daily_grant` 就是失败**；凌晨 00:00~01:30 之间把重试推到 01:30 等账单同步。流水用 `type=income` 过滤（`type=all` 里消费流水会把每日发放挤出窗口）。
-- **会话需重登**：`GET /api/web/auth/v1/user_info` 的 `trusted_device` 直说状态（`trusted=false` / `device_bind_state=suspicious` / `needs_relogin=true` / `reason=device_session_mismatch`）。进入后心跳恒回 `400 200811 device_bind_required`，当天也无 `daily_grant`，且**无自愈通道**（`devices_current_bind` 同样 400；`refresh` 只换回同一张 token）。签到与活跃上报读该信号，直接写「需在网页端重新登录后重新导入凭据」。**重新登录会立刻补发当天这笔**。
-- **按需登录（可选，默认关）**：凭证行「更多操作 → 账号密码」填手机号与密码（也可在导入 JSON 带 `phone`/`password` / `phone_number`），打开 `RACCOON_AUTO_LOGIN` 后，签到发现「今天没发」就调 `POST /api/web/auth/v1/login_with_password` 换新会话并重核。实测口径：`phone`/`password` 走 **AES-CFB（key `senseraccoon2023`、16 字节随机 IV 前置、Base64）**，密码 ≥8 位，**不需要验证码**。限制：每天每凭证最多一次；上游拒绝（`200004 phone_or_password_verify_error`）→ 标「需重新登录」并停手；`password_status=unset` 的账号填了也登不进。接口 `PUT /api/credentials/{id}/login-secret`（都留空 = 清除），密码加密落库、**不回显**、导出不含。登录成功后调 `devices_current_bind` 绑新会话（不绑则 `trusted=false`、心跳恒 400）；绑定失败不判登录失败。`derive_device_id` ≤64 字符（上游对超长回 `500 value too long for character varying(64)`）。
+- **每日签到**：上游没有领取接口——300 积分在**当天第一次网页登录**时补发一笔 `daily_grant`（旧结论「00:00 自动发放、登录只是延期」已于 2026-11-18 真号复测推翻）。故「签到」= 页面访问与核对流水，未到账时尝试启动页面并复核，**只认流水不看 HTTP 200**；**今天没有 `daily_grant` 就是失败**；凌晨 00:00~01:30 之间把重试推到 01:30 等账单同步。流水用 `type=income` 过滤（`type=all` 里消费流水会把每日发放挤出窗口）。
+- **会话需重登**：`GET /api/web/auth/v1/user_info` 的 `trusted_device` 直说状态（`trusted=false` / `device_bind_state=suspicious` / `needs_relogin=true` / `reason=device_session_mismatch`）。进入后心跳恒回 `400 200811 device_bind_required`，当天也无 `daily_grant`，且**无自愈通道**（`devices_current_bind` 同样 400；`refresh` 只换回同一张 token）。签到与活跃上报只对可首次绑定的 `session_without_bound_device` 尝试绑定，并重新读取上游状态确认；真正的 `device_session_mismatch` 或明确要求重登不重绑。绑定成功不代表签到成功，仍以当天流水为准。
+- **按需登录（可选，默认关）**：凭证行「更多操作 → 账号密码」填手机号与密码（也可在导入 JSON 带 `phone`/`password` / `phone_number`），打开 `RACCOON_AUTO_LOGIN` 后，签到发现「今天没发」就通过 IAM 手机号密码登录和 `iam/confirm` 换新会话并重核。实测口径：`phone`/`password` 走 **AES-CFB（key `senseraccoon2023`、16 字节随机 IV 前置、Base64）**，密码 ≥8 位，**不需要验证码**。限制：每天每凭证最多一次；上游拒绝（`200004 phone_or_password_verify_error`）→ 标「需重新登录」并停手；`password_status=unset` 的账号填了也登不进。接口 `PUT /api/credentials/{id}/login-secret`（都留空 = 清除），密码加密落库、**不回显**、导出不含。登录成功后调 `devices_current_bind` 绑新会话（不绑则 `trusted=false`、心跳恒 400）；绑定失败不判登录失败。`derive_device_id` ≤64 字符（上游对超长回 `500 value too long for character varying(64)`）。
 - **活跃上报**：`POST /api/web/auth/v1/devices_current_heartbeat`，补 `x-client-*` 头族即 200、幂等。默认关，与 CodeBuddy 共用 `ACTIVITY_REPORT_ENABLED` / `ACTIVITY_REPORT_HOUR`。
 - **并发上限约 5**（第 6 个回 `429 user_model_rate_limited`）→ `RACCOON_MAX_CONCURRENCY` 默认 2，独立节流器。该 429 实为账号×模型频率窗口（恢复中位数 25min），冷却首枪 60s、同链翻倍、封顶 30min。
 

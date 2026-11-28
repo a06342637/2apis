@@ -69,11 +69,10 @@ MODEL_SYNONYMS: dict[str, tuple[str, str]] = {
     # 右侧取其余渠道已在用的写法（CodeArts 的 `glm-5.3` 等）。
     "glm-5-3": ("glm-5.3", "GLM 5.3"),
     "glm-5-3-flash": ("glm-5.3-flash", "GLM 5.3 Flash"),
-    # `1017` 是快照日期、不是模型身份：小浣熊的这个档位就是 DeepSeek V4.1 Flash
-    # 本身（与 CodeArts 的 `deepseek-v4.1-flash` 同倍率 0.18x）。不收敛会让同一
-    # 模型多出一条 `deepseek-v4.1-flash-1017` 的对外条目。
-    "deepseek-v4-1-flash-1017": ("deepseek-v4.1-flash",
-                                 "DeepSeek V4.1 Flash"),
+    # 小浣熊目录的无后缀写法与 `1017` 快照归为同一模型身份；只有实际出现在
+    # 目录里的原始 ID 才能用于转发，这里不补目录条目。
+    "deepseek-v4-1-flash": ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
+    "deepseek-v4-1-flash-1017": ("deepseek-v4.1-flash", "DeepSeek V4.1 Flash"),
     "sensenova-6-8-flash": ("sensenova-6.8-flash", "Sensenova 6.8 Flash"),
     "sensenova-6-8-flash-lite": ("sensenova-6.8-flash-lite",
                                  "Sensenova 6.8 Flash Lite"),

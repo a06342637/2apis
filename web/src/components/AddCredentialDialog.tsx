@@ -565,14 +565,18 @@ export function AddCredentialDialog({
               <div className="mt-3 space-y-2">
               <div className="mb-2 text-xs text-muted-foreground">
                 小浣熊没有 OAuth 登录轨道，凭据是网页会话 JWT：在浏览器 DevTools →
-                Application → Cookies 里复制 <code>xhx_token</code> 的值，粘到下方。
+                Application → Cookies 里复制 <code>xhx_token</code> 的值，或粘贴
+                xiaohuanxiong2api 的单账号 JSON（含刷新凭证）。整个 accounts.json 请用「批量导入」。
               </div>
               <div className="flex flex-wrap items-center gap-2">
                 <div className="w-64">
-                  <Input
+                  <Textarea
+                    rows={2}
+                    aria-label="小浣熊凭证"
                     data-testid="raccoon-token"
                     value={raccoonToken}
-                    placeholder="粘贴 xhx_token 的值（或整段 cookie）"
+                    placeholder="粘贴 xhx_token 或单账号 JSON"
+                    spellCheck={false}
                     onChange={(event) => setRaccoonToken(event.target.value)}
                   />
                 </div>
@@ -582,12 +586,21 @@ export function AddCredentialDialog({
                   data-testid="add-raccoon"
                   disabled={busy || raccoonToken.trim().length === 0}
                   onClick={async () => {
+                    const text = raccoonToken.trim();
+                    // 此入口已明确是小浣熊；裸 token 仍按原样提交，不受通用长度限制。
+                    const parsed = text.startsWith("{") || text.startsWith("[")
+                      ? parseCredentialInput(text, "raccoon", false) : null;
+                    if (parsed && !parsed.ok) {
+                      onError(parsed.error);
+                      return;
+                    }
                     setBusy(true);
                     try {
                       await api.importCredential(
                         "raccoon",
-                        { access_token: raccoonToken.trim() },
-                        "小浣熊",
+                        parsed?.credential ?? { access_token: text },
+                        parsed?.nickname || "小浣熊",
+                        parsed?.tags,
                       );
                       setRaccoonToken("");
                       onImported("已添加小浣熊渠道");
@@ -793,7 +806,7 @@ export function AddCredentialDialog({
             <Field
               label="凭证 JSON / Cookie / cURL"
               htmlFor="import-payload"
-              hint='三种粘法都收：① 渠道 JSON（选渠道自动填模板，已手写内容不会被覆盖）；② 整段 Cookie（灵犀 wps_sid、小浣熊 xhx_token）；③ 浏览器 DevTools → Network → 右键请求 → Copy as cURL (bash)（含 HttpOnly Cookie，最省事）。识别到渠道会自动切换。'
+              hint='三种粘法都收：① 渠道 JSON（选渠道自动填模板，已手写内容不会被覆盖）；② 整段 Cookie（灵犀 wps_sid、小浣熊 xhx_token）；③ 浏览器 DevTools → Network → 右键请求 → Copy as cURL (bash)（含 HttpOnly Cookie，最省事）。识别到渠道会自动切换。小浣熊支持 xiaohuanxiong2api 单账号 JSON。'
             >
               <Textarea
                 rows={5}

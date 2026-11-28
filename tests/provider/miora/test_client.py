@@ -329,6 +329,35 @@ async def test_upstream_error_never_releases_buffered_tool_proposals(acp, api, f
         await client.aclose()
 
 
+@pytest.mark.parametrize("current_mode", ["bypassPermissions", "acceptEdits", "default"])
+async def test_inference_disables_native_tool_auto_approval(acp, api, monkeypatch, current_mode):
+    _, transport = api
+    call = acp.call
+
+    async def loaded(self, method, params):
+        result = await call(self, method, params)
+        if method == "session/load":
+            return {**result, "modes": {"currentModeId": current_mode}}
+        return result
+
+    monkeypatch.setattr(acp, "call", loaded)
+    async with httpx.AsyncClient(transport=transport) as http:
+        client = MioraClient(short_client=http, stream_client=http)
+        events = [e async for e in client.stream_chat(MioraCredential("long"), {
+            "messages": [], "tools": [{"type": "function", "function": {"name": "inspect"}}],
+        }, "hy4flash-free")]
+    assert [(event.kind, event.content) for event in events] == [
+        (EventKind.CONTENT, "answer"), (EventKind.FINISH, None),
+    ]
+    methods = [method for method, _ in acp.calls]
+    if current_mode == "default":
+        assert "session/set_mode" not in methods
+    else:
+        assert methods.count("session/set_mode") == 1
+        assert methods.index("session/set_mode") < methods.index("session/prompt")
+        assert ("session/set_mode", {"sessionId": "session", "modeId": "default"}) in acp.calls
+
+
 async def test_native_model_without_subagent_tier(acp, api):
     _, transport = api
     async with httpx.AsyncClient(transport=transport) as http:

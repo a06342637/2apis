@@ -83,7 +83,7 @@ describe("凭证入口和登录表单交叉回归", () => {
     fireEvent.click(screen.getByTestId("miora-copy-command"));
     await waitFor(() => expect(screen.getByTestId("miora-copy-command")).toHaveTextContent("复制失败"));
     expect(screen.getByTestId("miora-copy-command")).not.toHaveTextContent("已复制");
-    expect(document.querySelector("textarea")).toBeNull();
+    expect([...document.querySelectorAll("textarea")]).toEqual([screen.getByTestId("raccoon-token")]);
     expect(screen.getByTestId("miora-copy-command").querySelector("code"))
       .toHaveTextContent('localStorage.getItem("refreshToken")');
   });

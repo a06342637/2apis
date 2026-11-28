@@ -489,7 +489,12 @@ class MioraClient(LazyClients):
         text_length = 0
         finish: Event | None = None
         async with self._connection(credential, account, endpoint, token) as connection:
-            await self._initialize(connection, session)
+            loaded = await self._initialize(connection, session)
+            if cloud_tools_auto_approved(loaded):
+                # 网页默认可能跳过审批；切到询问模式，让 ACP 拒绝回调而不是授权云端执行。
+                await connection.call("session/set_mode", {
+                    "sessionId": session, "modeId": "default",
+                })
             await connection.call("session/set_model", {"sessionId": session, "modelId": raw_model})
             try:
                 async with aclosing(connection.rpc_frames("session/prompt", {
@@ -596,6 +601,13 @@ def default_tier(tiers: Any) -> str:
             if tier:
                 return tier
     return ""
+
+
+def cloud_tools_auto_approved(loaded: dict) -> bool:
+    modes = loaded.get("modes")
+    return isinstance(modes, dict) and modes.get("currentModeId") in (
+        "bypassPermissions", "acceptEdits",
+    )
 
 
 def cloud_tool_requested(frame: dict) -> bool:
