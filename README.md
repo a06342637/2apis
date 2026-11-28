@@ -1,6 +1,10 @@
-# 2apis · v0.1.9
+# 2apis · v0.1.10
 
 基于 [RobbsLuo/coding2api](https://github.com/RobbsLuo/coding2api) 二次开发，保留原有渠道，新增 **Miora 多账号模型反代**。原项目作者与 MIT 许可证保留。
+
+## v0.1.10 Miora 官方头像
+
+Miora 渠道使用官网提供的 180×180 官方头像，替换文字标记。图片随前端本地打包，凭证列表、统计和其他渠道入口统一显示，无需连接外部 CDN。
 
 ## v0.1.9 导入元数据与分组标记
 
@@ -288,7 +292,7 @@ docker compose up -d --build
 docker compose exec coding2api python scripts/create_user.py admin --role admin
 ```
 
-拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.9`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
+拉镜像：`docker compose pull`（或 `docker pull ghcr.io/a06342637/2apis:v0.1.10`，同时支持 Linux AMD64 / ARM64）。tag `v*` 推 main → `.github/workflows/publish.yml` → 发 `<tag>` + `:latest`。有公网 IP 的 VPS 要 https → 见「[公网部署](#公网部署docker--caddy-自动-https)」。
 
 ## 用户与角色
 

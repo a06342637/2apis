@@ -26,10 +26,16 @@ describe("ProviderIcon", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("Miora 使用装饰性文字标记", () => {
-    const { container } = render(<ProviderIcon provider="miora" size={16} />);
-    expect(container.querySelector("span")).toHaveTextContent("M");
-    expect(container.querySelector("span")).toHaveAttribute("aria-hidden", "true");
-    expect(container.querySelector("img")).toBeNull();
+  it.each([true, false])("Miora 两种显示模式都使用本地官方高清头像，colored=%s", colored => {
+    const { container } = render(<ProviderIcon provider="miora" size={20} colored={colored} className="official-logo" />);
+    const img = container.querySelector("img");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("src", expect.stringContaining("miora"));
+    expect(img).toHaveAttribute("width", "20");
+    expect(img).toHaveAttribute("height", "20");
+    expect(img).toHaveAttribute("alt", "");
+    expect(img).toHaveAttribute("aria-hidden", "true");
+    expect(img).toHaveClass("official-logo");
+    expect(container.querySelector("span")).toBeNull();
   });
 });
