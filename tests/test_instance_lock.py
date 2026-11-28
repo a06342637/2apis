@@ -139,25 +139,23 @@ def test_already_running_message_is_actionable(tmp_path):
 # ------------------------------------------------------- 平台分支（issue #46）
 
 
-def test_module_is_importable_without_fcntl(monkeypatch, tmp_path):
+def test_module_is_importable_without_fcntl(monkeypatch):
     """`fcntl` 缺失时模块仍可导入，但 `LOCK_SUPPORTED` 为假。
 
     模块级 import 失败会让 `build_app --factory` 与所有 `scripts/*` 在 Windows
     上直接炸掉（连一句自己的错误都打不出来），所以导入必须宽容。
     """
-    import importlib
+    import runpy
     import sys
 
     from src import instance_lock
 
-    monkeypatch.delitem(sys.modules, "instance_lock", raising=False)
     monkeypatch.setitem(sys.modules, "fcntl", None)  # import fcntl 抛 ImportError
-    reloaded = importlib.reload(instance_lock)
-    try:
-        assert reloaded.LOCK_SUPPORTED is False
-    finally:
-        monkeypatch.undo()
-        importlib.reload(instance_lock)
+    # 用独立命名空间执行同一份源文件。reload 会重建异常类型，导致先前导入
+    # AlreadyRunning 的运维脚本抓不到新类型，测试结果因 worker 内执行顺序而异。
+    isolated = runpy.run_path(instance_lock.__file__)
+    assert isolated["LOCK_SUPPORTED"] is False
+    assert instance_lock.AlreadyRunning is AlreadyRunning
 
 
 def test_acquire_refuses_to_silently_noop_without_fcntl(monkeypatch, tmp_path):
