@@ -7,6 +7,10 @@ from typing import Any
 
 from ..base import ErrKind, Event, EventKind, Usage
 
+NORMAL_STOP_REASONS = ("end_turn", "stop")
+LENGTH_STOP_REASONS = ("max_tokens", "length")
+SUCCESS_STOP_REASONS = NORMAL_STOP_REASONS + LENGTH_STOP_REASONS
+
 
 def classify_status(status: int, body: bytes = b"") -> ErrKind:
     """长登录票失效、短运行时票、额度与模型权限由调用路径进一步分流。"""
@@ -72,9 +76,9 @@ def parse_update(frame: Any) -> list[Event]:
         reason = result["stopReason"]
         # 客户端主动取消由异步生成器取消处理；收到上游 cancelled 终态时
         # 本次回答并未正常完成，不能将部分输出伪装为成功的 stop。
-        if reason in ("end_turn", "stop"):
+        if reason in NORMAL_STOP_REASONS:
             return [Event(kind=EventKind.FINISH, finish_reason="stop")]
-        if reason in ("max_tokens", "length"):
+        if reason in LENGTH_STOP_REASONS:
             return [Event(kind=EventKind.FINISH, finish_reason="length")]
         return [
             Event(

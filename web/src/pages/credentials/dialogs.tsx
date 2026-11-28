@@ -4,12 +4,13 @@ import { AddCredentialDialog } from "../../components/AddCredentialDialog";
 import { BatchImportDialog } from "../../components/BatchImportDialog";
 import { CredentialLimitsDialog } from "../../components/CredentialLimitsDialog";
 import { CredentialLoginSecretDialog } from "../../components/CredentialLoginSecretDialog";
+import { CredentialNicknameDialog } from "../../components/CredentialNicknameDialog";
 import { CredentialTagsDialog } from "../../components/CredentialTagsDialog";
 import { CredentialWebCookieDialog } from "../../components/CredentialWebCookieDialog";
 import { CredentialWeightDialog } from "../../components/CredentialWeightDialog";
 
 /**
- * 凭证页的对话框组：限额 / 标签 / 权重 / 账号密码 / 网页 Cookie / 批量导入 /
+ * 凭证页的对话框组：限额 / 标签 / 昵称 / 权重 / 账号密码 / 网页 Cookie / 批量导入 /
  * 添加凭证。打开态与刷新回调都由页面壳持有，这里只按条件渲染，
  * 关闭与保存后的刷新文案一律沿用原实现。
  */
@@ -19,6 +20,9 @@ export function CredentialDialogs({
   setLimitsFor,
   tagsCredential,
   setTagsFor,
+  nicknameCredential,
+  setNicknameFor,
+  onNicknameSaved,
   weightCredential,
   setWeightFor,
   loginSecretCredential,
@@ -44,6 +48,9 @@ export function CredentialDialogs({
   setLimitsFor: (id: string | null) => void;
   tagsCredential: Credential | null;
   setTagsFor: (id: string | null) => void;
+  nicknameCredential: Credential | null;
+  setNicknameFor: (id: string | null) => void;
+  onNicknameSaved: () => void;
   weightCredential: Credential | null;
   setWeightFor: (id: string | null) => void;
   loginSecretCredential: Credential | null;
@@ -89,6 +96,19 @@ export function CredentialDialogs({
             void refresh();
           }}
           onError={(message) => showError(message)}
+        />
+      )}
+
+      {canWrite && nicknameCredential && (
+        <CredentialNicknameDialog
+          key={nicknameCredential.id}
+          credential={nicknameCredential}
+          onClose={() => setNicknameFor(null)}
+          onSaved={() => {
+            setNicknameFor(null);
+            showNotice("凭证昵称已保存。");
+            onNicknameSaved();
+          }}
         />
       )}
 

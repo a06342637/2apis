@@ -61,6 +61,8 @@ async def test_first_frame_content_keeps_200_and_same_frames():
 
     assert isinstance(response, StreamingResponse)
     assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store, no-transform"
+    assert response.headers["x-accel-buffering"] == "no"
     chunks = [chunk async for chunk in response.body_iterator]
     assert chunks == [b"first", b"second"]
 

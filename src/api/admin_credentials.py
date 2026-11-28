@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from ..audit.actions import (
     ACTION_CREDENTIAL_IMPORT,
     ACTION_CREDENTIAL_LIMITS,
     ACTION_CREDENTIAL_LOGIN_SECRET,
+    ACTION_CREDENTIAL_NICKNAME,
     ACTION_CREDENTIAL_PIN,
     ACTION_CREDENTIAL_REVIVE,
     ACTION_CREDENTIAL_SWITCH_ACCOUNT,
@@ -88,6 +90,10 @@ BATCH_IMPORT_MAX_ITEMS = 100
 # 网页 Cookie 的最大长度：正常一条 Qoder 会话 Cookie 几百字符，1 万已远超；
 # 上限只为拦住误粘贴整段请求头/文件内容，不做格式校验（Cookie 结构随上游变）。
 WEB_COOKIE_MAX_LENGTH = 10_000
+
+# 昵称是单行展示文本；拒绝控制字符和不能保存为 UTF-8 的孤立代理项。
+CREDENTIAL_NICKNAME_MAX_LENGTH = 128
+_INVALID_NICKNAME_CHAR = re.compile(r"[\x00-\x1f\x7f-\x9f\ud800-\udfff\u2028\u2029]")
 
 # 账号密码的长度上限：只为拦住误粘贴（整段 JSON / 文件），不做格式校验——
 # 手机号形态由上游登录接口裁决（见 provider/raccoon/login.py 的归一）。
@@ -714,6 +720,27 @@ def create_router(services: Services) -> APIRouter:
         services.audit.record(actor=principal.username, action=ACTION_CREDENTIAL_WEIGHT,
                               target=credential_id, detail=label)
         return {"routing_weight": weight}
+
+    @router.put("/api/credentials/{credential_id}/nickname")
+    async def set_credential_nickname(credential_id: str, payload: dict,
+                                      _csrf: None = Depends(csrf_protected),
+                                      principal=Depends(principal_from_request)):
+        """设置凭证的本地展示昵称（空串 = 清除）；不触发上游请求。"""
+        require_operator(principal)
+        nickname = payload.get("nickname")
+        if not isinstance(nickname, str):
+            raise InvalidRequest("昵称必须是字符串")
+        nickname = nickname.strip()
+        if len(nickname) > CREDENTIAL_NICKNAME_MAX_LENGTH:
+            raise InvalidRequest(f"昵称最长 {CREDENTIAL_NICKNAME_MAX_LENGTH} 个字符")
+        if _INVALID_NICKNAME_CHAR.search(nickname):
+            raise InvalidRequest("昵称不能包含换行或控制字符")
+        if not credentials.set_nickname(credential_id, nickname):
+            raise InvalidRequest("credential not found")
+        # 昵称可能带手机号/邮箱；审计留操作与目标，不重复储存昵称正文。
+        services.audit.record(actor=principal.username, action=ACTION_CREDENTIAL_NICKNAME,
+                              target=credential_id, detail="已更新" if nickname else "（清空）")
+        return {"nickname": nickname}
 
     @router.put("/api/credentials/{credential_id}/tags")
     async def set_credential_tags(credential_id: str, payload: dict,

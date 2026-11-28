@@ -337,6 +337,16 @@ class CredentialRepository:
             )
         return credential_id
 
+    def set_nickname(self, credential_id: str, nickname: str,
+                     *, now: int | None = None) -> bool:
+        """只改展示昵称并推进编辑版本；不改上游身份或加密凭证。"""
+        with self._db.transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE credentials SET nickname = ?, "
+                "updated_at = MAX(?, updated_at + 1) WHERE id = ?",
+                (nickname, _now(now), credential_id))
+        return cursor.rowcount > 0
+
     def set_tags(self, credential_id: str, tags: list[str],
                  *, now: int | None = None) -> bool:
         """整体替换一条凭证的标签（空列表 = 清空）。返回是否命中该凭证。

@@ -8,6 +8,7 @@ import {
   History,
   KeyRound,
   MoreHorizontal,
+  Pencil,
   Pin,
   Power,
   Radio,
@@ -450,6 +451,9 @@ export function Row({
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => actions.pin(credential)}>
                       <Pin className="size-4" /> {credential.pinned === 1 ? "取消指定" : "指定"}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onSelect={() => actions.nickname(credential)}>
+                      <Pencil className="size-4" /> 修改昵称
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => actions.limits(credential)}>
                       <Gauge className="size-4" />

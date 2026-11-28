@@ -93,6 +93,7 @@ export function CredentialsPage() {
   const [limitsFor, setLimitsFor] = useState<string | null>(null);
   // 标签编辑对话框：同样存 id，取最新快照
   const [tagsFor, setTagsFor] = useState<string | null>(null);
+  const [nicknameFor, setNicknameFor] = useState<string | null>(null);
   // 调度权重对话框：同样存 id，取最新快照
   const [weightFor, setWeightFor] = useState<string | null>(null);
   // Qoder 网页 Cookie 对话框：同样存 id，取最新快照
@@ -205,6 +206,10 @@ export function CredentialsPage() {
   const tagsCredential = useMemo(
     () => credentials.find((item) => item.id === tagsFor) ?? null,
     [credentials, tagsFor],
+  );
+  const nicknameCredential = useMemo(
+    () => credentials.find((item) => item.id === nicknameFor) ?? null,
+    [credentials, nicknameFor],
   );
   const weightCredential = useMemo(
     () => credentials.find((item) => item.id === weightFor) ?? null,
@@ -453,6 +458,7 @@ export function CredentialsPage() {
     setCheckinLog,
     setLimitsFor,
     setTagsFor,
+    setNicknameFor,
     setWeightFor,
     setWebCookieFor,
     setLoginSecretFor,
@@ -637,6 +643,14 @@ export function CredentialsPage() {
         setLimitsFor={setLimitsFor}
         tagsCredential={tagsCredential}
         setTagsFor={setTagsFor}
+        nicknameCredential={nicknameCredential}
+        setNicknameFor={setNicknameFor}
+        onNicknameSaved={() => {
+          // 昵称显示于凭证池与用量视图，不需要重新拉取上游模型目录。
+          for (const key of ["credentials", "stats-credentials", "stats-events"]) {
+            void client.invalidateQueries({ queryKey: ["admin", session.username, key] });
+          }
+        }}
         weightCredential={weightCredential}
         setWeightFor={setWeightFor}
         loginSecretCredential={loginSecretCredential}

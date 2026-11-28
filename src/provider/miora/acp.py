@@ -19,12 +19,17 @@ from anyio import CancelScope
 from ...engine.sse import iter_frames
 from ..base import (
     ErrKind,
+    EventKind,
     UpstreamHTTPError,
     UpstreamProtocolViolation,
     read_body_bounded,
     retry_hints,
 )
-from .events import classify_status
+from .events import SUCCESS_STOP_REASONS, classify_status, parse_update
+
+# Prompt 与控制 RPC 用不同预算：有真实模型输出时可持续 20 分钟，
+# 但空闲、噪声心跳及异常上游不能无限占用同一个账号。
+PROMPT_MAX_SECONDS = 1200.0
 
 
 class AcpHTTPError(UpstreamHTTPError):
@@ -196,6 +201,14 @@ class AcpConnection:
         except Exception:  # noqa: BLE001 - 尽力取消：网络/协议失败均不能拖住清理
             pass
 
+    @staticmethod
+    def _prompt_progress(frame: dict, session_id: Any) -> bool:
+        params = frame.get("params")
+        return (frame.get("method") == "session/update" and isinstance(params, dict)
+                and params.get("sessionId") == session_id and any(
+                    event.kind in (EventKind.CONTENT, EventKind.REASONING)
+                    for event in parse_update(frame)))
+
     async def rpc_frames(self, method: str, params: dict) -> AsyncIterator[dict]:
         self._next_id += 1
         request_id = self._next_id
@@ -205,9 +218,18 @@ class AcpConnection:
         result: dict | None = None
         end_params: dict | None = None
         post_eof = False
-        deadline = asyncio.get_running_loop().time() + self.timeout
+        is_prompt = method == "session/prompt"
+        session_id = params.get("sessionId")
+        now = asyncio.get_running_loop().time
+        started = now()
+        idle_deadline = started + self.timeout
+        hard_deadline = started + (PROMPT_MAX_SECONDS if is_prompt else self.timeout)
         try:
             while True:
+                deadline = min(hard_deadline, idle_deadline)
+                # 队列已有帧时 get 不一定让出事件循环，不能只依赖定时回调。
+                if now() >= deadline:
+                    raise TimeoutError
                 # 调用方可能在另一 task 拉取下一帧，timeout 不能跨生成器 yield。
                 async with asyncio.timeout_at(deadline):
                     frame = await self._queue.get()
@@ -223,19 +245,19 @@ class AcpConnection:
                         continue
                     if frame.get("id") == request_id:
                         result = frame
-                        if method != "session/prompt" or "error" in frame:
+                        if not is_prompt or "error" in frame:
                             yield frame
                             return
                     else:
+                        if is_prompt and self._prompt_progress(frame, session_id):
+                            idle_deadline = now() + self.timeout
                         if frame.get("method") == "session/endTurn":
                             candidate = frame.get("params")
                             if (isinstance(candidate, dict)
-                                    and candidate.get("sessionId") == params.get("sessionId")):
+                                    and candidate.get("sessionId") == session_id):
                                 end_params = candidate
                                 reason = candidate.get("stopReason")
-                                if reason is not None and reason not in (
-                                    "end_turn", "stop", "max_tokens", "length"
-                                ):
+                                if reason is not None and reason not in SUCCESS_STOP_REASONS:
                                     # GET 明确宣告失败时立即结束；不能等待或借用
                                     # POST 的成功 result 将本轮部分回答收成成功。
                                     raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
@@ -247,10 +269,11 @@ class AcpConnection:
                 if (post_eof and end_params is not None and self._queue.empty()):
                     # 与网页客户端相同：POST 断尾可由完整、成功的 GET endTurn 收尾。
                     # 先消费已有队列，确保不吞掉已抵达的 RPC error。
-                    if end_params.get("stopReason") != "end_turn":
+                    reason = end_params.get("stopReason")
+                    if reason is None:
                         raise UpstreamProtocolViolation("Miora ACP 对话未成功结束")
                     yield {"jsonrpc": "2.0", "id": request_id,
-                           "result": {"stopReason": "end_turn"}}
+                           "result": {"stopReason": reason}}
                     return
         except TimeoutError as error:
             raise UpstreamProtocolViolation("Miora ACP 请求超时") from error

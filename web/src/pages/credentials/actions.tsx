@@ -41,6 +41,7 @@ export interface ActionsDeps {
   setCheckinLog: (next: CheckinLogState | null) => void;
   setLimitsFor: (id: string) => void;
   setTagsFor: (id: string) => void;
+  setNicknameFor: (id: string) => void;
   setWeightFor: (id: string) => void;
   setWebCookieFor: (id: string) => void;
   setLoginSecretFor: (id: string) => void;
@@ -61,6 +62,7 @@ export interface Actions {
   checkinLog: (credential: Credential) => void;
   limits: (credential: Credential) => void;
   tags: (credential: Credential) => void;
+  nickname: (credential: Credential) => void;
   weight: (credential: Credential) => void;
   webCookie: (credential: Credential) => void;
   loginSecret: (credential: Credential) => void;
@@ -81,6 +83,7 @@ export function buildActions(deps: ActionsDeps): Actions {
     setCheckinLog,
     setLimitsFor,
     setTagsFor,
+    setNicknameFor,
     setWeightFor,
     setWebCookieFor,
     setLoginSecretFor,
@@ -236,6 +239,7 @@ export function buildActions(deps: ActionsDeps): Actions {
     // 只开对话框；保存与刷新由对话框自己回调（见 CredentialLimitsDialog）
     limits: (credential) => setLimitsFor(credential.id),
     tags: (credential) => setTagsFor(credential.id),
+    nickname: (credential) => setNicknameFor(credential.id),
     weight: (credential) => setWeightFor(credential.id),
     // 单条导出：文件内容与「批量导入」的条目同形，可原样再导入。
     // 只开对话框；保存与探测由对话框/后端负责

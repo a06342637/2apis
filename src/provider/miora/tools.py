@@ -16,7 +16,8 @@ from typing import Any
 from ..base import ErrKind, Event, EventKind, UpstreamProtocolViolation
 
 _FENCED_JSON = re.compile(r"\A```(?:json)?\s*\n(.*)\n```\s*\Z", re.DOTALL)
-_STRUCTURED_REPLY = re.compile(r'\A(?:\{|```json\b)|"tool_calls"\s*:', re.IGNORECASE)
+_STRUCTURED_REPLY = re.compile(r'\A(?:\{|```json\b|[^\n`{}]*\{\s*"tool_calls"\s*:)',
+                               re.IGNORECASE)
 _INSTRUCTION = (
     "You are serving a text-only coding API client. Answer the final user request using "
     "the supplied conversation history and application instructions. Do not execute any "
@@ -167,8 +168,12 @@ def prepare_prompt(payload: dict) -> list[dict]:
     return [{"type": "text", "text": prompt}]
 
 
+class MioraToolResponseError(UpstreamProtocolViolation):
+    summary = "Miora returned an invalid client tool response"
+
+
 def _response_error() -> UpstreamProtocolViolation:
-    return UpstreamProtocolViolation("Miora 客户端工具响应不符合约定的 JSON 格式")
+    return MioraToolResponseError("Miora 客户端工具响应不符合约定的 JSON 格式")
 
 
 def _typed(value: Any, kind: str) -> bool:

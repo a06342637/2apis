@@ -212,11 +212,15 @@ def test_invalid_output(text):
     with pytest.raises(UpstreamProtocolViolation) as error:
         parse_response(text, payload())
     assert "secret" not in str(error.value)
+    assert error.value.summary == "Miora returned an invalid client tool response"
 
 
 @pytest.mark.parametrize("choice", ["auto", "none"])
 @pytest.mark.parametrize("text", [
     "普通回答", "[a link](https://example.test)", "```python\npass\n```",
+    '# Review\n\nUse `"tool_calls": []` in the test fixture.',
+    'Example:\n```json\n{"tool_calls": []}\n```\nThis is documentation.',
+    'The `"tool_calls":` key is documented here.',
 ])
 def test_ordinary_reply_is_text_and_never_a_tool(choice, text):
     events = parse_response(text, payload(tool_choice=choice))

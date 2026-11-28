@@ -254,7 +254,8 @@ async def test_call_missing_result(monkeypatch):
 
 
 @pytest.mark.parametrize("post_last", [False, True])
-async def test_post_sse_eof_recovers_only_after_complete_get_end_turn(post_last):
+@pytest.mark.parametrize("reason", ["end_turn", "stop", "max_tokens", "length"])
+async def test_post_sse_eof_recovers_only_after_complete_get_end_turn(post_last, reason):
     incoming = QueueStream()
     end_read = asyncio.Event()
 
@@ -273,7 +274,7 @@ async def test_post_sse_eof_recovers_only_after_complete_get_end_turn(post_last)
             "params": {"sessionId": "s", "update": {"sessionUpdate": "agent_message_chunk",
                 "content": {"type": "text", "text": "complete answer"}}}}))
         await incoming.queue.put(packet({"jsonrpc": "2.0", "method": "session/endTurn",
-                                         "params": {"sessionId": "s", "stopReason": "end_turn"}}))
+                                         "params": {"sessionId": "s", "stopReason": reason}}))
         return httpx.Response(200, headers={"Content-Type": "text/event-stream"},
                               stream=PostStream())
 
@@ -287,7 +288,7 @@ async def test_post_sse_eof_recovers_only_after_complete_get_end_turn(post_last)
             if frame.get("method") == "session/endTurn":
                 end_read.set()
         assert frames[0]["params"]["update"]["content"]["text"] == "complete answer"
-        assert frames[-1] == {"jsonrpc": "2.0", "id": 1, "result": {"stopReason": "end_turn"}}
+        assert frames[-1] == {"jsonrpc": "2.0", "id": 1, "result": {"stopReason": reason}}
 
 
 @pytest.mark.parametrize("mode", ["failed", "missing", "wrong_session", "post_error", "get_error"])
@@ -517,3 +518,89 @@ async def test_control_post_transport_interruption_is_not_recovered_as_prompt():
                 AcpConnection(client, URL, "private") as connection):
         with pytest.raises(httpx.ReadError):
             await connection.call("initialize", {})
+
+
+def _long_update(kind, *, session_id="s", text="progress", meta=None):
+    return {"jsonrpc": "2.0", "method": "session/update", "params": {
+        "sessionId": session_id, "_meta": meta, "update": {
+            "sessionUpdate": kind, "content": {"type": "text", "text": text}}}}
+
+
+@pytest.mark.parametrize("frame,expected", [
+    (_long_update("agent_message_chunk"), True),
+    (_long_update("agent_thought_chunk"), True),
+    (_long_update("agent_message_chunk", session_id="other"), False),
+    (_long_update("agent_message_chunk", text=""), False),
+    (_long_update("agent_message_chunk", meta={"codebuddy.ai": {"mode": "history"}}), False),
+    (_long_update("usage_update"), False),
+    ({"method": "session/update", "params": None}, False),
+    ({"method": "gateway/ping"}, False),
+])
+def test_only_live_model_output_for_this_session_counts_as_progress(frame, expected):
+    assert AcpConnection._prompt_progress(frame, "s") is expected
+
+
+@pytest.mark.parametrize("method,expected_count", [("session/prompt", 5), ("initialize", 2)])
+async def test_only_prompt_progress_extends_reading_past_original_deadline(
+        monkeypatch, method, expected_count):
+    # Control the monotonic clock used by rpc_frames, not the event loop's actual timer.
+    actual_loop = asyncio.get_running_loop()
+    moment = actual_loop.time()
+    class Clock:
+        def time(self):
+            return moment
+
+    # Supply the fake clock only to the provider module; asyncio timeout/task internals
+    # retain the real event loop, so this test does not wait for production-sized deadlines.
+    from types import SimpleNamespace
+
+    import src.provider.miora.acp as acp
+
+    monkeypatch.setattr(acp, "asyncio", SimpleNamespace(
+        get_running_loop=Clock, create_task=asyncio.create_task, timeout_at=asyncio.timeout_at,
+        CancelledError=asyncio.CancelledError, Queue=asyncio.Queue))
+    async with httpx.AsyncClient() as http:
+        connection = AcpConnection(http, URL, "synthetic", timeout=300)
+        async def post(_request):
+            pass
+
+        monkeypatch.setattr(connection, "_post", post)
+        frames = connection.rpc_frames(method, {"sessionId": "s"})
+        good = _long_update("agent_message_chunk")
+        seen = []
+        try:
+            for advance in (0, 250, 250, 250, 200, 251):
+                # The first pull starts the RPC clock; subsequent pulls simulate elapsed time.
+                if seen:
+                    moment += advance
+                connection._queue.put_nowait(good)
+                try:
+                    seen.append(await anext(frames))
+                except UpstreamProtocolViolation as error:
+                    assert "请求超时" in str(error)
+                    break
+        finally:
+            await frames.aclose()
+        assert len(seen) == expected_count
+        # Prompt reaches 950s with progress, then hits the 1200s total cap at 1201s.
+        # Control reaches only 250s; queued model updates cannot extend its deadline.
+        assert connection._queue.qsize() == 1
+        assert connection._active_method == ""
+
+
+async def test_queued_nonprogress_never_resets_prompt_idle_deadline(monkeypatch):
+    async with httpx.AsyncClient() as http:
+        connection = AcpConnection(http, URL, "synthetic", timeout=.025)
+        async def post(_request):
+            pass
+
+        monkeypatch.setattr(connection, "_post", post)
+        frames = connection.rpc_frames("session/prompt", {"sessionId": "s"})
+        noise = _long_update("agent_thought_chunk", session_id="other")
+        connection._queue.put_nowait(noise)
+        assert await anext(frames) == noise
+        await asyncio.sleep(.05)
+        connection._queue.put_nowait(_long_update("agent_message_chunk"))
+        with pytest.raises(UpstreamProtocolViolation, match="请求超时"):
+            await anext(frames)
+        assert connection._queue.qsize() == 1

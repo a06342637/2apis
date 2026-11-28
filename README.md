@@ -222,7 +222,7 @@ response = client.messages.create(
 print(response.content)
 ```
 
-两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用 JSON 模拟**：工具调用必须通过函数白名单、参数对象及常见类型/必填/属性约束校验，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`，由原客户端执行。`auto` / `none` 也接受正常完成的普通文本；`required` / 指定函数仍必须返回有效调用。支持关闭并行调用。报告为自动批准的 ACP 会话会先切回询问模式，网关不批准云端工具。若上游误发云端工具事件，且带客户端函数的请求还未发出任何模型事件，网关取消原回合并用新会话纠正一次；已经出帧、再次误调用或终态失败都不会拼接或伪造工具结果。网关另提供 Film Studio 图片/视频工具，由服务器执行并返回真实资源链接；云端文件操作仍不开放。异常断流会取消未完成的上游推理。
+两套入口均支持流式与非流式、客户端函数工具和工具结果回传。**Miora 的工具调用使用 JSON 模拟**：工具调用必须通过函数白名单、参数对象及常见类型/必填/属性约束校验，再转换为 OpenAI `tool_calls` 或 Anthropic `tool_use`，由原客户端执行。`auto` / `none` 也接受正常完成的普通文本（包括在代码审查正文中引用 `tool_calls` 示例，不会执行示例）；`required` / 指定函数仍必须返回有效调用。支持关闭并行调用。报告为自动批准的 ACP 会话会先切回询问模式，网关不批准云端工具。若上游误发云端工具事件，且带客户端函数的请求还未发出任何模型事件，网关取消原回合并用新会话纠正一次；已经出帧、再次误调用或终态失败都不会拼接或伪造工具结果。网关另提供 Film Studio 图片/视频工具，由服务器执行并返回真实资源链接；云端文件操作仍不开放。异常断流会取消未完成的上游推理。
 
 ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completion_tokens` 会作为提示中的输出预算，**不能保证硬 token 上限**；非默认 `temperature` / `top_p` / penalties 及 `stop`、`logprobs`、`seed`、`response_format`、`prediction` 等无法兑现的参数会明确返回 400。图片、音频、文件输入及音频输出在联网前返回能力不支持的 400。`reasoning_effort` 支持 `low` / `medium` / `high`，每轮显式设置，省略时使用 `medium`，不会继承上一位调用者的档位。工具响应需缓冲后校验，调用帧会在校验通过后发出。
 
@@ -230,7 +230,7 @@ ACP 未提供原生采样与硬输出长度设置：`max_tokens` / `max_completi
 
 要展示 Miora 完整目录，可设置 `MODEL_BLOCKLIST=custom_model_*,*sub*agent*,summary,browser_use_*,file_search_agent`。继承的默认名单会隐藏部分 Miora 仍提供的型号和默认路由；上述配置只过滤内部工具与代理占位，仍可追加自定义规则。Docker Compose 对空值会回落默认名单，请使用非空配置。Hy4 Flash 标准与免费路由分别展示，原始 ID `hy4flash@miora` 和 `hy4flash-free@miora` 各自保持独立选模。
 
-首次接入没有运行时的项目时会自动创建运行时，支持上游以 JSON `httpStatus=404` 返回的缺失响应。同账号重新导入与预刷新共用编辑锁，避免旧刷新结果覆盖新登录票据。服务启动先刷新到期窗口内的登录票据，再探测额度，避免可续期账号因旧 access token 的 401 被提前停用。ACP 建连和控制请求均有超时；POST 提前结束时，只有独立 GET 流明确报告该轮成功完成才恢复回答，不重放推理。工具参数拒绝 `NaN` / `Infinity` 等非标准 JSON 数值，并区分布尔值与数值枚举。
+首次接入没有运行时的项目时会自动创建运行时，支持上游以 JSON `httpStatus=404` 返回的缺失响应。同账号重新导入与预刷新共用编辑锁，避免旧刷新结果覆盖新登录票据。服务启动先刷新到期窗口内的登录票据，再探测额度，避免可续期账号因旧 access token 的 401 被提前停用。ACP 建连和控制请求均有超时；推理流在 300 秒没有正文或思考进展时结束，有进展的单轮 ACP 最长 20 分钟，不延长通用首事件、空闲或非流式聚合上限。POST 提前结束时，只有独立 GET 流明确报告正常完成或达到输出上限才收尾，保留原结束原因，不重放推理。公开 SSE 响应显式禁止代理缓冲和转换。工具参数拒绝 `NaN` / `Infinity` 等非标准 JSON 数值，并区分布尔值与数值枚举。
 
 [![CI](https://github.com/a06342637/2apis/actions/workflows/ci.yml/badge.svg)](https://github.com/a06342637/2apis/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/a06342637/2apis)](https://github.com/a06342637/2apis/releases)
@@ -624,6 +624,7 @@ curl -X POST http://127.0.0.1:8000/v1/fetch \
 - **批量导入**：`POST /api/credentials/batch-import`，`{items: [{provider, credential, nickname?, tags?}]}`，一次 ≤100 条；坏条目进 `failed`（带 `index` 与原因），同渠道解密后内容一致进 `skipped`。支持粘贴 JSON 数组 / JSONL 或选文件。
 - **无额度账号删除**：同一端点使用 `action=delete_zero`、当前所选 `ids`、`confirmed: true` 和 `zero_tokens`（候选 ID → 列表中该账号的 `quota_zero_token`）。覆盖 Miora、CodeBuddy 国内/国际、TRAE、Qoder、CodeArts、officeAce、小浣熊和灵犀。旧库展示的 0 不补发观测标识，需在升级后成功探测一次。后端不扫描未选账号，不推理、不签到、不刷新票据；复查到正余额会更新显示，复查不确定则须重新探测。8 分钟批次时限内未轮到的项也跳过。返回 `succeeded` / `skipped` / `failed` 和逐项结果。
 - **批量删除**：`POST /api/credentials/batch` 支持 `action=delete`，沿用 ≤200 个去重后的账号 ID、operator/CSRF 校验和逐条结果。单个失败不影响其余账号；成功删除记录具体目标及批量汇总审计，留痕失败不会把已生效删除误报为失败。
+- **修改账号昵称**：在任一渠道的账号行打开「⋯ → 修改昵称」。留空会恢复默认显示名；账号列表、账号选择器和新导出的单条／批量 JSON 读取同一个已保存昵称。只改网关展示名，不改上游登录身份或票据。管理员／操作员可通过 `PUT /api/credentials/{id}/nickname` 修改。
 - **单条导出**：`GET /api/credentials/{id}/export` 返回与导入同形的 JSON（含明文凭证，仅 admin / operator，落 `credential.export` 审计）。
 - **「恢复」≠「取消暂停」**：`revive` 解系统硬禁用（需先重新登录），`toggle enabled=true` 才取消暂停。
 - **`revive` 默认保留上游点名的冷却**（限流 / 余额 / 权益 / 风控）：清掉只会立刻再撞一次。强制清除走 `force=true`（前端「强制恢复」）。签到失败回 `ok=false` + 可读 `message`，不 500。审计只记一条汇总，写失败只 warning。

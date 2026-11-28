@@ -182,7 +182,9 @@ class _OwnedSSEResponse(StreamingResponse):
 
     def __init__(self, frames, owner: _OwnedSSEIterator, media_type: str):
         self._owner = owner
-        super().__init__(frames, media_type=media_type)
+        super().__init__(frames, media_type=media_type,
+                         headers={"Cache-Control": "no-store, no-transform",
+                                  "X-Accel-Buffering": "no"})
 
     async def __call__(self, scope, receive, send):
         try:

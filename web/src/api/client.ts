@@ -375,6 +375,12 @@ export const api = {
       method: "PUT",
       ...json(limits),
     }),
+  /** 设置本地凭证昵称（空串 = 清空）。 */
+  setCredentialNickname: (id: string, nickname: string) =>
+    request<{ nickname: string }>(`/api/credentials/${encodeURIComponent(id)}/nickname`, {
+      method: "PUT",
+      ...json({ nickname }),
+    }),
   /** 整体替换一条凭证的标签（空数组 = 清空）。 */
   setCredentialTags: (id: string, tags: string[]) =>
     request<{ tags: string[] }>(`/api/credentials/${id}/tags`, {
